@@ -12,7 +12,7 @@ jobs:
       uses: nttld/setup-ndk@v1
       id: ndk
       with:
-        ndk-version: r27d
+        ndk-version: r25c
     - name: Build Dobby
       env:
         NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
