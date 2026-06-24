@@ -8,10 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-      with:
     - uses: nttld/setup-ndk@v1
       id: ndk
-      with:
         ndk-version: r27d
     - name: Download httplib
       run: curl -L -o native/include/httplib.h https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
@@ -24,6 +22,5 @@ jobs:
         cmake --build . -j$(nproc)
         mkdir -p ../libs/arm64-v8a && cp libmain.so ../libs/arm64-v8a/
     - uses: actions/upload-artifact@v4
-      with:
         name: libmain-so
         path: native/libs/arm64-v8a/libmain.so
