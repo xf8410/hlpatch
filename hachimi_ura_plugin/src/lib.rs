@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-//! URA 小黑板 v2.0.0
+//! URA 小黑板 v3.0.0
 //! Hachimi Edge 插件 — 赛马娘育成数据实时显示与训练推荐
 //!
 //! 核心功能:
@@ -8,7 +8,7 @@
 //! - Hachimi GUI 面板显示五维属性与训练推荐
 //!
 //! 关键设计决策:
-//! - 仅使用 hachimi_init (V2 API)，不导出 hachimi_init_v3
+//! - 使用 hachimi_init_v3 (V3 API)，通过 get_api 按名称查找函数指针
 //! - 通过 hachimi_register_on_game_initialized 等待 IL2CPP 就绪后再解析元数据
 //! - Arc<Mutex<GameData>> 全局共享数据，GUI面板和HTTP Server都从这里读
 //! - 后台线程定时刷新数据，HTTP Server即时响应
@@ -54,82 +54,152 @@ pub enum InitResult {
 }
 
 // ============================================================
-// Vtable (Hachimi Plugin API v2)
+// V3 API: 通过 get_api 按名称查找的函数指针
+// 所有函数指针在 hachimi_init_v3 中一次性解析并缓存
 // ============================================================
-#[repr(C)]
-pub struct Vtable {
-    pub hachimi_instance: unsafe extern "C" fn() -> *const c_void,
-    pub hachimi_get_interceptor: unsafe extern "C" fn(this: *const c_void) -> *const c_void,
-    pub interceptor_hook: unsafe extern "C" fn(this: *const c_void, orig: *mut c_void, hook: *mut c_void) -> *mut c_void,
-    pub interceptor_hook_vtable: unsafe extern "C" fn(this: *const c_void, vt: *mut *mut c_void, idx: usize, hook: *mut c_void) -> *mut c_void,
-    pub interceptor_get_trampoline_addr: unsafe extern "C" fn(this: *const c_void, hook: *mut c_void) -> *mut c_void,
-    pub interceptor_unhook: unsafe extern "C" fn(this: *const c_void, hook: *mut c_void) -> *mut c_void,
-    pub il2cpp_resolve_symbol: unsafe extern "C" fn(name: *const c_char) -> *mut c_void,
-    pub il2cpp_get_assembly_image: unsafe extern "C" fn(assembly_name: *const c_char) -> *const c_void,
-    pub il2cpp_get_class: unsafe extern "C" fn(image: *const c_void, ns: *const c_char, name: *const c_char) -> *mut c_void,
-    pub il2cpp_get_method: unsafe extern "C" fn(klass: *mut c_void, name: *const c_char, args: i32) -> *const c_void,
-    pub il2cpp_get_method_overload: unsafe extern "C" fn(klass: *mut c_void, name: *const c_char, params: *const c_void, n: usize) -> *const c_void,
-    pub il2cpp_get_method_addr: unsafe extern "C" fn(klass: *mut c_void, name: *const c_char, args: i32) -> *mut c_void,
-    pub il2cpp_get_method_overload_addr: unsafe extern "C" fn(klass: *mut c_void, name: *const c_char, params: *const c_void, n: usize) -> *mut c_void,
-    pub il2cpp_get_method_cached: unsafe extern "C" fn(klass: *mut c_void, name: *const c_char, args: i32) -> *const c_void,
-    pub il2cpp_get_method_addr_cached: unsafe extern "C" fn(klass: *mut c_void, name: *const c_char, args: i32) -> *mut c_void,
-    pub il2cpp_find_nested_class: unsafe extern "C" fn(klass: *mut c_void, name: *const c_char) -> *mut c_void,
-    pub il2cpp_resolve_icall: unsafe extern "C" fn(name: *const c_char) -> *mut c_void,
-    pub il2cpp_class_get_methods: unsafe extern "C" fn(klass: *mut c_void, iter: *mut *mut c_void) -> *const c_void,
-    pub il2cpp_get_field_from_name: unsafe extern "C" fn(klass: *mut c_void, name: *const c_char) -> *mut c_void,
-    pub il2cpp_get_field_value: unsafe extern "C" fn(obj: *mut c_void, field: *mut c_void, out: *mut c_void),
-    pub il2cpp_set_field_value: unsafe extern "C" fn(obj: *mut c_void, field: *mut c_void, val: *const c_void),
-    pub il2cpp_get_static_field_value: unsafe extern "C" fn(field: *mut c_void, out: *mut c_void),
-    pub il2cpp_set_static_field_value: unsafe extern "C" fn(field: *mut c_void, val: *const c_void),
-    pub il2cpp_object_new: unsafe extern "C" fn(klass: *const c_void) -> *mut c_void,
-    pub il2cpp_unbox: unsafe extern "C" fn(obj: *mut c_void) -> *mut c_void,
-    pub il2cpp_get_main_thread: unsafe extern "C" fn() -> *mut c_void,
-    pub il2cpp_get_attached_threads: unsafe extern "C" fn(out_size: *mut usize) -> *mut *mut c_void,
-    pub il2cpp_schedule_on_thread: unsafe extern "C" fn(thread: *mut c_void, cb: unsafe extern "C" fn()),
-    pub il2cpp_create_array: unsafe extern "C" fn(element_type: *mut c_void, len: usize) -> *mut c_void,
-    pub il2cpp_get_singleton_like_instance: unsafe extern "C" fn(klass: *mut c_void) -> *mut c_void,
-    pub log: unsafe extern "C" fn(level: i32, target: *const c_char, message: *const c_char),
-    pub gui_register_menu_item: unsafe extern "C" fn(label: *const c_char, cb: Option<extern "C" fn(*mut c_void)>, ud: *mut c_void) -> bool,
-    pub gui_register_menu_section: unsafe extern "C" fn(cb: Option<extern "C" fn(*mut c_void, *mut c_void)>, ud: *mut c_void) -> bool,
-    pub gui_show_notification: unsafe extern "C" fn(msg: *const c_char) -> bool,
-    pub gui_ui_heading: unsafe extern "C" fn(ui: *mut c_void, text: *const c_char) -> bool,
-    pub gui_ui_label: unsafe extern "C" fn(ui: *mut c_void, text: *const c_char) -> bool,
-    pub gui_ui_small: unsafe extern "C" fn(ui: *mut c_void, text: *const c_char) -> bool,
-    pub gui_ui_separator: unsafe extern "C" fn(ui: *mut c_void) -> bool,
-    pub gui_ui_button: unsafe extern "C" fn(ui: *mut c_void, text: *const c_char) -> bool,
-    pub gui_ui_small_button: unsafe extern "C" fn(ui: *mut c_void, text: *const c_char) -> bool,
-    pub gui_ui_checkbox: unsafe extern "C" fn(ui: *mut c_void, text: *const c_char, val: *mut bool) -> bool,
-    pub gui_ui_text_edit_singleline: unsafe extern "C" fn(ui: *mut c_void, buf: *mut c_char, len: usize) -> bool,
-    pub gui_ui_horizontal: unsafe extern "C" fn(ui: *mut c_void, cb: Option<extern "C" fn(*mut c_void, *mut c_void)>, ud: *mut c_void) -> bool,
-    pub gui_ui_grid: unsafe extern "C" fn(ui: *mut c_void, id: *const c_char, cols: usize, sx: f32, sy: f32, cb: Option<extern "C" fn(*mut c_void, *mut c_void)>, ud: *mut c_void) -> bool,
-    pub gui_ui_end_row: unsafe extern "C" fn(ui: *mut c_void) -> bool,
-    pub gui_ui_colored_label: unsafe extern "C" fn(ui: *mut c_void, r: u8, g: u8, b: u8, a: u8, text: *const c_char) -> bool,
-    pub gui_register_menu_item_icon: unsafe extern "C" fn(label: *const c_char, icon_uri: *const c_char, icon_ptr: *const u8, icon_len: usize) -> bool,
-    pub gui_register_menu_section_with_icon: unsafe extern "C" fn(title: *const c_char, icon_uri: *const c_char, icon_ptr: *const u8, icon_len: usize, cb: Option<extern "C" fn(*mut c_void, *mut c_void)>, ud: *mut c_void) -> bool,
-    pub gui_new_window_id: unsafe extern "C" fn() -> i32,
-    pub gui_show_window: unsafe extern "C" fn(id: i32, title: *const c_char, contents: Option<extern "C" fn(*mut c_void, *mut c_void)>, bottom: Option<extern "C" fn(*mut c_void, *mut c_void)>, ud: *mut c_void) -> bool,
-    pub gui_close_window: unsafe extern "C" fn(id: i32),
-    pub android_dex_load: unsafe extern "C" fn(dex_ptr: *const u8, dex_len: usize, cls: *const c_char) -> u64,
-    pub android_dex_unload: unsafe extern "C" fn(handle: u64) -> bool,
-    pub android_dex_call_static_noargs: unsafe extern "C" fn(handle: u64, method: *const c_char, sig: *const c_char) -> bool,
-    pub android_dex_call_static_string: unsafe extern "C" fn(handle: u64, method: *const c_char, sig: *const c_char, arg: *const c_char) -> bool,
-    pub il2cpp_runtime_object_init: unsafe extern "C" fn(object: *mut c_void),
-    pub il2cpp_string_new: unsafe extern "C" fn(text: *const c_char) -> *mut c_void,
-    pub il2cpp_string_chars: unsafe extern "C" fn(s: *mut c_void) -> *mut u16,
-    pub il2cpp_string_length: unsafe extern "C" fn(s: *mut c_void) -> i32,
-    pub gui_ui_combo_menu: unsafe extern "C" fn(ui: *mut c_void, id: *const c_char, sel: *mut i32, items: *const *const c_char, n: usize, search: *mut c_char, search_len: usize) -> bool,
-    pub hachimi_register_on_game_initialized: unsafe extern "C" fn(cb: Option<unsafe extern "C" fn(*mut c_void)>, ud: *mut c_void) -> bool,
-    pub hachimi_register_present_callback: unsafe extern "C" fn(cb: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>, ud: *mut c_void) -> bool,
-    pub gui_get_menu_width: unsafe extern "C" fn() -> f32,
-    pub gui_set_menu_width: unsafe extern "C" fn(w: f32),
-    pub hachimi_get_base_dir: unsafe extern "C" fn() -> *const c_char,
-    pub hachimi_get_data_path: unsafe extern "C" fn() -> *const c_char,
+
+struct Api {
+    // Core
+    hachimi_instance: unsafe fn() -> *const c_void,
+    hachimi_get_interceptor: unsafe fn(*const c_void) -> *const c_void,
+    // Interceptor
+    interceptor_hook: unsafe fn(*const c_void, *mut c_void, *mut c_void) -> *mut c_void,
+    interceptor_get_trampoline_addr: unsafe fn(*const c_void, *mut c_void) -> *mut c_void,
+    interceptor_unhook: unsafe fn(*const c_void, *mut c_void) -> *mut c_void,
+    // IL2CPP
+    il2cpp_get_assembly_image: unsafe fn(*const c_char) -> *const c_void,
+    il2cpp_get_class: unsafe fn(*const c_void, *const c_char, *const c_char) -> *mut c_void,
+    il2cpp_get_method_addr: unsafe fn(*mut c_void, *const c_char, i32) -> *mut c_void,
+    il2cpp_get_method: unsafe fn(*mut c_void, *const c_char, i32) -> *const c_void,
+    il2cpp_get_field_from_name: unsafe fn(*mut c_void, *const c_char) -> *mut c_void,
+    il2cpp_get_field_value: unsafe fn(*mut c_void, *mut c_void, *mut c_void),
+    il2cpp_get_static_field_value: unsafe fn(*mut c_void, *mut c_void),
+    il2cpp_set_field_value: unsafe fn(*mut c_void, *mut c_void, *const c_void),
+    il2cpp_get_singleton_like_instance: unsafe fn(*mut c_void) -> *mut c_void,
+    il2cpp_resolve_symbol: unsafe fn(*const c_char) -> *mut c_void,
+    il2cpp_object_new: unsafe fn(*const c_void) -> *mut c_void,
+    il2cpp_unbox: unsafe fn(*mut c_void) -> *mut c_void,
+    il2cpp_runtime_object_init: unsafe fn(*mut c_void),
+    il2cpp_string_new: unsafe fn(*const c_char) -> *mut c_void,
+    il2cpp_string_chars: unsafe fn(*mut c_void) -> *mut u16,
+    il2cpp_string_length: unsafe fn(*mut c_void) -> i32,
+    il2cpp_create_array: unsafe fn(*mut c_void, usize) -> *mut c_void,
+    il2cpp_schedule_on_thread: unsafe fn(*mut c_void, *const c_void),
+    il2cpp_get_main_thread: unsafe fn() -> *mut c_void,
+    il2cpp_get_attached_threads: unsafe fn() -> *mut c_void,
+    il2cpp_find_nested_class: unsafe fn(*mut c_void, *const c_char) -> *mut c_void,
+    // Log
+    log: unsafe fn(i32, *const c_char, *const c_char),
+    // GUI
+    gui_register_menu_item: unsafe fn(*const c_char, Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool,
+    gui_register_menu_section: unsafe fn(*const c_char, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool,
+    gui_show_notification: unsafe fn(*const c_char) -> bool,
+    gui_ui_heading: unsafe fn(*mut c_void, *const c_char) -> bool,
+    gui_ui_label: unsafe fn(*mut c_void, *const c_char) -> bool,
+    gui_ui_small: unsafe fn(*mut c_void, *const c_char) -> bool,
+    gui_ui_separator: unsafe fn(*mut c_void) -> bool,
+    gui_ui_button: unsafe fn(*mut c_void, *const c_char) -> bool,
+    gui_ui_colored_label: unsafe fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool,
+    gui_ui_checkbox: unsafe fn(*mut c_void, *const c_char, *mut bool) -> bool,
+    gui_ui_text_edit_singleline: unsafe fn(*mut c_void, *mut c_char, usize) -> bool,
+    gui_ui_horizontal: unsafe fn(*mut c_void, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool,
+    gui_ui_grid: unsafe fn(*mut c_void, *const c_char, usize, f32, f32, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool,
+    gui_ui_end_row: unsafe fn(*mut c_void) -> bool,
+    gui_ui_combo_menu: unsafe fn(*mut c_void, *const c_char, *mut i32, *const *const c_char, usize, *mut c_char, usize) -> bool,
+    gui_new_window_id: unsafe fn() -> i32,
+    gui_show_window: unsafe fn(i32, *const c_char, Option<extern "C" fn(*mut c_void, *mut c_void)>, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool,
+    gui_close_window: unsafe fn(i32),
+    gui_get_menu_width: unsafe fn() -> f32,
+    gui_set_menu_width: unsafe fn(f32),
+    // Hachimi
+    hachimi_get_base_dir: unsafe fn() -> *const c_char,
+    hachimi_get_data_path: unsafe fn() -> *const c_char,
+    hachimi_register_on_game_initialized: unsafe fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool,
+    hachimi_register_present_callback: unsafe fn(Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool,
+}
+
+/// 通过 get_api 查找并转换函数指针
+/// # Safety: get_api 必须指向有效的 Hachimi V3 get_api 函数
+unsafe fn resolve_api(get_api: extern "C" fn(name: *const c_char) -> *mut c_void) -> Option<Api> {
+    macro_rules! api_fn {
+        ($name:expr, $ty:ty) => {{
+            let cname = CString::new($name).unwrap();
+            let ptr = get_api(cname.as_ptr());
+            if ptr.is_null() {
+                return None;
+            }
+            ::std::mem::transmute::<*mut c_void, $ty>(ptr)
+        }};
+    }
+
+    Some(Api {
+        hachimi_instance: api_fn!("hachimi_instance", unsafe fn() -> *const c_void),
+        hachimi_get_interceptor: api_fn!("hachimi_get_interceptor", unsafe fn(*const c_void) -> *const c_void),
+        interceptor_hook: api_fn!("interceptor_hook", unsafe fn(*const c_void, *mut c_void, *mut c_void) -> *mut c_void),
+        interceptor_get_trampoline_addr: api_fn!("interceptor_get_trampoline_addr", unsafe fn(*const c_void, *mut c_void) -> *mut c_void),
+        interceptor_unhook: api_fn!("interceptor_unhook", unsafe fn(*const c_void, *mut c_void) -> *mut c_void),
+        il2cpp_get_assembly_image: api_fn!("il2cpp_get_assembly_image", unsafe fn(*const c_char) -> *const c_void),
+        il2cpp_get_class: api_fn!("il2cpp_get_class", unsafe fn(*const c_void, *const c_char, *const c_char) -> *mut c_void),
+        il2cpp_get_method_addr: api_fn!("il2cpp_get_method_addr", unsafe fn(*mut c_void, *const c_char, i32) -> *mut c_void),
+        il2cpp_get_method: api_fn!("il2cpp_get_method", unsafe fn(*mut c_void, *const c_char, i32) -> *const c_void),
+        il2cpp_get_field_from_name: api_fn!("il2cpp_get_field_from_name", unsafe fn(*mut c_void, *const c_char) -> *mut c_void),
+        il2cpp_get_field_value: api_fn!("il2cpp_get_field_value", unsafe fn(*mut c_void, *mut c_void, *mut c_void)),
+        il2cpp_get_static_field_value: api_fn!("il2cpp_get_static_field_value", unsafe fn(*mut c_void, *mut c_void)),
+        il2cpp_set_field_value: api_fn!("il2cpp_set_field_value", unsafe fn(*mut c_void, *mut c_void, *const c_void)),
+        il2cpp_get_singleton_like_instance: api_fn!("il2cpp_get_singleton_like_instance", unsafe fn(*mut c_void) -> *mut c_void),
+        il2cpp_resolve_symbol: api_fn!("il2cpp_resolve_symbol", unsafe fn(*const c_char) -> *mut c_void),
+        il2cpp_object_new: api_fn!("il2cpp_object_new", unsafe fn(*const c_void) -> *mut c_void),
+        il2cpp_unbox: api_fn!("il2cpp_unbox", unsafe fn(*mut c_void) -> *mut c_void),
+        il2cpp_runtime_object_init: api_fn!("il2cpp_runtime_object_init", unsafe fn(*mut c_void)),
+        il2cpp_string_new: api_fn!("il2cpp_string_new", unsafe fn(*const c_char) -> *mut c_void),
+        il2cpp_string_chars: api_fn!("il2cpp_string_chars", unsafe fn(*mut c_void) -> *mut u16),
+        il2cpp_string_length: api_fn!("il2cpp_string_length", unsafe fn(*mut c_void) -> i32),
+        il2cpp_create_array: api_fn!("il2cpp_create_array", unsafe fn(*mut c_void, usize) -> *mut c_void),
+        il2cpp_schedule_on_thread: api_fn!("il2cpp_schedule_on_thread", unsafe fn(*mut c_void, *const c_void)),
+        il2cpp_get_main_thread: api_fn!("il2cpp_get_main_thread", unsafe fn() -> *mut c_void),
+        il2cpp_get_attached_threads: api_fn!("il2cpp_get_attached_threads", unsafe fn() -> *mut c_void),
+        il2cpp_find_nested_class: api_fn!("il2cpp_find_nested_class", unsafe fn(*mut c_void, *const c_char) -> *mut c_void),
+        log: api_fn!("log", unsafe fn(i32, *const c_char, *const c_char)),
+        gui_register_menu_item: api_fn!("gui_register_menu_item", unsafe fn(*const c_char, Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool),
+        gui_register_menu_section: api_fn!("gui_register_menu_section", unsafe fn(*const c_char, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool),
+        gui_show_notification: api_fn!("gui_show_notification", unsafe fn(*const c_char) -> bool),
+        gui_ui_heading: api_fn!("gui_ui_heading", unsafe fn(*mut c_void, *const c_char) -> bool),
+        gui_ui_label: api_fn!("gui_ui_label", unsafe fn(*mut c_void, *const c_char) -> bool),
+        gui_ui_small: api_fn!("gui_ui_small", unsafe fn(*mut c_void, *const c_char) -> bool),
+        gui_ui_separator: api_fn!("gui_ui_separator", unsafe fn(*mut c_void) -> bool),
+        gui_ui_button: api_fn!("gui_ui_button", unsafe fn(*mut c_void, *const c_char) -> bool),
+        gui_ui_colored_label: api_fn!("gui_ui_colored_label", unsafe fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool),
+        gui_ui_checkbox: api_fn!("gui_ui_checkbox", unsafe fn(*mut c_void, *const c_char, *mut bool) -> bool),
+        gui_ui_text_edit_singleline: api_fn!("gui_ui_text_edit_singleline", unsafe fn(*mut c_void, *mut c_char, usize) -> bool),
+        gui_ui_horizontal: api_fn!("gui_ui_horizontal", unsafe fn(*mut c_void, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool),
+        gui_ui_grid: api_fn!("gui_ui_grid", unsafe fn(*mut c_void, *const c_char, usize, f32, f32, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool),
+        gui_ui_end_row: api_fn!("gui_ui_end_row", unsafe fn(*mut c_void) -> bool),
+        gui_ui_combo_menu: api_fn!("gui_ui_combo_menu", unsafe fn(*mut c_void, *const c_char, *mut i32, *const *const c_char, usize, *mut c_char, usize) -> bool),
+        gui_new_window_id: api_fn!("gui_new_window_id", unsafe fn() -> i32),
+        gui_show_window: api_fn!("gui_show_window", unsafe fn(i32, *const c_char, Option<extern "C" fn(*mut c_void, *mut c_void)>, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool),
+        gui_close_window: api_fn!("gui_close_window", unsafe fn(i32)),
+        gui_get_menu_width: api_fn!("gui_get_menu_width", unsafe fn() -> f32),
+        gui_set_menu_width: api_fn!("gui_set_menu_width", unsafe fn(f32)),
+        hachimi_get_base_dir: api_fn!("hachimi_get_base_dir", unsafe fn() -> *const c_char),
+        hachimi_get_data_path: api_fn!("hachimi_get_data_path", unsafe fn() -> *const c_char),
+        hachimi_register_on_game_initialized: api_fn!("hachimi_register_on_game_initialized", unsafe fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool),
+        hachimi_register_present_callback: api_fn!("hachimi_register_present_callback", unsafe fn(Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool),
+    })
 }
 
 // ============================================================
 // 全局状态
 // ============================================================
-static mut VT: *const Vtable = ptr::null();
+
+/// 全局 API 指针（堆上分配，进程生命周期不释放）
+static mut API: *const Api = ptr::null();
+
+/// 日志辅助函数
+unsafe fn ura_log(level: i32, msg: &str) {
+    if API.is_null() { return; }
+    let cmsg = CString::new(msg).unwrap_or_else(|_| CString::new("<log error>").unwrap());
+    ((*API).log)(level, b"URA\0".as_ptr() as *const c_char, cmsg.as_ptr());
+}
 
 /// 缓存的 IL2CPP 类/字段元数据
 #[repr(C)]
@@ -368,7 +438,7 @@ fn cmd_type_to_hex_color(ct: i32) -> &'static str {
 unsafe fn read_i32(obj: *mut c_void, field: *mut c_void) -> i32 {
     if obj.is_null() || field.is_null() { return 0; }
     let mut v: i32 = 0;
-    ((*VT).il2cpp_get_field_value)(obj, field, &mut v as *mut _ as *mut c_void);
+    ((*API).il2cpp_get_field_value)(obj, field, &mut v as *mut _ as *mut c_void);
     v
 }
 
@@ -376,7 +446,7 @@ unsafe fn read_i32(obj: *mut c_void, field: *mut c_void) -> i32 {
 unsafe fn read_obj(obj: *mut c_void, field: *mut c_void) -> *mut c_void {
     if obj.is_null() || field.is_null() { return ptr::null_mut(); }
     let mut v: *mut c_void = ptr::null_mut();
-    ((*VT).il2cpp_get_field_value)(obj, field, &mut v as *mut _ as *mut c_void);
+    ((*API).il2cpp_get_field_value)(obj, field, &mut v as *mut _ as *mut c_void);
     v
 }
 
@@ -458,13 +528,12 @@ impl TrainingCmd {
 // ============================================================
 
 unsafe fn resolve_class(image: *const c_void, ns: &str, name: &str) -> *mut c_void {
-    let vt = &*VT;
     let ns_c = CString::new(ns).unwrap();
     let name_c = CString::new(name).unwrap();
-    let mut klass = (vt.il2cpp_get_class)(image, ns_c.as_ptr(), name_c.as_ptr());
+    let mut klass = ((*API).il2cpp_get_class)(image, ns_c.as_ptr(), name_c.as_ptr());
     if klass.is_null() {
         let empty = CString::new("").unwrap();
-        klass = (vt.il2cpp_get_class)(image, empty.as_ptr(), name_c.as_ptr());
+        klass = ((*API).il2cpp_get_class)(image, empty.as_ptr(), name_c.as_ptr());
     }
     klass
 }
@@ -472,7 +541,7 @@ unsafe fn resolve_class(image: *const c_void, ns: &str, name: &str) -> *mut c_vo
 unsafe fn resolve_field(klass: *mut c_void, name: &str) -> *mut c_void {
     if klass.is_null() { return ptr::null_mut(); }
     let name_c = CString::new(name).unwrap();
-    ((*VT).il2cpp_get_field_from_name)(klass, name_c.as_ptr())
+    ((*API).il2cpp_get_field_from_name)(klass, name_c.as_ptr())
 }
 
 unsafe fn resolve_field_multi(klass: *mut c_void, names: &[&str]) -> *mut c_void {
@@ -484,21 +553,16 @@ unsafe fn resolve_field_multi(klass: *mut c_void, names: &[&str]) -> *mut c_void
 }
 
 unsafe fn resolve_meta() {
-    let vt = &*VT;
-    
     // ===== 阶段4a: 解析IL2CPP元数据 =====
-    let msg0 = CString::new("URA: resolve_meta started").unwrap();
-    (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg0.as_ptr());
+    ura_log(3, "URA: resolve_meta started");
 
     let gallop_c = CString::new("Gallop").unwrap();
-    let image = (vt.il2cpp_get_assembly_image)(gallop_c.as_ptr());
+    let image = ((*API).il2cpp_get_assembly_image)(gallop_c.as_ptr());
     if image.is_null() {
-        let msg = CString::new("URA: Gallop image is NULL - IL2CPP not ready?").unwrap();
-        (vt.log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+        ura_log(2, "URA: Gallop image is NULL - IL2CPP not ready?");
         return;
     }
-    let msg1 = CString::new(format!("URA: Gallop image = {:p}", image)).unwrap();
-    (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg1.as_ptr());
+    ura_log(3, &format!("URA: Gallop image = {:p}", image));
 
     META.smd_cls    = resolve_class(image, "Gallop", "SingleModeData");
     META.smci_cls   = resolve_class(image, "Gallop", "SingleModeCharaInfo");
@@ -507,17 +571,13 @@ unsafe fn resolve_meta() {
     META.sm_model_cls = resolve_class(image, "Gallop", "SingleModel");
 
     // 日志：各class解析结果
-    {
-        let msg = CString::new(format!(
-            "URA: classes - SMD={:?} SMCI={:?} SMCDI={:?} SMPIDCI={:?} SMModel={:?}",
-            META.smd_cls, META.smci_cls, META.smcmdi_cls, META.smpidci_cls, META.sm_model_cls
-        )).unwrap();
-        (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-    }
+    ura_log(3, &format!(
+        "URA: classes - SMD={:?} SMCI={:?} SMCDI={:?} SMPIDCI={:?} SMModel={:?}",
+        META.smd_cls, META.smci_cls, META.smcmdi_cls, META.smpidci_cls, META.sm_model_cls
+    ));
 
     if META.smci_cls.is_null() {
-        let msg = CString::new("URA: CRITICAL - CharaInfo class is NULL, cannot read game data").unwrap();
-        (vt.log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+        ura_log(2, "URA: CRITICAL - CharaInfo class is NULL, cannot read game data");
         return;
     }
 
@@ -581,14 +641,13 @@ unsafe fn resolve_meta() {
     META.ok = true;
     
     // ===== 阶段4b: 字段解析结果 =====
-    let msg = CString::new(format!(
+    ura_log(3, &format!(
         "URA: metadata resolved - fields: chara_info={:?} cmd_array={:?} speed={:?} stamina={:?} power={:?} guts={:?} wisdom={:?} motivation={:?} energy={:?} max_energy={:?} turn={:?} skill_pt={:?} fan={:?}",
         META.f_chara_info, META.f_command_array,
         META.f_speed, META.f_stamina, META.f_power, META.f_guts, META.f_wisdom,
         META.f_motivation, META.f_energy, META.f_max_energy,
         META.f_turn, META.f_skill_point, META.f_fan_count
-    )).unwrap();
-    (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+    ));
 }
 
 // ============================================================
@@ -597,17 +656,15 @@ unsafe fn resolve_meta() {
 
 /// 获取 SingleModeData 实例（尝试多种路径）
 unsafe fn get_smd_instance() -> *mut c_void {
-    let vt = &*VT;
-
     // 路径1: SingleModeData 作为 singleton
     if !META.smd_cls.is_null() {
-        let inst = (vt.il2cpp_get_singleton_like_instance)(META.smd_cls);
+        let inst = ((*API).il2cpp_get_singleton_like_instance)(META.smd_cls);
         if !inst.is_null() { return inst; }
     }
 
-    // 路径2: SingleModel singleton → Data 字段
+    // 路径2: SingleModel singleton -> Data 字段
     if !META.sm_model_cls.is_null() && !META.f_data.is_null() {
-        let model = (vt.il2cpp_get_singleton_like_instance)(META.sm_model_cls);
+        let model = ((*API).il2cpp_get_singleton_like_instance)(META.sm_model_cls);
         if !model.is_null() {
             let data = read_obj(model, META.f_data);
             if !data.is_null() { return data; }
@@ -661,11 +718,11 @@ unsafe fn read_trainings(smd: *mut c_void) -> [TrainingCmd; MAX_TRAININGS] {
         cmd.command_id   = read_i32(cmd_obj, META.f_command_id);
         cmd.failure_rate  = read_i32(cmd_obj, META.f_failure_rate);
 
-        // training_partner_array → 统计伙伴数量
+        // training_partner_array -> 统计伙伴数量
         let partner_arr = read_obj(cmd_obj, META.f_training_partner_array);
         cmd.partner_count = arr_len(partner_arr);
 
-        // params_inc_dec_info_array → 累加增益
+        // params_inc_dec_info_array -> 累加增益
         let inc_arr = read_obj(cmd_obj, META.f_params_inc_dec_info_array);
         let inc_len = arr_len(inc_arr);
         for j in 0..inc_len {
@@ -687,13 +744,13 @@ unsafe fn read_trainings(smd: *mut c_void) -> [TrainingCmd; MAX_TRAININGS] {
 }
 
 // ============================================================
-// 数据刷新 → 更新全局 GameData
+// 数据刷新 -> 更新全局 GameData
 // ============================================================
 
 /// 从 IL2CPP 读取最新游戏数据并更新 GAME_DATA
-/// 安全性：VT/META 在初始化后只读，并发访问实际安全
+/// 安全性：API/META 在初始化后只读，并发访问实际安全
 unsafe fn refresh_game_data() {
-    if VT.is_null() || !META.ok { return; }
+    if API.is_null() || !META.ok { return; }
 
     let smd = get_smd_instance();
     if smd.is_null() {
@@ -708,10 +765,7 @@ unsafe fn refresh_game_data() {
     {
         static FIRST_SMD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !FIRST_SMD.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            if !VT.is_null() {
-                let msg = CString::new(format!("URA: first SMD instance = {:p}", smd)).unwrap();
-                ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-            }
+            ura_log(3, &format!("URA: first SMD instance = {:p}", smd));
         }
     }
 
@@ -826,11 +880,11 @@ fn training_score(cmd: &TrainingCmd, stats: &[i32; 5], motivation: i32) -> f32 {
 
 fn mot_text(m: i32) -> &'static str {
     match m {
-        1 => "\u{7edd}\u{4e0d}\u{8c03}",    // 绝不调
-        2 => "\u{4e0d}\u{8c03}",             // 不调
-        3 => "\u{666e}\u{901a}",             // 普通
-        4 => "\u{597d}\u{8c03}",             // 好调
-        5 => "\u{7edd}\u{597d}\u{8c03}",    // 绝好调
+        1 => "绝不调",
+        2 => "不调",
+        3 => "普通",
+        4 => "好调",
+        5 => "绝好调",
         _ => "?",
     }
 }
@@ -863,7 +917,7 @@ fn rating(total: i32) -> &'static str {
     else { "D" }
 }
 
-/// 回合 → (年份, 月份, 是否前半)
+/// 回合 -> (年份, 月份, 是否前半)
 fn turn_to_ym(turn: i32) -> (i32, i32, bool) {
     if turn <= 0 { return (1, 1, true); }
     let year  = (turn - 1) / 24 + 1;
@@ -875,11 +929,11 @@ fn turn_to_ym(turn: i32) -> (i32, i32, bool) {
 /// 训练类型名（按 command_type：101=速, 105=耐, 102=力, 103=根, 106=智）
 fn train_name(ct: i32) -> &'static str {
     match ct {
-        101 => "\u{901f}\u{5ea6}",    // 速度
-        105 => "\u{8010}\u{529b}",    // 耐力
-        102 => "\u{529b}\u{91cf}",    // 力量
-        103 => "\u{6839}\u{6027}",    // 根性
-        106 => "\u{667a}\u{529b}",    // 智力
+        101 => "速度",
+        105 => "耐力",
+        102 => "力量",
+        103 => "根性",
+        106 => "智力",
         _   => "?",
     }
 }
@@ -905,33 +959,33 @@ fn to_cstr(s: &str) -> CString {
 
 unsafe fn colored(ui: *mut c_void, c: (u8,u8,u8), text: &str) {
     let t = to_cstr(text);
-    ((*VT).gui_ui_colored_label)(ui, c.0, c.1, c.2, AA, t.as_ptr());
+    ((*API).gui_ui_colored_label)(ui, c.0, c.1, c.2, AA, t.as_ptr());
 }
 
 unsafe fn label(ui: *mut c_void, text: &str) {
     let t = to_cstr(text);
-    ((*VT).gui_ui_label)(ui, t.as_ptr());
+    ((*API).gui_ui_label)(ui, t.as_ptr());
 }
 
 unsafe fn small(ui: *mut c_void, text: &str) {
     let t = to_cstr(text);
-    ((*VT).gui_ui_small)(ui, t.as_ptr());
+    ((*API).gui_ui_small)(ui, t.as_ptr());
 }
 
 unsafe fn heading(ui: *mut c_void, text: &str) {
     let t = to_cstr(text);
-    ((*VT).gui_ui_heading)(ui, t.as_ptr());
+    ((*API).gui_ui_heading)(ui, t.as_ptr());
 }
 
 unsafe fn sep(ui: *mut c_void) {
-    ((*VT).gui_ui_separator)(ui);
+    ((*API).gui_ui_separator)(ui);
 }
 
 /// 渲染五维属性行
 unsafe fn render_stat_line(ui: *mut c_void, name: &str, color: (u8,u8,u8), val: i32) {
     let rv = GameData::revise(val);
     if val > 1200 {
-        colored(ui, color, &format!("{}  {} (\u{4fee}\u{6b63}{})", name, val, rv));
+        colored(ui, color, &format!("{}  {} (修正{})", name, val, rv));
     } else {
         colored(ui, color, &format!("{}  {}", name, val));
     }
@@ -939,12 +993,12 @@ unsafe fn render_stat_line(ui: *mut c_void, name: &str, color: (u8,u8,u8), val: 
 
 /// 主面板渲染 — 从 GAME_DATA 读取数据
 unsafe fn render_panel(ui: *mut c_void) {
-    heading(ui, "URA \u{5c0f}\u{9ed1}\u{677f}");  // URA 小黑板
+    heading(ui, "URA 小黑板");
     sep(ui);
 
     if !META.ok {
-        label(ui, "\u{7b49}\u{5f85}\u{6e38}\u{620f}\u{521d}\u{59cb}\u{5316}...");
-        small(ui, "\u{8fdb}\u{5165}\u{80b2}\u{6210}\u{6a21}\u{5f0f}\u{540e}\u{53ef}\u{67e5}\u{770b}\u{6570}\u{636e}");
+        label(ui, "等待游戏初始化...");
+        small(ui, "进入育成模式后可查看数据");
         return;
     }
 
@@ -953,7 +1007,7 @@ unsafe fn render_panel(ui: *mut c_void) {
 
     // 从全局 GAME_DATA 读取
     if GAME_DATA.is_null() {
-        label(ui, "\u{5185}\u{90e8}\u{9519}\u{8bef}");
+        label(ui, "内部错误");
         return;
     }
 
@@ -961,75 +1015,55 @@ unsafe fn render_panel(ui: *mut c_void) {
     let gd = &*gd;
 
     if !gd.available {
-        label(ui, "\u{6682}\u{65e0}\u{80b2}\u{6210}\u{6570}\u{636e}");
-        small(ui, "\u{8bf7}\u{5148}\u{8fdb}\u{5165}\u{80b2}\u{6210}\u{6a21}\u{5f0f}");
+        label(ui, "暂无育成数据");
+        small(ui, "请先进入育成模式");
         NOTIFICATION_SENT = false;
         return;
     }
 
     // 首次检测到育成数据时推送通知
     if !NOTIFICATION_SENT {
-        let msg = to_cstr("URA \u{5c0f}\u{9ed1}\u{677f}\u{5df2}\u{6fc0}\u{6d3b}");
-        ((*VT).gui_show_notification)(msg.as_ptr());
+        let msg = to_cstr("URA 小黑板已激活");
+        ((*API).gui_show_notification)(msg.as_ptr());
         NOTIFICATION_SENT = true;
     }
 
     // ---- 回合信息 ----
     let (year, month, first_half) = turn_to_ym(gd.turn);
-    let half_str = if first_half {
-        "\u{524d}\u{534a}"
-    } else {
-        "\u{540e}\u{534a}"
-    };
-    colored(ui, C_WHITE, &format!(
-        "{}\u{5e74}\u{76ee} {}\u{6708}{}  Turn {}",
-        year, month, half_str, gd.turn
-    ));
+    let half_str = if first_half { "前半" } else { "后半" };
+    colored(ui, C_WHITE, &format!("{}年目 {}月{}  Turn {}", year, month, half_str, gd.turn));
 
     // ---- 体力 ----
     let max_e = if gd.max_energy > 0 { gd.max_energy } else { 1 };
     let e_ratio = gd.energy as f32 / max_e as f32;
     let e_pct = (e_ratio * 100.0) as i32;
     let ec = energy_color(e_ratio);
-    colored(ui, ec, &format!(
-        "\u{4f53}\u{529b}: {}/{} ({}%)",
-        gd.energy, max_e, e_pct
-    ));
+    colored(ui, ec, &format!("体力: {}/{} ({}%)", gd.energy, max_e, e_pct));
 
     // ---- 干劲 ----
     let mc = mot_color(gd.motivation);
-    colored(ui, mc, &format!(
-        "\u{5e72}\u{52b2}: {}  \u{00d7}{:.1}",
-        mot_text(gd.motivation), mot_mult(gd.motivation)
-    ));
+    colored(ui, mc, &format!("干劲: {}  ×{:.1}", mot_text(gd.motivation), mot_mult(gd.motivation)));
 
     sep(ui);
 
     // ---- 五维属性 ----
-    render_stat_line(ui, "\u{901f}\u{5ea6}", C_SPEED, gd.speed);
-    render_stat_line(ui, "\u{8010}\u{529b}", C_STAMINA, gd.stamina);
-    render_stat_line(ui, "\u{529b}\u{91cf}", C_POWER, gd.power);
-    render_stat_line(ui, "\u{6839}\u{6027}", C_GUTS, gd.guts);
-    render_stat_line(ui, "\u{667a}\u{529b}", C_WISDOM, gd.wisdom);
+    render_stat_line(ui, "速度", C_SPEED, gd.speed);
+    render_stat_line(ui, "耐力", C_STAMINA, gd.stamina);
+    render_stat_line(ui, "力量", C_POWER, gd.power);
+    render_stat_line(ui, "根性", C_GUTS, gd.guts);
+    render_stat_line(ui, "智力", C_WISDOM, gd.wisdom);
 
     sep(ui);
 
     // ---- 修正合计 ----
     let rv_total = gd.revised_total();
-    colored(ui, C_WHITE, &format!(
-        "\u{4fee}\u{6b63}\u{5408}\u{8ba1}: {}  [{}]",
-        rv_total, rating(rv_total)
-    ));
+    colored(ui, C_WHITE, &format!("修正合计: {}  [{}]", rv_total, rating(rv_total)));
 
     // ---- 技能Pt ----
-    colored(ui, C_WISDOM, &format!(
-        "\u{6280}\u{80fd}Pt: {}", gd.skill_point
-    ));
+    colored(ui, C_WISDOM, &format!("技能Pt: {}", gd.skill_point));
 
     // ---- 粉丝数 ----
-    colored(ui, C_GRAY, &format!(
-        "\u{7c89}\u{4e1d}: {}", gd.fan_count
-    ));
+    colored(ui, C_GRAY, &format!("粉丝: {}", gd.fan_count));
 
     sep(ui);
 
@@ -1037,33 +1071,24 @@ unsafe fn render_panel(ui: *mut c_void) {
     let best = &gd.trainings[gd.best_training_idx];
     let best_score = best.score;
 
-    heading(ui, "\u{8bad}\u{7ec3}\u{63a8}\u{8350}");
+    heading(ui, "训练推荐");
 
     if best_score <= 0.0 {
-        small(ui, "\u{65e0}\u{53ef}\u{7528}\u{8bad}\u{7ec3}\u{6570}\u{636e}");
+        small(ui, "无可用训练数据");
     } else {
         let tc = train_color(best.command_type);
-        colored(ui, C_RECOMMEND, &format!(
-            "\u{2605} {} \u{8bad}\u{7ec3}",
-            train_name(best.command_type)
-        ));
-        colored(ui, tc, &format!(
-            "  \u{671f}\u{671b}\u{6536}\u{76ca}: +{:.1}", best_score
-        ));
+        colored(ui, C_RECOMMEND, &format!("★ {} 训练", train_name(best.command_type)));
+        colored(ui, tc, &format!("  期望收益: +{:.1}", best_score));
         if best.failure_rate > 0 {
-            colored(ui, C_MOT2, &format!(
-                "  \u{5931}\u{8d25}\u{7387}: {}%", best.failure_rate
-            ));
+            colored(ui, C_MOT2, &format!("  失败率: {}%", best.failure_rate));
         }
         if best.partner_count > 0 {
-            small(ui, &format!(
-                "  \u{4f19}\u{4f34}: {} \u{4eba}", best.partner_count
-            ));
+            small(ui, &format!("  伙伴: {} 人", best.partner_count));
         }
 
         // 显示所有训练的分数（降序）
         sep(ui);
-        small(ui, "\u{5168}\u{8bad}\u{7ec3}\u{5f97}\u{5206}:");
+        small(ui, "全训练得分:");
         let mut order: [usize; MAX_TRAININGS] = [0, 1, 2, 3, 4];
         for _ in 0..MAX_TRAININGS {
             for j in 0..MAX_TRAININGS - 1 {
@@ -1079,12 +1104,8 @@ unsafe fn render_panel(ui: *mut c_void) {
             if !t.valid || t.score <= 0.0 { continue; }
             let tc2 = train_color(t.command_type);
             let is_best = idx == gd.best_training_idx;
-            let marker = if is_best { " \u{2605}" } else { "" };
-            colored(ui, tc2, &format!(
-                "{}{}: {:.1}  (\u{5931}\u{8d25}{}%)",
-                train_name(t.command_type), marker,
-                t.score, t.failure_rate
-            ));
+            let marker = if is_best { " ★" } else { "" };
+            colored(ui, tc2, &format!("{}{}: {:.1}  (失败{}%)", train_name(t.command_type), marker, t.score, t.failure_rate));
         }
     }
 
@@ -1132,13 +1153,7 @@ fn start_http_server() {
     let listener = match bound_listener {
         Some(l) => l,
         None => {
-            // 无法绑定任何端口，记录日志
-            unsafe {
-                if !VT.is_null() {
-                    let msg = CString::new("URA: HTTP server failed to bind port").unwrap();
-                    ((*VT).log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-                }
-            }
+            unsafe { ura_log(2, "URA: HTTP server failed to bind port"); }
             return;
         }
     };
@@ -1146,24 +1161,16 @@ fn start_http_server() {
     // 记录实际端口
     unsafe { HTTP_PORT = bound_port; }
 
-    // ===== 阶段2: HTTP Server 启动 =====
-    unsafe {
-        if !VT.is_null() {
-            let msg = CString::new(format!("URA: HTTP server started on :{}", bound_port)).unwrap();
-            ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-        }
-    }
+    unsafe { ura_log(3, &format!("URA: HTTP server started on :{}", bound_port)); }
 
     thread::spawn(move || {
         listener.set_nonblocking(false).ok();
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
-                    // 设置超时避免阻塞
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
 
-                    // 读取请求
                     let mut buf = [0u8; 2048];
                     let _ = stream.read(&mut buf);
 
@@ -1182,7 +1189,7 @@ fn start_http_server() {
                             }
                         }
                         "/status" => {
-                            r#"{"version":"2.0.0","mode":"hachimi_ura","status":"running"}"#.to_string()
+                            r#"{"version":"3.0.0","mode":"hachimi_ura","status":"running"}"#.to_string()
                         }
                         _ => {
                             r#"{"error":"not_found"}"#.to_string()
@@ -1211,8 +1218,6 @@ fn start_http_server() {
 /// 每 2 秒刷新一次游戏数据到 GAME_DATA
 fn start_refresh_thread() {
     thread::spawn(move || {
-        // ===== 阶段3a: 后台刷新线程启动 =====
-        // 等待游戏初始化
         let mut waited = 0u32;
         loop {
             thread::sleep(Duration::from_secs(1));
@@ -1221,25 +1226,13 @@ fn start_refresh_thread() {
                 if META.ok { break; }
             }
             if waited > 120 {
-                // 超时2分钟还没ready
-                unsafe {
-                    if !VT.is_null() {
-                        let msg = CString::new("URA: refresh thread timeout - META never ready").unwrap();
-                        ((*VT).log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-                    }
-                }
+                unsafe { ura_log(2, "URA: refresh thread timeout - META never ready"); }
                 return;
             }
         }
         
-        unsafe {
-            if !VT.is_null() {
-                let msg = CString::new(format!("URA: refresh thread started after {}s", waited)).unwrap();
-                ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-            }
-        }
+        unsafe { ura_log(3, &format!("URA: refresh thread started after {}s", waited)); }
 
-        // 初始延迟再等 2 秒确保 IL2CPP 元数据稳定
         thread::sleep(Duration::from_secs(2));
 
         loop {
@@ -1255,112 +1248,90 @@ fn start_refresh_thread() {
 
 /// 游戏初始化完成回调
 unsafe extern "C" fn on_game_initialized(_userdata: *mut c_void) {
-    if VT.is_null() { return; }
+    if API.is_null() { return; }
     
-    // ===== 阶段4: 游戏初始化完成 =====
-    unsafe {
-        let msg = CString::new("URA: on_game_initialized triggered").unwrap();
-        ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-    }
+    ura_log(3, "URA: on_game_initialized triggered");
     
     resolve_meta();
 
-    // 元数据解析完毕后立即尝试刷新一次数据
     if META.ok {
         refresh_game_data();
-        // ===== 阶段5: 数据首次读取 =====
         unsafe {
             if !GAME_DATA.is_null() {
                 let gd = (*GAME_DATA).lock().unwrap();
-                let msg = CString::new(format!(
+                ura_log(3, &format!(
                     "URA: first data read - turn={}, spd={}, sta={}, pow={}, gut={}, wis={}",
                     gd.turn, gd.speed, gd.stamina, gd.power, gd.guts, gd.wisdom
-                )).unwrap();
-                ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+                ));
             }
         }
     } else {
-        unsafe {
-            let msg = CString::new("URA: metadata resolve FAILED").unwrap();
-            ((*VT).log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-        }
+        ura_log(2, "URA: metadata resolve FAILED");
     }
 }
 
 /// 菜单面板渲染回调
 extern "C" fn on_menu_section(_userdata: *mut c_void, ui: *mut c_void) {
     unsafe {
-        if VT.is_null() || ui.is_null() { return; }
+        if API.is_null() || ui.is_null() { return; }
         render_panel(ui);
     }
 }
 
 // ============================================================
-// 插件入口 — 仅 hachimi_init (V2)
+// 插件入口 — hachimi_init_v3 (V3 API)
 // ============================================================
 
-/// CRITICAL: 只导出 hachimi_init (V2 API)。
-/// 不导出 hachimi_init_v3 — 如果存在 v3，Hachimi 会先调它并跳过 V2，
-/// 之前的 bug 就是 v3 空实现导致 V2 不被调用。
+/// V3 API 入口：通过 get_api 按名称查找函数指针
+/// Hachimi Edge v0.26.3+ 优先调用此函数
 #[no_mangle]
-pub extern "C" fn hachimi_init(vtable: *const Vtable, version: i32) -> InitResult {
-    if vtable.is_null() || version < 2 {
-        // 即使VT为空也尝试写日志 - 但不可能，直接返回
-        return InitResult::Error;
-    }
-
-    unsafe {
-        VT = vtable;
-    }
-
-    // ===== 阶段1: hachimi_init 被调用 =====
-    unsafe {
-        if !VT.is_null() {
-            let msg = CString::new(format!("URA: hachimi_init called, version={}", version)).unwrap();
-            ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+pub unsafe extern "C" fn hachimi_init_v3(
+    get_api: extern "C" fn(name: *const c_char) -> *mut c_void,
+    version: i32,
+) -> i32 {
+    // 解析所有 API 函数指针
+    let api = match resolve_api(get_api) {
+        Some(a) => a,
+        None => {
+            // 无法解析必需 API，致命错误
+            return InitResult::Error as i32;
         }
-    }
+    };
+
+    // 堆分配 API 结构体，进程生命周期不释放
+    API = Box::into_raw(Box::new(api));
+
+    ura_log(3, &format!("URA: hachimi_init_v3 called, version={}", version));
 
     // 初始化全局 GameData（堆上分配，进程生命周期不释放）
     let gd = Box::new(Mutex::new(GameData::empty()));
-    unsafe {
-        GAME_DATA = Box::into_raw(gd);
-    }
+    GAME_DATA = Box::into_raw(gd);
 
-    // 启动 HTTP Server（在 hachimi_init 里启动）
+    // 启动 HTTP Server
     start_http_server();
 
     // 启动后台数据刷新线程
     start_refresh_thread();
 
     // 注册回调
-    unsafe {
-        let vt = &*vtable;
+    let _ = ((*API).hachimi_register_on_game_initialized)(
+        Some(on_game_initialized),
+        ptr::null_mut(),
+    );
 
-        // 等游戏初始化完再解析 IL2CPP 元数据
-        let _ = (vt.hachimi_register_on_game_initialized)(
-            Some(on_game_initialized),
-            ptr::null_mut(),
-        );
+    // 注册菜单面板（每次打开菜单时调用 on_menu_section 渲染）
+    let label_c = to_cstr("URA 小黑板");
+    let _ = ((*API).gui_register_menu_section)(
+        label_c.as_ptr(),
+        Some(on_menu_section),
+        ptr::null_mut(),
+    );
 
-        // 注册菜单面板（每次打开菜单时调用 on_menu_section 渲染）
-        let _ = (vt.gui_register_menu_section)(
-            Some(on_menu_section),
-            ptr::null_mut(),
-        );
+    ura_log(3, "URA 小黑板 v3.0.0 fully loaded - callbacks registered");
+    
+    // 发送通知
+    let notif = to_cstr("URA小黑板 v3.0.0 已加载");
+    ((*API).gui_show_notification)(notif.as_ptr());
 
-        // ===== 阶段3: 回调注册完成 =====
-        let msg = CString::new("URA 小黑板 v2.0.0 fully loaded - callbacks registered").unwrap();
-        (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
-        
-        // 发送通知
-        let notif = CString::new("URA小黑板 v2.0.0 已加载").unwrap();
-        (vt.gui_show_notification)(notif.as_ptr());
-    }
-
-    InitResult::Ok
+    InitResult::Ok as i32
 }
-
-// 注意：hachimi_init_v3 被故意移除。
-// 如果存在 v3 导出，Hachimi 会优先调用它；之前 v3 空壳只返回 Ok
-// 导致 V2 (hachimi_init) 不被调用，菜单无法注册。
