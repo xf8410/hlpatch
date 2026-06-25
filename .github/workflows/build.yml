@@ -30,6 +30,38 @@ jobs:
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           git clone --depth 1 https://github.com/jmpews/Dobby.git dobby-src
+
+          # Patch Dobby ARM64 asm: Mach-O syntax -> ELF syntax
+          ASM_FILE="dobby-src/source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_bridge_arm64.asm"
+          python3 << 'PYEOF'
+          import re
+          asm_file = "dobby-src/source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_bridge_arm64.asm"
+          with open(asm_file, 'r') as f:
+              lines = f.readlines()
+          new_lines = []
+          for line in lines:
+              # add 指令中的 @PAGEOFF -> #:lo12: 前缀
+              if '@PAGEOFF' in line and line.strip().startswith('add'):
+                  # 匹配: add REG, REG, symbol@PAGEOFF
+                  m = re.match(r'(\s*add\s+\w+\s*,\s*\w+\s*,\s*)(\S+)@PAGEOFF(.*)', line)
+                  if m:
+                      indent_reg = m.group(1)
+                      symbol = m.group(2)
+                      rest = m.group(3)
+                      line = f'{indent_reg}#:lo12:{symbol}{rest}\n'
+                      print(f"  Patched: {line.strip()}")
+              # adrp 指令中的 @PAGE -> 直接去掉
+              elif '@PAGE' in line and line.strip().startswith('adrp'):
+                  line = line.replace('@PAGE', '')
+                  print(f"  Patched: {line.strip()}")
+              new_lines.append(line)
+          with open(asm_file, 'w') as f:
+              f.writelines(new_lines)
+          print('Patched closure_bridge_arm64.asm: Mach-O -> ELF syntax')
+          PYEOF
+          echo "=== Verifying patch ==="
+          grep -n 'adrp\|add.*#:lo12' "$ASM_FILE" || true
+
           mkdir -p dobby-src/build && cd dobby-src/build
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE=$NDK_HOME/build/cmake/android.toolchain.cmake \
