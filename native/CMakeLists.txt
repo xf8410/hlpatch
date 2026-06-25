@@ -4,11 +4,11 @@ project(umahook VERSION 0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ===== 预编译 Dobby 静态库 =====
-set(DOBBY_LIB "${CMAKE_CURRENT_SOURCE_DIR}/libs/libdobby.a")
+# ===== Dobby (shared library) =====
+set(DOBBY_LIB "${CMAKE_CURRENT_SOURCE_DIR}/libs/libdobby.so")
 set(DOBBY_INC "${CMAKE_CURRENT_SOURCE_DIR}/libs/include")
 
-# ===== Hook 源文件 =====
+# ===== Hook source files =====
 set(UMAHOOK_SOURCES
     src/main.cpp
     src/il2cpp_hook.cpp
@@ -16,39 +16,38 @@ set(UMAHOOK_SOURCES
     src/http_server.cpp
 )
 
-# ===== 构建共享库 =====
+# ===== Build shared library =====
 add_library(main SHARED ${UMAHOOK_SOURCES})
 
-# ===== 包含路径 =====
+# ===== Include paths =====
 target_include_directories(main PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${DOBBY_INC}
 )
 
-# ===== 链接库 =====
+# ===== Link libraries =====
 target_link_libraries(main
     ${DOBBY_LIB}
     log
     dl
 )
 
-# ===== 编译选项 =====
+# ===== Compile options =====
 target_compile_options(main PRIVATE
     -Wall
     -Wno-unused-parameter
     -Wno-missing-field-initializers
     -fno-rtti
-    /
     -fvisibility=hidden
 )
 
-# 导出 JNI_OnLoad
+# Export JNI_OnLoad
 target_link_options(main PRIVATE
     -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/export.map
 )
 
-# 输出 libmain.so
+# Output libmain.so
 set_target_properties(main PROPERTIES
     OUTPUT_NAME "main"
     PREFIX "lib"
