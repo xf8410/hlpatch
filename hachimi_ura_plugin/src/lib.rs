@@ -39,6 +39,7 @@ static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
 
 // Cached chara data for menu display
+#[derive(Copy, Clone)]
 struct CharaCache {
     speed: i32, stamina: i32, power: i32, wiz: i32, guts: i32,
     vital: i32, max_vital: i32, motivation: i32, turn: i32,
@@ -647,5 +648,4 @@ pub unsafe extern "C" fn hachimi_init_v3(
     start_http_server();
 
     ura_log(3, &format!("hachimi_init_v3 done, api_version={}", version));
-    InitResult::Ok as i32
-}
+    I
