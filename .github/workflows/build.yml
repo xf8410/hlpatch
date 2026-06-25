@@ -18,6 +18,13 @@ jobs:
           ndk-version: r25c
           add-to-path: false
 
+      - name: Install GNU ARM64 Assembler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq binutils-aarch64-linux-gnu
+          NDK_BIN="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ln -sf /usr/bin/aarch64-linux-gnu-as "$NDK_BIN/as"
+
       - name: Build Dobby
         env:
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -31,6 +38,7 @@ jobs:
             -DCMAKE_ASM_FLAGS="-fno-integrated-as" \
             -DCMAKE_C_FLAGS="-fno-integrated-as" \
             -DCMAKE_CXX_FLAGS="-fno-integrated-as" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build . --target dobby_static -j$(nproc)
 
