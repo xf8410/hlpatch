@@ -1,8 +1,8 @@
-//! URA Plugin v3.1.0-minimal
-//! Hachimi Edge V3 API — 最小化验证版本
+//! URA Plugin v3.2.0-minimal
+//! Hachimi Edge V3 API — 修正版
 //!
-//! 目标: 确认 V3 API 能正常加载而不闪退
-//! 不做: HTTP Server、IL2CPP 读取、外部依赖
+//! 修复: gui_register_menu_section 实际签名为 (callback, userdata)
+//!       之前错误地传了3个参数(label, callback, userdata)导致闪退
 
 #![allow(dead_code)]
 
@@ -23,33 +23,26 @@ pub enum InitResult {
 // V3 API 函数指针（全部 Option，解析失败不阻止初始化）
 // ============================================================
 struct Api {
-    // 必须
     log_fn: Option<unsafe extern "C" fn(i32, *const c_char, *const c_char)>,
     gui_show_notification_fn: Option<unsafe extern "C" fn(*const c_char) -> bool>,
+    // gui_register_menu_item(label, callback, userdata) — 有label
     gui_register_menu_item_fn: Option<unsafe extern "C" fn(*const c_char, Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool>,
-    gui_register_menu_section_fn: Option<unsafe extern "C" fn(*const c_char, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool>,
+    // gui_register_menu_section(callback, userdata) — 无label！
+    gui_register_menu_section_fn: Option<unsafe extern "C" fn(Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool>,
     hachimi_register_on_game_initialized_fn: Option<unsafe extern "C" fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool>,
-    // 可选
     gui_ui_heading_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> bool>,
     gui_ui_label_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> bool>,
     gui_ui_colored_label_fn: Option<unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool>,
     gui_ui_separator_fn: Option<unsafe extern "C" fn(*mut c_void) -> bool>,
-    hachimi_get_base_dir_fn: Option<unsafe extern "C" fn() -> *const c_char>,
-    hachimi_get_data_path_fn: Option<unsafe extern "C" fn() -> *const c_char>,
 }
 
-// 全局 API 指针，堆分配，进程生命周期不释放
+// 全局 API 指针
 static mut API: *const Api = ptr::null();
-
-// ============================================================
-// 辅助函数
-// ============================================================
 
 fn to_cstr(s: &str) -> CString {
     CString::new(s).unwrap_or_else(|_| CString::new("<err>").unwrap())
 }
 
-/// 安全调用 log
 unsafe fn ura_log(level: i32, msg: &str) {
     if API.is_null() { return; }
     let api = &*API;
@@ -64,14 +57,12 @@ unsafe fn ura_log(level: i32, msg: &str) {
 // 回调函数
 // ============================================================
 
-/// 游戏初始化完成回调 — 只打日志
 extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     unsafe {
         ura_log(3, "game initialized callback fired");
     }
 }
 
-/// 菜单面板渲染回调 — 显示静态文字
 extern "C" fn on_menu_section(_userdata: *mut c_void, ui: *mut c_void) {
     unsafe {
         if API.is_null() || ui.is_null() { return; }
@@ -87,7 +78,7 @@ extern "C" fn on_menu_section(_userdata: *mut c_void, ui: *mut c_void) {
         }
 
         if let Some(label_fn) = api.gui_ui_label_fn {
-            let t = to_cstr("v3.1.0-minimal");
+            let t = to_cstr("v3.2.0-minimal (fixed)");
             label_fn(ui, t.as_ptr());
         }
 
@@ -111,7 +102,6 @@ extern "C" fn on_menu_section(_userdata: *mut c_void, ui: *mut c_void) {
 // API 解析
 // ============================================================
 
-/// 通过 get_api 按名称解析函数指针，失败则对应字段为 None
 unsafe fn resolve_api(get_api: extern "C" fn(*const c_char) -> *mut c_void) -> Api {
     macro_rules! try_api {
         ($name:expr, $ty:ty) => {{
@@ -126,24 +116,21 @@ unsafe fn resolve_api(get_api: extern "C" fn(*const c_char) -> *mut c_void) -> A
     }
 
     Api {
-        // 必须
         log_fn: try_api!("log", unsafe extern "C" fn(i32, *const c_char, *const c_char)),
         gui_show_notification_fn: try_api!("gui_show_notification", unsafe extern "C" fn(*const c_char) -> bool),
         gui_register_menu_item_fn: try_api!("gui_register_menu_item", unsafe extern "C" fn(*const c_char, Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool),
-        gui_register_menu_section_fn: try_api!("gui_register_menu_section", unsafe extern "C" fn(*const c_char, Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool),
+        // 修正: 只2个参数，无label
+        gui_register_menu_section_fn: try_api!("gui_register_menu_section", unsafe extern "C" fn(Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool),
         hachimi_register_on_game_initialized_fn: try_api!("hachimi_register_on_game_initialized", unsafe extern "C" fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool),
-        // 可选
         gui_ui_heading_fn: try_api!("gui_ui_heading", unsafe extern "C" fn(*mut c_void, *const c_char) -> bool),
         gui_ui_label_fn: try_api!("gui_ui_label", unsafe extern "C" fn(*mut c_void, *const c_char) -> bool),
         gui_ui_colored_label_fn: try_api!("gui_ui_colored_label", unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool),
         gui_ui_separator_fn: try_api!("gui_ui_separator", unsafe extern "C" fn(*mut c_void) -> bool),
-        hachimi_get_base_dir_fn: try_api!("hachimi_get_base_dir", unsafe extern "C" fn() -> *const c_char),
-        hachimi_get_data_path_fn: try_api!("hachimi_get_data_path", unsafe extern "C" fn() -> *const c_char),
     }
 }
 
 // ============================================================
-// 插件入口 — hachimi_init_v3
+// 插件入口
 // ============================================================
 
 #[no_mangle]
@@ -151,39 +138,33 @@ pub unsafe extern "C" fn hachimi_init_v3(
     get_api: extern "C" fn(*const c_char) -> *mut c_void,
     version: i32,
 ) -> i32 {
-    // 解析 API 函数指针（可选失败不阻止）
     let api = resolve_api(get_api);
-
-    // 堆分配 API 结构体
     API = Box::into_raw(Box::new(api));
 
-    // 1. log
-    ura_log(3, "URA plugin v3.1.0-minimal loaded");
+    ura_log(3, "URA plugin v3.2.0-minimal loaded");
 
-    // 2. gui_show_notification
+    // gui_show_notification
     if let Some(notify_fn) = (*API).gui_show_notification_fn {
         let msg = to_cstr("URA Plugin Loaded!");
         notify_fn(msg.as_ptr());
     }
 
-    // 3. gui_register_menu_item
+    // gui_register_menu_item(label, callback, userdata) — 有label
     if let Some(reg_item_fn) = (*API).gui_register_menu_item_fn {
         let label = to_cstr("URA Assistant");
         reg_item_fn(label.as_ptr(), None, ptr::null_mut());
     }
 
-    // 4. gui_register_menu_section
+    // gui_register_menu_section(callback, userdata) — 修正：无label！
     if let Some(reg_section_fn) = (*API).gui_register_menu_section_fn {
-        let label = to_cstr("URA Assistant");
-        reg_section_fn(label.as_ptr(), Some(on_menu_section), ptr::null_mut());
+        reg_section_fn(Some(on_menu_section), ptr::null_mut());
     }
 
-    // 5. hachimi_register_on_game_initialized
+    // hachimi_register_on_game_initialized
     if let Some(reg_init_fn) = (*API).hachimi_register_on_game_initialized_fn {
         reg_init_fn(Some(on_game_initialized), ptr::null_mut());
     }
 
-    // 记录 version
     ura_log(3, &format!("hachimi_init_v3 complete, api_version={}", version));
 
     InitResult::Ok as i32
