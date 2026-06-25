@@ -1247,16 +1247,16 @@ fn start_refresh_thread() {
 // ============================================================
 
 /// 游戏初始化完成回调
-unsafe extern "C" fn on_game_initialized(_userdata: *mut c_void) {
-    if API.is_null() { return; }
-    
-    ura_log(3, "URA: on_game_initialized triggered");
-    
-    resolve_meta();
+extern "C" fn on_game_initialized(_userdata: *mut c_void) {
+    unsafe {
+        if API.is_null() { return; }
+        
+        ura_log(3, "URA: on_game_initialized triggered");
+        
+        resolve_meta();
 
-    if META.ok {
-        refresh_game_data();
-        unsafe {
+        if META.ok {
+            refresh_game_data();
             if !GAME_DATA.is_null() {
                 let gd = (*GAME_DATA).lock().unwrap();
                 ura_log(3, &format!(
@@ -1264,9 +1264,9 @@ unsafe extern "C" fn on_game_initialized(_userdata: *mut c_void) {
                     gd.turn, gd.speed, gd.stamina, gd.power, gd.guts, gd.wisdom
                 ));
             }
+        } else {
+            ura_log(2, "URA: metadata resolve FAILED");
         }
-    } else {
-        ura_log(2, "URA: metadata resolve FAILED");
     }
 }
 
