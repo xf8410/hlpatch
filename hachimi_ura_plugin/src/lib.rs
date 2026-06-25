@@ -485,14 +485,20 @@ unsafe fn resolve_field_multi(klass: *mut c_void, names: &[&str]) -> *mut c_void
 
 unsafe fn resolve_meta() {
     let vt = &*VT;
+    
+    // ===== 阶段4a: 解析IL2CPP元数据 =====
+    let msg0 = CString::new("URA: resolve_meta started").unwrap();
+    (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg0.as_ptr());
 
     let gallop_c = CString::new("Gallop").unwrap();
     let image = (vt.il2cpp_get_assembly_image)(gallop_c.as_ptr());
     if image.is_null() {
-        let msg = CString::new("URA: Gallop image not found").unwrap();
+        let msg = CString::new("URA: Gallop image is NULL - IL2CPP not ready?").unwrap();
         (vt.log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
         return;
     }
+    let msg1 = CString::new(format!("URA: Gallop image = {:p}", image)).unwrap();
+    (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg1.as_ptr());
 
     META.smd_cls    = resolve_class(image, "Gallop", "SingleModeData");
     META.smci_cls   = resolve_class(image, "Gallop", "SingleModeCharaInfo");
@@ -500,8 +506,17 @@ unsafe fn resolve_meta() {
     META.smpidci_cls = resolve_class(image, "Gallop", "SingleModeParamsIncDecInfo");
     META.sm_model_cls = resolve_class(image, "Gallop", "SingleModel");
 
+    // 日志：各class解析结果
+    {
+        let msg = CString::new(format!(
+            "URA: classes - SMD={:?} SMCI={:?} SMCDI={:?} SMPIDCI={:?} SMModel={:?}",
+            META.smd_cls, META.smci_cls, META.smcmdi_cls, META.smpidci_cls, META.sm_model_cls
+        )).unwrap();
+        (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+    }
+
     if META.smci_cls.is_null() {
-        let msg = CString::new("URA: CharaInfo class not found").unwrap();
+        let msg = CString::new("URA: CRITICAL - CharaInfo class is NULL, cannot read game data").unwrap();
         (vt.log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
         return;
     }
@@ -564,7 +579,15 @@ unsafe fn resolve_meta() {
     }
 
     META.ok = true;
-    let msg = CString::new("URA: metadata resolved").unwrap();
+    
+    // ===== 阶段4b: 字段解析结果 =====
+    let msg = CString::new(format!(
+        "URA: metadata resolved - fields: chara_info={:?} cmd_array={:?} speed={:?} stamina={:?} power={:?} guts={:?} wisdom={:?} motivation={:?} energy={:?} max_energy={:?} turn={:?} skill_pt={:?} fan={:?}",
+        META.f_chara_info, META.f_command_array,
+        META.f_speed, META.f_stamina, META.f_power, META.f_guts, META.f_wisdom,
+        META.f_motivation, META.f_energy, META.f_max_energy,
+        META.f_turn, META.f_skill_point, META.f_fan_count
+    )).unwrap();
     (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
 }
 
@@ -679,6 +702,17 @@ unsafe fn refresh_game_data() {
         let mut gd = (*GAME_DATA).lock().unwrap();
         gd.available = false;
         return;
+    }
+    
+    // 首次拿到smd实例时记录
+    {
+        static FIRST_SMD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !FIRST_SMD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            if !VT.is_null() {
+                let msg = CString::new(format!("URA: first SMD instance = {:p}", smd)).unwrap();
+                ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+            }
+        }
     }
 
     let ci = match read_chara_info(smd) {
@@ -1112,10 +1146,10 @@ fn start_http_server() {
     // 记录实际端口
     unsafe { HTTP_PORT = bound_port; }
 
-    // 日志
+    // ===== 阶段2: HTTP Server 启动 =====
     unsafe {
         if !VT.is_null() {
-            let msg = CString::new(format!("URA: HTTP server on :{}", bound_port)).unwrap();
+            let msg = CString::new(format!("URA: HTTP server started on :{}", bound_port)).unwrap();
             ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
         }
     }
@@ -1177,11 +1211,31 @@ fn start_http_server() {
 /// 每 2 秒刷新一次游戏数据到 GAME_DATA
 fn start_refresh_thread() {
     thread::spawn(move || {
+        // ===== 阶段3a: 后台刷新线程启动 =====
         // 等待游戏初始化
+        let mut waited = 0u32;
         loop {
             thread::sleep(Duration::from_secs(1));
+            waited += 1;
             unsafe {
                 if META.ok { break; }
+            }
+            if waited > 120 {
+                // 超时2分钟还没ready
+                unsafe {
+                    if !VT.is_null() {
+                        let msg = CString::new("URA: refresh thread timeout - META never ready").unwrap();
+                        ((*VT).log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+                    }
+                }
+                return;
+            }
+        }
+        
+        unsafe {
+            if !VT.is_null() {
+                let msg = CString::new(format!("URA: refresh thread started after {}s", waited)).unwrap();
+                ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
             }
         }
 
@@ -1202,11 +1256,34 @@ fn start_refresh_thread() {
 /// 游戏初始化完成回调
 unsafe extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     if VT.is_null() { return; }
+    
+    // ===== 阶段4: 游戏初始化完成 =====
+    unsafe {
+        let msg = CString::new("URA: on_game_initialized triggered").unwrap();
+        ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+    }
+    
     resolve_meta();
 
     // 元数据解析完毕后立即尝试刷新一次数据
     if META.ok {
         refresh_game_data();
+        // ===== 阶段5: 数据首次读取 =====
+        unsafe {
+            if !GAME_DATA.is_null() {
+                let gd = (*GAME_DATA).lock().unwrap();
+                let msg = CString::new(format!(
+                    "URA: first data read - turn={}, spd={}, sta={}, pow={}, gut={}, wis={}",
+                    gd.turn, gd.speed, gd.stamina, gd.power, gd.guts, gd.wisdom
+                )).unwrap();
+                ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+            }
+        }
+    } else {
+        unsafe {
+            let msg = CString::new("URA: metadata resolve FAILED").unwrap();
+            ((*VT).log)(2, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+        }
     }
 }
 
@@ -1228,11 +1305,20 @@ extern "C" fn on_menu_section(_userdata: *mut c_void, ui: *mut c_void) {
 #[no_mangle]
 pub extern "C" fn hachimi_init(vtable: *const Vtable, version: i32) -> InitResult {
     if vtable.is_null() || version < 2 {
+        // 即使VT为空也尝试写日志 - 但不可能，直接返回
         return InitResult::Error;
     }
 
     unsafe {
         VT = vtable;
+    }
+
+    // ===== 阶段1: hachimi_init 被调用 =====
+    unsafe {
+        if !VT.is_null() {
+            let msg = CString::new(format!("URA: hachimi_init called, version={}", version)).unwrap();
+            ((*VT).log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+        }
     }
 
     // 初始化全局 GameData（堆上分配，进程生命周期不释放）
@@ -1263,10 +1349,13 @@ pub extern "C" fn hachimi_init(vtable: *const Vtable, version: i32) -> InitResul
             ptr::null_mut(),
         );
 
-        // 日志：插件已加载
-        let gallop_c = CString::new("Gallop").unwrap();
-        let msg = CString::new("URA \u{5c0f}\u{9ed1}\u{677f} v2.0.0 loaded").unwrap();
-        (vt.log)(0, gallop_c.as_ptr(), msg.as_ptr());
+        // ===== 阶段3: 回调注册完成 =====
+        let msg = CString::new("URA 小黑板 v2.0.0 fully loaded - callbacks registered").unwrap();
+        (vt.log)(0, b"URA\0".as_ptr() as *const c_char, msg.as_ptr());
+        
+        // 发送通知
+        let notif = CString::new("URA小黑板 v2.0.0 已加载").unwrap();
+        (vt.gui_show_notification)(notif.as_ptr());
     }
 
     InitResult::Ok
