@@ -1,5 +1,6 @@
-//! URA Plugin v3.3.2
-//! Fix: remove dead menu_item, start HTTP immediately, bind 0.0.0.0 for VPN compat
+//! URA Plugin v3.3.3
+//! Fix: menu_item + menu_section pair, no-op callback for clickable tab
+//! HTTP auto-start on plugin load, bind 0.0.0.0 for VPN compat
 
 #![allow(dead_code)]
 
@@ -14,6 +15,7 @@ pub enum InitResult { Error = 0, Ok = 1 }
 struct Api {
     log_fn: Option<unsafe extern "C" fn(i32, *const c_char, *const c_char)>,
     gui_show_notification_fn: Option<unsafe extern "C" fn(*const c_char) -> bool>,
+    gui_register_menu_item_fn: Option<unsafe extern "C" fn(*const c_char, Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool>,
     gui_register_menu_section_fn: Option<unsafe extern "C" fn(Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool>,
     hachimi_register_on_game_initialized_fn: Option<unsafe extern "C" fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool>,
     gui_ui_heading_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> bool>,
@@ -150,7 +152,6 @@ fn start_http_server() {
     HTTP_RUNNING.store(true, Ordering::Relaxed);
     std::thread::spawn(|| {
         unsafe { ura_log(3, "HTTP starting on 0.0.0.0:18765"); }
-        // Bind 0.0.0.0 so VPN/accelerator doesn't block localhost
         let listener = match std::net::TcpListener::bind("0.0.0.0:18765") {
             Ok(l) => l,
             Err(e) => {
@@ -179,7 +180,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let path = req.split(' ').nth(1).unwrap_or("/");
     let body = match path {
-        "/" | "/health" => r#"{"status":"ok","version":"3.3.2","endpoints":["/scan","/status","/health"]}"#.to_string(),
+        "/" | "/health" => r#"{"status":"ok","version":"3.3.3","endpoints":["/scan","/status","/health"]}"#.to_string(),
         "/scan" => {
             let result = unsafe { scan_il2cpp_classes() };
             unsafe { SCAN_RESULT = result.clone(); }
@@ -200,6 +201,11 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let _ = stream.flush();
 }
 
+// No-op callback for menu_item click - just needs to exist
+extern "C" fn on_menu_item_click(_userdata: *mut c_void) {
+    unsafe { ura_log(3, "URA menu item clicked"); }
+}
+
 extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     GAME_INITIALIZED.store(true, Ordering::Relaxed);
     unsafe {
@@ -214,7 +220,7 @@ extern "C" fn on_menu_section(_userdata: *mut c_void, ui: *mut c_void) {
         let api = &*API;
         if let Some(f) = api.gui_ui_heading_fn { f(ui, to_cstr("URA Assistant").as_ptr()); }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
-        if let Some(f) = api.gui_ui_label_fn { f(ui, to_cstr("v3.3.2 - IL2CPP + HTTP").as_ptr()); }
+        if let Some(f) = api.gui_ui_label_fn { f(ui, to_cstr("v3.3.3 - IL2CPP + HTTP").as_ptr()); }
         if let Some(f) = api.gui_ui_colored_label_fn {
             if GAME_INITIALIZED.load(Ordering::Relaxed) {
                 f(ui, 0, 255, 136, 255, to_cstr("Game: Connected").as_ptr());
@@ -248,12 +254,13 @@ unsafe fn resolve_api(get_api: extern "C" fn(*const c_char) -> *mut c_void) -> A
     Api {
         log_fn: try_api!("log", unsafe extern "C" fn(i32, *const c_char, *const c_char)),
         gui_show_notification_fn: try_api!("gui_show_notification", unsafe extern "C" fn(*const c_char) -> bool),
+        gui_register_menu_item_fn: try_api!("gui_register_menu_item", unsafe extern "C" fn(*const c_char, Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool),
         gui_register_menu_section_fn: try_api!("gui_register_menu_section", unsafe extern "C" fn(Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool),
         hachimi_register_on_game_initialized_fn: try_api!("hachimi_register_on_game_initialized", unsafe extern "C" fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool),
         gui_ui_heading_fn: try_api!("gui_ui_heading", unsafe extern "C" fn(*mut c_void, *const c_char) -> bool),
         gui_ui_label_fn: try_api!("gui_ui_label", unsafe extern "C" fn(*mut c_void, *const c_char) -> bool),
-        gui_ui_colored_label_fn: try_api!("gui_ui_colored_label", unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool),
-        gui_ui_separator_fn: try_api!("gui_ui_separator", unsafe extern "C" fn(*mut c_void) -> bool),
+        gui_ui_colored_label_fn: try_api!("gui_ui_colored_label", unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool>,
+        gui_ui_separator_fn: try_api!("gui_ui_separator", unsafe extern "C" fn(*mut c_void) -> bool>,
         il2cpp_get_assembly_image_fn: try_api!("il2cpp_get_assembly_image", unsafe extern "C" fn(*const c_char) -> *const c_void),
         il2cpp_get_class_fn: try_api!("il2cpp_get_class", unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) -> *mut c_void),
         il2cpp_get_field_from_name_fn: try_api!("il2cpp_get_field_from_name", unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
@@ -273,13 +280,18 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.3.2 loaded");
+    ura_log(3, "URA plugin v3.3.3 loaded");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.3.2 Loaded!").as_ptr());
+        f(to_cstr("URA v3.3.3 Loaded!").as_ptr());
     }
 
-    // Only register menu section (no dead menu_item)
+    // Register menu_item WITH callback - this creates the clickable tab
+    if let Some(f) = (*API).gui_register_menu_item_fn {
+        f(to_cstr("URA Assistant").as_ptr(), Some(on_menu_item_click), ptr::null_mut());
+    }
+
+    // Register menu_section - this creates the content panel
     if let Some(f) = (*API).gui_register_menu_section_fn {
         f(Some(on_menu_section), ptr::null_mut());
     }
@@ -288,7 +300,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
         f(Some(on_game_initialized), ptr::null_mut());
     }
 
-    // Start HTTP immediately - don't wait for game
+    // Start HTTP immediately
     start_http_server();
 
     ura_log(3, &format!("hachimi_init_v3 done, api_version={}", version));
