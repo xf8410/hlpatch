@@ -4,8 +4,8 @@ project(umahook VERSION 0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ===== Dobby (shared library) =====
-set(DOBBY_LIB "${CMAKE_CURRENT_SOURCE_DIR}/libs/libdobby.so")
+# ===== Dobby static library =====
+set(DOBBY_LIB "${CMAKE_CURRENT_SOURCE_DIR}/libs/libdobby.a")
 set(DOBBY_INC "${CMAKE_CURRENT_SOURCE_DIR}/libs/include")
 
 # ===== Hook source files =====
