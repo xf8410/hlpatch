@@ -1,4 +1,4 @@
-//! URA Plugin v3.3.3
+//! URA Plugin v3.3.4
 //! Fix: menu_item + menu_section pair, no-op callback for clickable tab
 //! HTTP auto-start on plugin load, bind 0.0.0.0 for VPN compat
 
@@ -180,7 +180,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let path = req.split(' ').nth(1).unwrap_or("/");
     let body = match path {
-        "/" | "/health" => r#"{"status":"ok","version":"3.3.3","endpoints":["/scan","/status","/health"]}"#.to_string(),
+        "/" | "/health" => r#"{"status":"ok","version":"3.3.4","endpoints":["/scan","/status","/health"]}"#.to_string(),
         "/scan" => {
             let result = unsafe { scan_il2cpp_classes() };
             unsafe { SCAN_RESULT = result.clone(); }
@@ -214,13 +214,13 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     }
 }
 
-extern "C" fn on_menu_section(_userdata: *mut c_void, ui: *mut c_void) {
+extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
     unsafe {
         if API.is_null() || ui.is_null() { return; }
         let api = &*API;
         if let Some(f) = api.gui_ui_heading_fn { f(ui, to_cstr("URA Assistant").as_ptr()); }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
-        if let Some(f) = api.gui_ui_label_fn { f(ui, to_cstr("v3.3.3 - IL2CPP + HTTP").as_ptr()); }
+        if let Some(f) = api.gui_ui_label_fn { f(ui, to_cstr("v3.3.4 - IL2CPP + HTTP").as_ptr()); }
         if let Some(f) = api.gui_ui_colored_label_fn {
             if GAME_INITIALIZED.load(Ordering::Relaxed) {
                 f(ui, 0, 255, 136, 255, to_cstr("Game: Connected").as_ptr());
@@ -259,8 +259,8 @@ unsafe fn resolve_api(get_api: extern "C" fn(*const c_char) -> *mut c_void) -> A
         hachimi_register_on_game_initialized_fn: try_api!("hachimi_register_on_game_initialized", unsafe extern "C" fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool),
         gui_ui_heading_fn: try_api!("gui_ui_heading", unsafe extern "C" fn(*mut c_void, *const c_char) -> bool),
         gui_ui_label_fn: try_api!("gui_ui_label", unsafe extern "C" fn(*mut c_void, *const c_char) -> bool),
-        gui_ui_colored_label_fn: try_api!("gui_ui_colored_label", unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool),
-        gui_ui_separator_fn: try_api!("gui_ui_separator", unsafe extern "C" fn(*mut c_void) -> bool),
+        gui_ui_colored_label_fn: try_api!("gui_ui_colored_label", unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool>,
+        gui_ui_separator_fn: try_api!("gui_ui_separator", unsafe extern "C" fn(*mut c_void) -> bool>,
         il2cpp_get_assembly_image_fn: try_api!("il2cpp_get_assembly_image", unsafe extern "C" fn(*const c_char) -> *const c_void),
         il2cpp_get_class_fn: try_api!("il2cpp_get_class", unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) -> *mut c_void),
         il2cpp_get_field_from_name_fn: try_api!("il2cpp_get_field_from_name", unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
@@ -280,10 +280,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.3.3 loaded");
+    ura_log(3, "URA plugin v3.3.4 loaded");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.3.3 Loaded!").as_ptr());
+        f(to_cstr("URA v3.3.4 Loaded!").as_ptr());
     }
 
     // Register menu_item WITH callback - this creates the clickable tab
