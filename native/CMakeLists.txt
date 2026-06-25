@@ -39,7 +39,7 @@ target_compile_options(main PRIVATE
     -Wno-unused-parameter
     -Wno-missing-field-initializers
     -fno-rtti
-    -fno-exceptions
+    /
     -fvisibility=hidden
 )
 
