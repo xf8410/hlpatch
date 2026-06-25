@@ -18,7 +18,7 @@ jobs:
           ndk-version: r25c
           add-to-path: false
 
-      - name: Build Dobby
+      - name: Build Dobby (static)
         env:
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
@@ -32,10 +32,11 @@ jobs:
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-24 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DDOBBY_DEBUG=OFF
+            -DDOBBY_DEBUG=OFF \
+            -DDOBBY_GENERATE_SHARED=OFF
           cmake --build . -j$(nproc)
-          # Verify output
-          ls -la libdobby.so
+          echo "=== Dobby build output ==="
+          find . -name "*.a" -o -name "*.so" | head -10
 
       - name: Download httplib
         run: |
@@ -47,7 +48,12 @@ jobs:
         run: |
           mkdir -p native/libs/include
           cp -r dobby-src/include/. native/libs/include/
-          cp dobby-src/build/libdobby.so native/libs/libdobby.so
+          find dobby-src/build -name "libdobby.a" -exec cp {} native/libs/libdobby.a \;
+          echo "=== Dobby static lib ==="
+          ls -la native/libs/libdobby.a
+          # Verify it has DobbyHook symbol
+          ${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm native/libs/libdobby.a 2>/dev/null | grep DobbyHook || echo "Checking with ar..."
+          ar t native/libs/libdobby.a | head -5
 
           mkdir -p native/build && cd native/build
           cmake .. \
@@ -58,10 +64,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build . -j$(nproc)
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: uma-hook-artifacts
-          path: |
-            native/build/libmain.so
-            native/libs/libdobby.so
+          name: libmain-so
+          path: native/build/libmain.so
