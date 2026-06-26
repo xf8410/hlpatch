@@ -688,34 +688,10 @@ unsafe fn read_scenario_detail() -> String {
                                 &["get_CommandType", "get_CommandId", "get_RankUpPredict"],
                                 &[],
                             );
-                            // ★ Resolve BOTH possible ParamsIncDecInfo classes
-                            let params_data_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
-                            let params_info_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfo");
-
-                            // ★ Auto-detect element type from first element's klass pointer
-                            let mut elem_is_info_type = true; // default: plain Int32 (safer)
-                            {
-                                let base = cmd_arr as *const u8;
-                                let cmd_len_tmp = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
-                                for ci in 0..cmd_len_tmp.min(5) {
-                                    let ep = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + ci * 8) as *const *mut c_void);
-                                    if ep.is_null() { continue; }
-                                    let pa = call_getter_on_instance(cmd_elem_class, ep, "get_ParamsIncDecInfoArray");
-                                    if pa.is_null() { continue; }
-                                    let pb = pa as *const u8;
-                                    let pl = std::ptr::read_unaligned::<usize>(pb.add(0x18) as *const usize);
-                                    if pl == 0 { continue; }
-                                    let fe = std::ptr::read_unaligned::<*mut c_void>(pb.add(0x20) as *const *mut c_void);
-                                    if fe.is_null() { continue; }
-                                    let ek = std::ptr::read_unaligned::<*mut c_void>(fe as *const *mut c_void);
-                                    if ek == params_info_class as *mut c_void {
-                                        elem_is_info_type = true;
-                                    } else if ek == params_data_class as *mut c_void {
-                                        elem_is_info_type = false;
-                                    }
-                                    break;
-                                }
-                            }
+                            // ★ Breeders uses SingleModeParamsIncDecInfo (plain Int32 at 0x10, 0x14)
+                            //    Confirmed via Onsen scenario's ObscuredSingleModeOnsenCommandInfo
+                            //    which uses SingleModeParamsIncDecInfo[] (not Data variant)
+                            //    NO auto-detection needed — hardcode to avoid class lookup crashes
 
                             let base = cmd_arr as *const u8;
                             let cmd_len = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
@@ -732,22 +708,11 @@ unsafe fn read_scenario_detail() -> String {
                                         for j in 0..p_len {
                                             let p_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(0x20 + j * 8) as *const *mut c_void);
                                             if p_elem.is_null() { continue; }
-                                            let (tt, val) = if elem_is_info_type {
-                                                // ★ SingleModeParamsIncDecInfo: plain Int32 at 0x10, 0x14
-                                                let bytes = p_elem as *const u8;
-                                                let t = std::ptr::read_unaligned::<i32>(bytes.add(0x10) as *const i32);
-                                                let v = std::ptr::read_unaligned::<i32>(bytes.add(0x14) as *const i32);
-                                                (t, v)
-                                            } else {
-                                                // SingleModeParamsIncDecInfoData: ObscuredInt getters
-                                                let t = if !params_data_class.is_null() {
-                                                    call_getter_obscured_int(params_data_class, p_elem, "get_TargetType")
-                                                } else { -1 };
-                                                let v = if !params_data_class.is_null() {
-                                                    call_getter_obscured_int(params_data_class, p_elem, "get_Value")
-                                                } else { -1 };
-                                                (t, v)
-                                            };
+                                            // ★ Breeders: always plain Int32 (SingleModeParamsIncDecInfo)
+                                            let bytes = p_elem as *const u8;
+                                            let t = std::ptr::read_unaligned::<i32>(bytes.add(0x10) as *const i32);
+                                            let v = std::ptr::read_unaligned::<i32>(bytes.add(0x14) as *const i32);
+                                            let (tt, val) = (t, v);
                                             params_items.push(format!(r#"{{"TargetType":{},"Value":{}}}"#, tt, val));
                                         }
                                     }
@@ -1358,7 +1323,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.8.0","fix":"Breeders_ParamsIncDecInfo_plain_Int32_fix+auto_detect_elem_class","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.8.1","fix":"Breeders_hardcode_plain_Int32+safe_class_name_detect","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1690,34 +1655,12 @@ unsafe fn debug_params_inc_dec() -> String {
     let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(0x18) as *const usize);
     if cmd_len == 0 { return r#"{"error":"cmd_arr_empty"}"#.to_string(); }
 
-    // ★ Find BOTH possible ParamsIncDecInfo classes
-    // SingleModeParamsIncDecInfoData (ObscuredInt fields, umamusume.dll)
-    // SingleModeParamsIncDecInfo (plain Int32 fields, umamusume.Http.dll)
-    let params_data_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
-    let params_info_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfo");
-
+    // ★ Safe element type detection: read klass pointer from first element,
+    //   then get class name string via il2cpp_class_get_name (no find_class_by_short_name!)
     let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
-    let get_name_fn_ref: Option<FnClassGetName> = if !get_name_fn.is_null() {
-        Some(std::mem::transmute::<*mut c_void, FnClassGetName>(get_name_fn))
-    } else { None };
 
-    let class_name_of = |cls: *mut c_void| -> String {
-        if cls.is_null() { return "null".to_string(); }
-        if let Some(ref get_name) = get_name_fn_ref {
-            let name_ptr = get_name(cls);
-            if !name_ptr.is_null() {
-                return std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
-            }
-        }
-        "unknown".to_string()
-    };
-
-    let data_class_name = class_name_of(params_data_class);
-    let info_class_name = class_name_of(params_info_class);
-
-    // ★ Detect actual element class by reading klass pointer from first element
     let mut actual_elem_class_name = "unknown".to_string();
-    let mut elem_is_info_type = false; // true = plain Int32, false = ObscuredInt
+    let mut elem_is_info_type = true; // default: plain Int32 (safer for small objects)
 
     // Quick scan: find first command with params to detect element type
     let cmd_limit_detect = std::cmp::min(cmd_len, 5);
@@ -1733,25 +1676,24 @@ unsafe fn debug_params_inc_dec() -> String {
         let first_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(0x20) as *const *mut c_void);
         if first_elem.is_null() { continue; }
         let elem_klass = std::ptr::read_unaligned::<*mut c_void>(first_elem as *const *mut c_void);
-        // Compare with both known classes
-        if elem_klass == params_info_class as *mut c_void {
-            actual_elem_class_name = info_class_name.clone();
-            elem_is_info_type = true;
-        } else if elem_klass == params_data_class as *mut c_void {
-            actual_elem_class_name = data_class_name.clone();
-            elem_is_info_type = false;
-        } else {
-            // Unknown class - get its name
-            let get_name2 = resolve_il2cpp_symbol("il2cpp_class_get_name");
-            if !get_name2.is_null() {
-                let gn: FnClassGetName = std::mem::transmute(get_name2);
-                let np = gn(elem_klass);
-                if !np.is_null() {
-                    actual_elem_class_name = std::ffi::CStr::from_ptr(np).to_string_lossy().into_owned();
+        if elem_klass.is_null() { continue; }
+        // Get class name string directly from the klass pointer
+        if !get_name_fn.is_null() {
+            let gn: FnClassGetName = std::mem::transmute(get_name_fn);
+            let np = gn(elem_klass);
+            if !np.is_null() {
+                let name = std::ffi::CStr::from_ptr(np).to_string_lossy().into_owned();
+                actual_elem_class_name = name.clone();
+                // Compare by string name — safe, no pointer comparison needed
+                if name == "SingleModeParamsIncDecInfo" {
+                    elem_is_info_type = true;
+                } else if name == "SingleModeParamsIncDecInfoData" {
+                    elem_is_info_type = false;
+                } else {
+                    // Unknown class — default to plain Int32 (safer)
+                    elem_is_info_type = true;
                 }
             }
-            // Default to info type for unknown classes (safer for small objects)
-            elem_is_info_type = true;
         }
         break 'detect;
     }
@@ -1779,15 +1721,7 @@ unsafe fn debug_params_inc_dec() -> String {
 
             let p_elem_bytes = p_elem as *const u8;
 
-            // ★ Method A: ObscuredInt getters via SingleModeParamsIncDecInfoData (OLD - may be wrong)
-            let getter_tt = if !params_data_class.is_null() {
-                call_getter_obscured_int(params_data_class, p_elem, "get_TargetType")
-            } else { -1 };
-            let getter_val = if !params_data_class.is_null() {
-                call_getter_obscured_int(params_data_class, p_elem, "get_Value")
-            } else { -1 };
-
-            // ★ Method B: Direct field read with ObscuredInt XOR decryption (OLD offsets)
+            // ★ Method A: ObscuredInt field XOR decryption (Data layout offsets 0x10, 0x24)
             let tt_crypto = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x10 + 0x00) as *const i32);
             let tt_hidden = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x10 + 0x04) as *const i32);
             let tt_decrypted = tt_hidden ^ tt_crypto;
@@ -1795,18 +1729,15 @@ unsafe fn debug_params_inc_dec() -> String {
             let val_hidden = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x24 + 0x04) as *const i32);
             let val_decrypted = val_hidden ^ val_crypto;
 
-            // ★ Method C: Plain Int32 read (SingleModeParamsIncDecInfo layout)
-            // target_type at 0x10, value at 0x14
+            // ★ Method B: Plain Int32 read (Info layout: 0x10, 0x14)
             let plain_tt = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x10) as *const i32);
             let plain_val = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x14) as *const i32);
 
-            // ★ Method D: Auto-detected correct reading based on element class
+            // ★ Method C: Auto-detected correct reading based on element class name
             let (auto_tt, auto_val) = if elem_is_info_type {
-                // SingleModeParamsIncDecInfo: plain Int32 at 0x10, 0x14
                 (plain_tt, plain_val)
             } else {
-                // SingleModeParamsIncDecInfoData: ObscuredInt getter
-                (getter_tt, getter_val)
+                (tt_decrypted, val_decrypted)
             };
 
             // ★ Raw hex dump of first 0x20 bytes (enough for both layouts)
@@ -1817,12 +1748,12 @@ unsafe fn debug_params_inc_dec() -> String {
             }
 
             debug_items.push(format!(
-                r#"{{"cmd_idx":{},"param_idx":{},"auto_tt":{},"auto_val":{},"getter_tt":{},"getter_val":{},"plain_tt":{},"plain_val":{},"field_tt_xor":{},"field_val_xor":{},"raw":"{}"}}"#,
-                i, j, auto_tt, auto_val, getter_tt, getter_val, plain_tt, plain_val, tt_decrypted, val_decrypted, hex_dump
+                r#"{{"cmd_idx":{},"param_idx":{},"actual_class":"{}","elem_is_info_type":{},"auto_tt":{},"auto_val":{},"plain_tt":{},"plain_val":{},"field_tt_xor":{},"field_val_xor":{},"raw":"{}"}}"#,
+                i, j, actual_elem_class_name, elem_is_info_type, auto_tt, auto_val, plain_tt, plain_val, tt_decrypted, val_decrypted, hex_dump
             ));
         }
     }
 
-    format!(r#"{{"scenario_id":{},"data_class":"{}","info_class":"{}","actual_elem_class":"{}","elem_is_info_type":{},"items":[{}]}}"#,
-        scenario_id, data_class_name, info_class_name, actual_elem_class_name, elem_is_info_type, debug_items.join(","))
+    format!(r#"{{"scenario_id":{},"actual_elem_class":"{}","elem_is_info_type":{},"items":[{}]}}"#,
+        scenario_id, actual_elem_class_name, elem_is_info_type, debug_items.join(","))
 }
