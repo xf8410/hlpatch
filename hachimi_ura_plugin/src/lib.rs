@@ -1,4 +1,5 @@
-//! URA Plugin v3.7.8
+//! URA Plugin v3.7.9
+//! ★ v3.7.9: Fix Value=115 bug + training log + debug/params raw memory dump
 //! ★ v3.7.8: Fix crash from null namespace ptr + expand ParamsIncDecInfoArray (TargetType+Value)
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
@@ -45,6 +46,29 @@ struct Api {
 static mut API: *const Api = ptr::null();
 static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
+
+// ★ Training log (v3.7.9): auto-record snapshots from /data and /scenario
+const MAX_LOG_ENTRIES: usize = 30;
+static mut TRAINING_LOG: Vec<String> = Vec::new();
+
+unsafe fn log_snapshot(source: &str, data: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = format!(r#"{{"ts":{},"src":"{}","data":{}}}"#, ts, source, data);
+    if TRAINING_LOG.len() >= MAX_LOG_ENTRIES {
+        TRAINING_LOG.remove(0);
+    }
+    TRAINING_LOG.push(entry);
+}
+
+unsafe fn get_training_log() -> String {
+    if TRAINING_LOG.is_empty() {
+        return r#"{"entries":0,"log":[]}"#.to_string();
+    }
+    format!(r#"{{"entries":{},"log":[{}]}}"#, TRAINING_LOG.len(), TRAINING_LOG.join(","))
+}
 
 #[derive(Copy, Clone)]
 struct CharaCache {
@@ -1289,11 +1313,13 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.7.6","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.7.9","fix":"ObscuredInt_via_getters+debug_params+log","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
-        unsafe { read_training_data() }
+        let result = unsafe { read_training_data() };
+        unsafe { log_snapshot("data", &result); }
+        result
     } else if path == "/status" {
         format!(r#"{{"game_initialized":{},"http_running":{}}}"#,
             GAME_INITIALIZED.load(Ordering::Relaxed),
@@ -1346,7 +1372,13 @@ fn handle_http(mut stream: std::net::TcpStream) {
             }
         }
     } else if path == "/scenario" {
-        unsafe { read_scenario_detail() }
+        let result = unsafe { read_scenario_detail() };
+        unsafe { log_snapshot("scenario", &result); }
+        result
+    } else if path == "/log" {
+        unsafe { get_training_log() }
+    } else if path == "/debug/params" {
+        unsafe { debug_params_inc_dec() }
     } else if path.starts_with("/classes") {
         let search = if path == "/classes" || path == "/classes/" {
             ""
@@ -1355,7 +1387,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         };
         unsafe { enumerate_all_classes(search) }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/export","/fields","/methods","/singletons","/find_method","/classes","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/classes/search/keyword"]}}"#, path)
     };
 
     let resp = format!(
@@ -1388,7 +1420,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.8").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.9").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1545,4 +1577,135 @@ pub unsafe extern "C" fn hachimi_init_v3(
 
     ura_log(3, &format!("hachimi_init_v3 done, api_version={}", version));
     InitResult::Ok as i32
+}
+
+// ============================================================
+// ★ Debug: dump ParamsIncDecInfoData raw memory (v3.7.9)
+// Reads the first CommandInfo's ParamsIncDecInfoArray elements
+// and dumps both getter results AND raw field memory for comparison
+// ============================================================
+unsafe fn debug_params_inc_dec() -> String {
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    // Get chara -> scenario -> dataset -> CommandInfoArray
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"wdm_class_null"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"wdm_no_singleton"}"#.to_string(); }
+
+    let sm_data_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_data_obj.is_null() { return r#"{"error":"sm_data_null"}"#.to_string(); }
+
+    let chara_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr()), sm_data_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"chara_null"}"#.to_string(); }
+
+    let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
+    let scenario_obj = try_get_scenario_obj(chara_data_class, chara_obj, scenario_id);
+    if scenario_obj.is_null() { return r#"{"error":"scenario_obj_null"}"#.to_string(); }
+
+    let scenario_class_name = get_scenario_class_name(scenario_id);
+    let scenario_class = find_class_by_short_name(image, scenario_class_name);
+    if scenario_class.is_null() { return format!(r#"{{"error":"scenario_class_null","name":"{}"}}"#, scenario_class_name).to_string(); }
+
+    let dataset_obj = call_getter_on_instance(scenario_class, scenario_obj, "get_DataSet");
+    if dataset_obj.is_null() { return r#"{"error":"dataset_null"}"#.to_string(); }
+
+    let dataset_class_name = format!("{}DataSet", scenario_class_name);
+    let dataset_class = find_class_by_short_name(image, &dataset_class_name);
+    if dataset_class.is_null() { return format!(r#"{{"error":"dataset_class_null","name":"{}"}}"#, dataset_class_name).to_string(); }
+
+    let cmd_elem_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersCommandInfo");
+    if cmd_elem_class.is_null() { return r#"{"error":"cmd_elem_class_null"}"#.to_string(); }
+
+    let cmd_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandInfoArray");
+    if cmd_arr.is_null() { return r#"{"error":"cmd_arr_null"}"#.to_string(); }
+
+    let cmd_base = cmd_arr as *const u8;
+    let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(0x18) as *const usize);
+    if cmd_len == 0 { return r#"{"error":"cmd_arr_empty"}"#.to_string(); }
+
+    // Find ParamsIncDecInfoData class
+    let params_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
+    let params_class_name_matched = if !params_class.is_null() {
+        let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
+        if !get_name_fn.is_null() {
+            let get_name: FnClassGetName = std::mem::transmute(get_name_fn);
+            let name_ptr = get_name(params_class);
+            if !name_ptr.is_null() {
+                std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().into_owned()
+            } else { "unknown".to_string() }
+        } else { "no_get_name".to_string() }
+    } else { "null".to_string() };
+
+    let mut debug_items = Vec::new();
+
+    // Only process first 3 commands max
+    let cmd_limit = std::cmp::min(cmd_len, 3);
+    for i in 0..cmd_limit {
+        let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(cmd_base.add(0x20 + i * 8) as *const *mut c_void);
+        if elem_ptr.is_null() { continue; }
+
+        let params_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_ParamsIncDecInfoArray");
+        if params_arr.is_null() { continue; }
+
+        let p_base = params_arr as *const u8;
+        let p_len = std::ptr::read_unaligned::<usize>(p_base.add(0x18) as *const usize);
+        if p_len == 0 || p_len > 20 { continue; }
+
+        // Only first 3 params per command
+        let p_limit = std::cmp::min(p_len, 3);
+        for j in 0..p_limit {
+            let p_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(0x20 + j * 8) as *const *mut c_void);
+            if p_elem.is_null() { continue; }
+
+            let p_elem_bytes = p_elem as *const u8;
+
+            // ★ Method A: Use getters (current logic)
+            let getter_tt = if !params_class.is_null() {
+                call_getter_obscured_int(params_class, p_elem, "get_TargetType")
+            } else { -1 };
+            let getter_val = if !params_class.is_null() {
+                call_getter_obscured_int(params_class, p_elem, "get_Value")
+            } else { -1 };
+
+            // ★ Method B: Direct field read with manual ObscuredInt decryption
+            // SingleModeParamsIncDecInfoData layout:
+            //   offset 0x10: <TargetType>k__BackingField (ObscuredInt: 0x00=cryptoKey, 0x04=hiddenValue, 0x08=inited, 0x0C=fakeValue, 0x10=fakeValueActive)
+            //   offset 0x24: <Value>k__BackingField (ObscuredInt: same structure)
+            let tt_crypto = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x10 + 0x00) as *const i32);
+            let tt_hidden = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x10 + 0x04) as *const i32);
+            let tt_decrypted = tt_hidden ^ tt_crypto;
+
+            let val_crypto = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x24 + 0x00) as *const i32);
+            let val_hidden = std::ptr::read_unaligned::<i32>(p_elem_bytes.add(0x24 + 0x04) as *const i32);
+            let val_decrypted = val_hidden ^ val_crypto;
+
+            // ★ Method C: Call getter but treat result as plain Int32 (boxed at offset 0x10)
+            let tt_plain = if !params_class.is_null() {
+                call_getter_int(params_class, p_elem, "get_TargetType")
+            } else { -1 };
+            let val_plain = if !params_class.is_null() {
+                call_getter_int(params_class, p_elem, "get_Value")
+            } else { -1 };
+
+            // ★ Raw hex dump of first 0x40 bytes
+            let mut hex_dump = String::new();
+            for b in 0..0x40 {
+                if b > 0 && b % 4 == 0 { hex_dump.push(' '); }
+                hex_dump.push_str(&format!("{:02x}", *p_elem_bytes.add(b)));
+            }
+
+            debug_items.push(format!(
+                r#"{{"cmd_idx":{},"param_idx":{},"getter_tt":{},"getter_val":{},"field_tt_dec":{},"field_val_dec":{},"tt_plain":{},"val_plain":{},"raw":"{}"}}"#,
+                i, j, getter_tt, getter_val, tt_decrypted, val_decrypted, tt_plain, val_plain, hex_dump
+            ));
+        }
+    }
+
+    format!(r#"{{"scenario_id":{},"params_class":"{}","items":[{}]}}"#,
+        scenario_id, params_class_name_matched, debug_items.join(","))
 }
