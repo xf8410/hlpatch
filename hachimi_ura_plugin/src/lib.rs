@@ -1076,10 +1076,10 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
                 f(ui, 255, 200, 50, 255, to_cstr(&format!("POW: {}", c.power)).as_ptr());
             }
             if let Some(f) = api.gui_ui_colored_label_fn {
-                f(ui, 100, 180, 255, 255, to_cstr(&format!("WIZ: {}", c.wiz)).as_ptr());
+                f(ui, 255, 130, 50, 255, to_cstr(&format!("GUT: {}", c.guts)).as_ptr());
             }
             if let Some(f) = api.gui_ui_colored_label_fn {
-                f(ui, 255, 130, 50, 255, to_cstr(&format!("GUT: {}", c.guts)).as_ptr());
+                f(ui, 100, 180, 255, 255, to_cstr(&format!("WIZ: {}", c.wiz)).as_ptr());
             }
 
             if let Some(f) = api.gui_ui_label_fn {
