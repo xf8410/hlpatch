@@ -1,4 +1,5 @@
-//! URA Plugin v3.7.2
+//! URA Plugin v3.7.3
+//! ★ v3.7.3: Scenario-specific data (Breeders/Ramen) + /scenario endpoint + /export to file
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
 //! which return plain Int32 after decryption
@@ -387,6 +388,157 @@ unsafe fn read_obscured_int_array(
 }
 
 // ============================================================
+// ★ Try to get scenario-specific object from chara
+// Based on scenario_id, try multiple possible getter names
+// ============================================================
+
+unsafe fn try_get_scenario_obj(
+    chara_class: *mut c_void,
+    chara_obj: *const c_void,
+    scenario_id: i32,
+) -> *mut c_void {
+    if chara_class.is_null() || chara_obj.is_null() { return ptr::null_mut(); }
+
+    // Map scenario_id to possible getter names
+    // From dump.cs, most scenarios use get_ScenarioXxx(), but URA uses get_WorkScenarioURA()
+    let getter_names: &[&str] = match scenario_id {
+        1 => &["get_WorkScenarioURA", "get_ScenarioURA", "get_Ura"],
+        2 => &["get_TeamRace", "get_ScenarioTeamRace"],
+        3 => &["get_ScenarioLive", "get_Live"],
+        4 => &["get_WorkScenarioFree", "get_ScenarioFree", "get_Free"],
+        5 => &["get_ScenarioVenus", "get_Venus"],
+        6 => &["get_ScenarioArc", "get_Arc"],
+        7 => &["get_ScenarioSport", "get_Sport"],
+        8 => &["get_ScenarioCook", "get_Cook"],
+        9 => &["get_ScenarioMecha", "get_Mecha"],
+        10 => &["get_ScenarioLegend", "get_Legend"],
+        11 => &["get_ScenarioPioneer", "get_Pioneer"],
+        12 => &["get_ScenarioOnsen", "get_Onsen"],
+        13 => &["get_ScenarioBreeders", "get_WorkScenarioBreeders", "get_Breeders"], // ★ 育马者杯
+        14 => &["get_ScenarioRamen", "get_WorkScenarioRamen", "get_Ramen"],          // ★ 拉面杯
+        _ => &[],
+    };
+
+    for name in getter_names {
+        let result = call_getter_ref(chara_class, chara_obj, name);
+        if !result.is_null() {
+            ura_log(3, &format!("★ Scenario {} getter '{}' found at {:p}", scenario_id, name, result));
+            return result;
+        }
+    }
+
+    ura_log(3, &format!("Scenario {} getter: all attempts failed", scenario_id));
+    ptr::null_mut()
+}
+
+// ============================================================
+// ★ Read scenario detail data (/scenario endpoint)
+// ============================================================
+
+unsafe fn read_scenario_detail() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, "Gallop", "WorkDataManager");
+    if wdm_class.is_null() { return r#"{"error":"no_wdm_class"}"#.to_string(); }
+
+    let wdm_instance = get_singleton(wdm_class);
+    if wdm_instance.is_null() { return r#"{"error":"no_wdm_singleton"}"#.to_string(); }
+
+    let sm_data_class = find_class(image, "Gallop", "WorkSingleModeData");
+    let sm_data_obj = call_getter_ref(wdm_class, wdm_instance, "get_SingleMode");
+    if sm_data_obj.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
+
+    let chara_data_class = find_class(image, "Gallop", "WorkSingleModeCharaData");
+    let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
+    let scenario_obj = try_get_scenario_obj(chara_data_class, chara_obj, scenario_id);
+
+    if scenario_obj.is_null() {
+        return format!(r#"{{"scenario_id":{},"error":"scenario_obj_null","hint":"getter_name_not_found"}}"#, scenario_id);
+    }
+
+    // Try to get DataSet from the scenario object
+    // First find the scenario class
+    let scenario_class_name = match scenario_id {
+        1 => "WorkSingleModeScenarioURA",
+        2 => "WorkSingleModeScenarioTeamRace",
+        3 => "WorkSingleModeScenarioLive",
+        4 => "WorkSingleModeScenarioFree",
+        5 => "WorkSingleModeScenarioVenus",
+        6 => "WorkSingleModeScenarioArc",
+        7 => "WorkSingleModeScenarioSport",
+        8 => "WorkSingleModeScenarioCook",
+        9 => "WorkSingleModeScenarioMecha",
+        10 => "WorkSingleModeScenarioLegend",
+        11 => "WorkSingleModeScenarioPioneer",
+        12 => "WorkSingleModeScenarioOnsen",
+        13 => "WorkSingleModeScenarioBreeders",
+        14 => "WorkSingleModeScenarioRamen",
+        _ => "Unknown",
+    };
+
+    let scenario_class = find_class_by_short_name(image, scenario_class_name);
+
+    let mut result_parts = vec![
+        format!(r#""scenario_id":{}"#, scenario_id),
+        format!(r#""scenario_class":"{}""#, scenario_class_name),
+        format!(r#""scenario_obj":"{:p}""#, scenario_obj),
+    ];
+
+    // Try get_DataSet()
+    if !scenario_class.is_null() {
+        let dataset_obj = call_getter_ref(scenario_class, scenario_obj, "get_DataSet");
+        if !dataset_obj.is_null() {
+            result_parts.push(format!(r#""dataset_obj":"{:p}""#, dataset_obj));
+
+            // Try to enumerate DataSet fields
+            let dataset_class_name = format!("WorkSingleModeScenario{}DataSet",
+                match scenario_id {
+                    13 => "Breeders",
+                    14 => "Ramen",
+                    6 => "Arc",
+                    _ => "Unknown",
+                });
+            let dataset_class = find_class_by_short_name(image, &dataset_class_name);
+            if !dataset_class.is_null() {
+                let fields_json = enumerate_class_fields(dataset_class);
+                result_parts.push(format!(r#""dataset_class":"{}""#, dataset_class_name));
+                result_parts.push(format!(r#""dataset_fields":{}"#, fields_json));
+
+                // Try to read some common DataSet getters
+                let ds_getters = ["get_CommandInfo", "get_EnhanceGroup", "get_TeamMemberInfo",
+                                  "get_ActiveEffectInfo", "get_Feeling", "get_CheckPointInfo"];
+                let mut ds_results = Vec::new();
+                for getter in &ds_getters {
+                    let val = call_getter_on_instance(dataset_class, dataset_obj, getter);
+                    if !val.is_null() {
+                        ds_results.push(format!(r#"{{"{}":"{:p}"}}"#, getter, val));
+                    }
+                }
+                if !ds_results.is_empty() {
+                    result_parts.push(format!(r#""dataset_getters":[{}]"#, ds_results.join(",")));
+                }
+            }
+        } else {
+            result_parts.push(r#""dataset_obj":"null""#.to_string());
+        }
+
+        // Also enumerate scenario class fields for debugging
+        let fields_json = enumerate_class_fields(scenario_class);
+        result_parts.push(format!(r#""scenario_fields":{}"#, fields_json));
+    }
+
+    format!(r#"{{{}}}"#, result_parts.join(","))
+}
+
+// ============================================================
 // ★ Enumerate ALL classes in assembly (runtime dump)
 // ============================================================
 
@@ -531,12 +683,12 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// ★ Read Training Data v3.7.2 — All via getter methods
+// ★ Read Training Data v3.7.3 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.7.2...");
+    ura_log(3, "Reading training data v3.7.3...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -652,6 +804,14 @@ unsafe fn read_chara_data(
     let chara_effect_ids = read_obscured_int_array(chara_data_class, chara_obj, "get_CharaEffectIdArray");
     let scenario_progress = call_getter_obscured_int(chara_data_class, chara_obj, "get_ScenarioProgress");
 
+    // ★ Try to read scenario-specific object (Breeders, Ramen, etc.)
+    let scenario_obj = try_get_scenario_obj(chara_data_class, chara_obj, scenario_id);
+    let scenario_info = if !scenario_obj.is_null() {
+        format!(r#""scenario_obj":"{:p}""#, scenario_obj)
+    } else {
+        r#""scenario_obj":"null""#.to_string()
+    };
+
     // Turn is not a direct getter on chara - it's on WorkSingleModeData
     // Actually from dump.cs, WorkSingleModeCharaData doesn't have turn/totalTurn
     // Those are on WorkSingleModeData: _totalTurnNum (offset 68)
@@ -677,20 +837,20 @@ unsafe fn read_chara_data(
     if any_valid {
         let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
         format!(
-            r#"{{"ok":true,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
+            r#"{{"ok":true,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
             speed, stamina, power, guts, wiz,
             hp, max_hp, motivation, skill_point, scenario_id, fan_count,
             effect_ids_str.join(","), scenario_progress,
-            month, half, playing_state, is_playing
+            month, half, playing_state, is_playing, scenario_info
         )
     } else {
         let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
         format!(
-            r#"{{"ok":false,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"warning":"all_fields_negative_or_zero","via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
+            r#"{{"ok":false,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"warning":"all_fields_negative_or_zero",{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
             speed, stamina, power, guts, wiz,
             hp, max_hp, motivation, skill_point, scenario_id, fan_count,
             effect_ids_str.join(","), scenario_progress,
-            month, half
+            month, half, scenario_info
         )
     }
 }
@@ -937,7 +1097,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.7.2","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.7.3","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -993,6 +1153,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 }
             }
         }
+    } else if path == "/scenario" {
+        unsafe { read_scenario_detail() }
     } else if path.starts_with("/classes") {
         let search = if path == "/classes" || path == "/classes/" {
             ""
@@ -1001,7 +1163,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         };
         unsafe { enumerate_all_classes(search) }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/fields","/methods","/singletons","/find_method","/classes","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/export","/fields","/methods","/singletons","/find_method","/classes","/classes/search/keyword"]}}"#, path)
     };
 
     let resp = format!(
@@ -1034,7 +1196,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.2").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.3").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1169,10 +1331,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.2 loaded (ObscuredInt getter fix)");
+    ura_log(3, "URA plugin v3.7.3 loaded (scenario data + export)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.7.2 Loaded!").as_ptr());
+        f(to_cstr("URA v3.7.3 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
