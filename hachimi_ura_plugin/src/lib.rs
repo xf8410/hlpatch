@@ -619,23 +619,46 @@ unsafe fn read_scenario_detail() -> String {
                 }
 
                 // ★ Expand CommandInfoArray elements (Breeders training commands)
-                // Element class: need runtime search, try common names
+                // Element class: ObscuredSingleModeBreedersCommandInfo
+                // Getters: CommandType(ObscuredInt), CommandId(ObscuredInt),
+                //          RankUpPredict(ObscuredInt), ParamsIncDecInfoArray, TeamMemberInfoArray
                 if scenario_id == 13 {
-                    // Try to find the command info element class
-                    let cmd_class_names = ["SingleModeBreedersCommandInfo", "ObscuredSingleModeBreedersCommandInfo"];
-                    for cmd_name in &cmd_class_names {
-                        let cmd_elem_class = find_class_by_short_name(image, cmd_name);
-                        if !cmd_elem_class.is_null() {
-                            let cmd_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandInfoArray");
-                            if !cmd_arr.is_null() {
-                                let elements = read_array_element_details(
-                                    cmd_arr, cmd_elem_class,
-                                    &["get_CommandType", "get_Level", "get_GainValue"],
-                                    &["get_CommandId"],
-                                );
-                                result_parts.push(format!(r#""command_info":[{}]"#, elements.join(",")));
+                    let cmd_elem_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersCommandInfo");
+                    if !cmd_elem_class.is_null() {
+                        let cmd_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandInfoArray");
+                        if !cmd_arr.is_null() {
+                            let elements = read_array_element_details(
+                                cmd_arr, cmd_elem_class,
+                                &["get_CommandType", "get_CommandId", "get_RankUpPredict"],
+                                &[],
+                            );
+                            // Also read array lengths for ParamsIncDecInfoArray and TeamMemberInfoArray
+                            let base = cmd_arr as *const u8;
+                            let cmd_len = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
+                            let mut cmd_details = Vec::new();
+                            for i in 0..cmd_len {
+                                let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
+                                let mut detail = if i < elements.len() { elements[i].clone() } else { "{}".to_string() };
+                                if !elem_ptr.is_null() {
+                                    // Read ParamsIncDecInfoArray length
+                                    let params_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_ParamsIncDecInfoArray");
+                                    let params_len = if !params_arr.is_null() {
+                                        let pbase = params_arr as *const u8;
+                                        std::ptr::read_unaligned::<usize>(pbase.add(0x18) as *const usize)
+                                    } else { 0 };
+                                    // Read TeamMemberInfoArray length
+                                    let member_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_TeamMemberInfoArray");
+                                    let member_len = if !member_arr.is_null() {
+                                        let mbase = member_arr as *const u8;
+                                        std::ptr::read_unaligned::<usize>(mbase.add(0x18) as *const usize)
+                                    } else { 0 };
+                                    // Trim trailing } and add new fields
+                                    if detail.ends_with('}') { detail.pop(); }
+                                    detail.push_str(&format!(",\"params_inc_dec_len\":{},\"team_member_len\":{}}}", params_len, member_len));
+                                }
+                                cmd_details.push(detail);
                             }
-                            break;
+                            result_parts.push(format!(r#""command_info":[{}]"#, cmd_details.join(",")));
                         }
                     }
                 }
@@ -1435,48 +1458,4 @@ unsafe fn resolve_api(get_api: extern "C" fn(*const c_char) -> *mut c_void) -> A
         gui_ui_colored_label_fn: try_api!("gui_ui_colored_label", unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool),
         gui_ui_separator_fn: try_api!("gui_ui_separator", unsafe extern "C" fn(*mut c_void) -> bool),
         il2cpp_get_assembly_image_fn: try_api!("il2cpp_get_assembly_image", unsafe extern "C" fn(*const c_char) -> *const c_void),
-        il2cpp_get_class_fn: try_api!("il2cpp_get_class", unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) -> *mut c_void),
-        il2cpp_get_field_from_name_fn: try_api!("il2cpp_get_field_from_name", unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
-        il2cpp_get_field_value_fn: try_api!("il2cpp_get_field_value", unsafe extern "C" fn(*const c_void, *const c_void, *mut c_void)),
-        il2cpp_get_static_field_value_fn: try_api!("il2cpp_get_static_field_value", unsafe extern "C" fn(*const c_void, *mut c_void)),
-        il2cpp_resolve_symbol_fn: try_api!("il2cpp_resolve_symbol", unsafe extern "C" fn(*const c_char) -> *mut c_void),
-        il2cpp_get_singleton_like_instance_fn: try_api!("il2cpp_get_singleton_like_instance", unsafe extern "C" fn(*mut c_void) -> *const c_void),
-        il2cpp_string_chars_fn: try_api!("il2cpp_string_chars", unsafe extern "C" fn(*const c_void) -> *mut u16),
-        il2cpp_string_length_fn: try_api!("il2cpp_string_length", unsafe extern "C" fn(*const c_void) -> i32),
-    }
-}
-
-// ============================================================
-// hachimi_init_v3
-// ============================================================
-
-#[no_mangle]
-pub unsafe extern "C" fn hachimi_init_v3(
-    get_api: extern "C" fn(*const c_char) -> *mut c_void,
-    version: i32,
-) -> i32 {
-    let api = resolve_api(get_api);
-    API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.6 loaded (scenario data + export)");
-
-    if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.7.6 Loaded!").as_ptr());
-    }
-
-    if let Some(f) = (*API).gui_register_menu_item_fn {
-        f(to_cstr("URA Assistant").as_ptr(), Some(on_menu_item_click), ptr::null_mut());
-    }
-
-    if let Some(f) = (*API).gui_register_menu_section_fn {
-        f(Some(on_menu_section), ptr::null_mut());
-    }
-
-    if let Some(f) = (*API).hachimi_register_on_game_initialized_fn {
-        f(Some(on_game_initialized), ptr::null_mut());
-    }
-
-    start_http_server();
-
-    ura_log(3, &format!("hachimi_init_v3 done, api_version={}", version));
-    InitResult::Ok as i32
-}
+        il2cpp_get_class_fn: try_api!("il2cpp_get_class", unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) 
