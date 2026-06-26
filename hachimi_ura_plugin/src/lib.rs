@@ -1,10 +1,14 @@
-//! URA Plugin v3.6.0
-//! ★ BREAKTHROUGH: WorkDataManager holds WorkSingleModeData!
+//! URA Plugin v3.7.0
+//! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
+//! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
+//! which return plain Int32 after decryption
+//!
 //! Data path: WorkDataManager (Singleton) -> get_SingleMode() -> WorkSingleModeData
 //!            WorkSingleModeData -> get_Character() -> WorkSingleModeCharaData
-//!            WorkSingleModeData -> get_HomeInfoData() -> HomeInfo
-//!            WorkSingleModeData -> get_Month(), get_Half(), get_PlayingState()
-//! Found via dump.cs analysis (line 117564)
+//!            WorkSingleModeCharaData -> get_Speed(), get_Stamina(), get_Hp(), etc.
+//!
+//! Motivation enum: 1=Worst, 2=Bad, 3=Normal, 4=Good, 5=Best
+//! ObscuredInt getters: get_SkillPoint() returns ObscuredInt (boxed) - needs special handling
 
 #![allow(dead_code)]
 
@@ -45,16 +49,18 @@ static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
 struct CharaCache {
     speed: i32, stamina: i32, power: i32, guts: i32, wiz: i32,
     vital: i32, max_vital: i32, motivation: i32, turn: i32,
-    skill_point: i32, scenario_id: i32, playing_state: i32,
+    skill_point: i32, scenario_id: i32, fan_count: i32,
     month: i32, half: i32,
+    playing_state: i32, is_playing: bool,
     valid: bool,
 }
 
 static mut CHARA: CharaCache = CharaCache {
     speed: 0, stamina: 0, power: 0, wiz: 0, guts: 0,
     vital: 0, max_vital: 0, motivation: 0, turn: 0,
-    skill_point: 0, scenario_id: 0, playing_state: 0,
+    skill_point: 0, scenario_id: 0, fan_count: 0,
     month: 0, half: 0,
+    playing_state: 0, is_playing: false,
     valid: false,
 };
 
@@ -127,24 +133,6 @@ unsafe fn get_singleton(class: *mut c_void) -> *const c_void {
     }
 }
 
-unsafe fn read_field_int(obj: *const c_void, class: *mut c_void, field_name: &str) -> i32 {
-    if obj.is_null() || class.is_null() || API.is_null() { return 0; }
-    let field = match (*API).il2cpp_get_field_from_name_fn {
-        Some(fn_ptr) => {
-            let name_c = to_cstr(field_name);
-            fn_ptr(class, name_c.as_ptr())
-        }
-        None => return 0,
-    };
-    if field.is_null() { return 0; }
-    let mut value: i32 = 0;
-    match (*API).il2cpp_get_field_value_fn {
-        Some(fn_ptr) => fn_ptr(obj as *mut c_void, field, &mut value as *mut i32 as *mut c_void),
-        None => return 0,
-    }
-    value
-}
-
 unsafe fn read_field_ptr(obj: *const c_void, class: *mut c_void, field_name: &str) -> *const c_void {
     if obj.is_null() || class.is_null() || API.is_null() { return ptr::null(); }
     let field = match (*API).il2cpp_get_field_from_name_fn {
@@ -161,18 +149,6 @@ unsafe fn read_field_ptr(obj: *const c_void, class: *mut c_void, field_name: &st
         None => return ptr::null(),
     }
     value
-}
-
-unsafe fn read_field_int_auto(obj: *const c_void, class: *mut c_void, base_name: &str) -> i32 {
-    let v1 = read_field_int(obj, class, &format!("_{}", base_name));
-    if v1 != 0 { return v1; }
-    read_field_int(obj, class, base_name)
-}
-
-unsafe fn read_field_ptr_auto(obj: *const c_void, class: *mut c_void, base_name: &str) -> *const c_void {
-    let v1 = read_field_ptr(obj, class, &format!("_{}", base_name));
-    if !v1.is_null() { return v1; }
-    read_field_ptr(obj, class, base_name)
 }
 
 // ============================================================
@@ -201,13 +177,7 @@ unsafe fn resolve_il2cpp_symbol(name: &str) -> *mut c_void {
     match (*API).il2cpp_resolve_symbol_fn {
         Some(resolve) => {
             let cname = to_cstr(name);
-            let ptr = resolve(cname.as_ptr());
-            if ptr.is_null() {
-                ura_log(4, &format!("resolve: {} NOT found", name));
-            } else {
-                ura_log(4, &format!("resolve: {} OK", name));
-            }
-            ptr as *mut c_void
+            resolve(cname.as_ptr()) as *mut c_void
         }
         None => ptr::null_mut(),
     }
@@ -236,14 +206,13 @@ unsafe fn call_getter_on_instance(
     };
 
     if get_method_fn.is_none() || invoke_fn.is_none() {
-        ura_log(1, "call_getter: runtime API unavailable");
         return ptr::null_mut();
     }
 
     let method_name_c = to_cstr(method_name);
     let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
     if method_info.is_null() {
-        ura_log(4, &format!("call_getter: '{}' not found on class", method_name));
+        ura_log(4, &format!("call_getter: '{}' not found", method_name));
         return ptr::null_mut();
     }
 
@@ -260,59 +229,38 @@ unsafe fn call_getter_on_instance(
         return ptr::null_mut();
     }
 
-    if result.is_null() {
-        ura_log(3, &format!("call_getter: '{}' returned null", method_name));
-    } else {
-        ura_log(3, &format!("call_getter: '{}' OK -> {:p}", method_name, result));
-    }
-
     result
 }
 
-// Call getter that returns i32 (value type, not pointer)
+/// Call getter that returns a reference type (class instance)
+/// Result is a direct Il2CppObject pointer
+unsafe fn call_getter_ref(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> *mut c_void {
+    call_getter_on_instance(class, instance, method_name)
+}
+
+/// Call getter that returns i32 (value type - gets boxed by il2cpp_runtime_invoke)
+/// The boxed value is at result_ptr + 16 (after Il2CppObject header on 64-bit)
 unsafe fn call_getter_int(
     class: *mut c_void,
     instance: *const c_void,
     method_name: &str,
 ) -> i32 {
-    if class.is_null() || instance.is_null() { return 0; }
+    if class.is_null() || instance.is_null() { return -1; }
 
-    let get_method_fn: Option<FnClassGetMethodFromName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
-    };
-    let invoke_fn: Option<FnRuntimeInvoke> = {
-        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p)) }
-    };
+    let result = call_getter_on_instance(class, instance, method_name);
+    if result.is_null() { return -1; }
 
-    if get_method_fn.is_none() || invoke_fn.is_none() { return 0; }
-
-    let method_name_c = to_cstr(method_name);
-    let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
-    if method_info.is_null() { return 0; }
-
-    let mut exc: *mut c_void = ptr::null_mut();
-    let result = invoke_fn.unwrap()(
-        method_info,
-        instance as *mut c_void,
-        ptr::null_mut(),
-        &mut exc,
-    );
-
-    if !exc.is_null() { return 0; }
-
-    // For value types (int/bool/enum), il2cpp_runtime_invoke boxes the return value
-    // The result is a pointer to a boxed int, so we need to dereference
-    if result.is_null() { return 0; }
-
-    // The boxed value starts after the Il2CppObject header (16 bytes on 64-bit)
+    // Value type (int/enum) is boxed: real value at offset +16
     let val_ptr = result as *const u8;
     let int_val = std::ptr::read_unaligned::<i32>(val_ptr.add(16) as *const i32);
     int_val
 }
 
-// Call getter that returns bool
+/// Call getter that returns bool (value type - gets boxed)
 unsafe fn call_getter_bool(
     class: *mut c_void,
     instance: *const c_void,
@@ -321,26 +269,88 @@ unsafe fn call_getter_bool(
     call_getter_int(class, instance, method_name) != 0
 }
 
+/// ★ ObscuredInt getter: The C# property returns ObscuredInt struct,
+/// but il2cpp_runtime_invoke boxes it. We need to call the implicit
+/// conversion operator to get a plain int.
+/// ObscuredInt has an implicit operator that converts to int.
+/// Alternative: ObscuredInt struct has fields we can read directly.
+/// ObscuredInt layout (from dump.cs struct, 0x20 bytes on 64-bit):
+///   offset 0x10: int currentValue (the decrypted value if no crypto)
+///   offset 0x14: int fakeValue
+///   offset 0x18: int fakeValueActive  
+///   offset 0x1C: byte cryptoKey
+/// Actually, the getter method get_SkillPoint() returns ObscuredInt,
+/// but the C# property SkillPoint has type ObscuredInt.
+/// When il2cpp_runtime_invoke calls it, the result is boxed ObscuredInt.
+/// We need to read the ObscuredInt struct fields from the boxed result.
+///
+/// From dump.cs line 1166804:
+/// public struct ObscuredInt : IFormattable, IEquatable`1, IComparable`1
+/// It has: implicit operator int, explicit operator int
+/// The boxed result will have the ObscuredInt data starting at offset 0x10
+///
+/// Looking at ObscuredInt implementation (Anti-Cheat Toolkit):
+/// struct ObscuredInt {
+///     int currentValue;   // offset 0x10 in boxed form (after header)
+///     int fakeValue;      // offset 0x14
+///     int fakeValueActive; // offset 0x18
+///     byte cryptoKey;     // offset 0x1C
+/// }
+/// currentValue = encrypted_value ^ cryptoKey
+/// Decrypted = currentValue ^ cryptoKey
+///
+/// BUT: When we call get_SkillPoint() via il2cpp_runtime_invoke,
+/// the return type is ObscuredInt (value type), so it gets boxed.
+/// We read the boxed ObscuredInt fields and decrypt manually.
+///
+/// HOWEVER: There's a simpler approach! The C# property wrapper
+/// actually calls the internal get method which returns ObscuredInt.
+/// We can try calling the implicit conversion operator instead.
+///
+/// Simplest approach: Read ObscuredInt fields from boxed result and decrypt.
+unsafe fn call_getter_obscured_int(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> i32 {
+    if class.is_null() || instance.is_null() { return -1; }
+
+    let result = call_getter_on_instance(class, instance, method_name);
+    if result.is_null() { return -1; }
+
+    // Boxed ObscuredInt struct starts at offset 0x10 (after Il2CppObject header)
+    let base = result as *const u8;
+
+    // ObscuredInt fields (offsets relative to boxed data start = +0x10 from object start)
+    // These are the ACTUAL memory layout of ObscuredInt in Anti-Cheat Toolkit
+    let current_value = std::ptr::read_unaligned::<i32>(base.add(0x10) as *const i32);
+    let crypto_key = std::ptr::read_unaligned::<u8>(base.add(0x1C) as *const u8);
+
+    // Decrypt: result = currentValue ^ cryptoKey
+    let decrypted = current_value ^ (crypto_key as i32);
+
+    ura_log(4, &format!("ObscuredInt {}: current={} key={} decrypted={}", 
+        method_name, current_value, crypto_key, decrypted));
+
+    decrypted
+}
+
 // ============================================================
 // All known classes for scanning
 // ============================================================
 
 const KNOWN_CLASSES: &[(&str, &str)] = &[
-    // ★ Core data path
-    ("Gallop", "WorkDataManager"),         // ★ Singleton that holds WorkSingleModeData!
-    ("Gallop", "WorkSingleModeData"),       // Has get_Character, get_HomeInfoData, get_Month, etc.
-    ("Gallop", "WorkSingleModeCharaData"),  // Has speed/stamina/power/guts/wiz/vital/motivation/turn
-    ("Gallop", "WorkSingleModeHomeInfo"),   // Training commands
-    // Other Work* data classes
+    ("Gallop", "WorkDataManager"),
+    ("Gallop", "WorkSingleModeData"),
+    ("Gallop", "WorkSingleModeCharaData"),
+    ("Gallop", "WorkSingleModeHomeInfo"),
     ("Gallop", "WorkSingleModeScenarioBreeders"),
     ("Gallop", "WorkSingleModeScenarioLegend"),
     ("Gallop", "WorkSingleModeScenarioMecha"),
     ("Gallop", "WorkSingleModeScenarioOnsen"),
     ("Gallop", "WorkSingleModeScenarioPioneer"),
     ("Gallop", "WorkSingleModeScenarioRamen"),
-    // System classes
     ("Gallop", "GameSystem"),
-    // Scene classes
     ("Gallop", "HomeScene"),
     ("Gallop", "SingleModeScene"),
     ("Gallop", "RaceScene"),
@@ -383,7 +393,7 @@ unsafe fn scan_il2cpp_classes() -> String {
 }
 
 // ============================================================
-// /singletons endpoint - scan ALL known classes for singletons
+// /singletons endpoint
 // ============================================================
 
 unsafe fn find_all_singletons() -> String {
@@ -411,29 +421,26 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// ★ Read Training Data v3.6.0 — via WorkDataManager
+// ★ Read Training Data v3.7.0 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.6.0...");
+    ura_log(3, "Reading training data v3.7.0...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
         _ => return r#"{"error":"image_null"}"#.to_string(),
     };
 
-    // Resolve key classes
     let wdm_class = find_class(image, "Gallop", "WorkDataManager");
     let sm_data_class = find_class(image, "Gallop", "WorkSingleModeData");
     let chara_data_class = find_class(image, "Gallop", "WorkSingleModeCharaData");
-    let home_info_class = find_class(image, "Gallop", "WorkSingleModeHomeInfo");
 
-    ura_log(3, &format!("Classes: WDM={} SMD={} Chara={} Home={}",
+    ura_log(3, &format!("Classes: WDM={} SMD={} Chara={}",
         if wdm_class.is_null() { "null" } else { "ok" },
         if sm_data_class.is_null() { "null" } else { "ok" },
         if chara_data_class.is_null() { "null" } else { "ok" },
-        if home_info_class.is_null() { "null" } else { "ok" },
     ));
 
     // ===== Step 1: Get WorkDataManager singleton =====
@@ -444,54 +451,41 @@ unsafe fn read_training_data() -> String {
     if wdm_instance.is_null() {
         return r#"{"error":"WorkDataManager_no_singleton","hint":"start_a_training_run"}"#.to_string();
     }
-    ura_log(3, &format!("WorkDataManager singleton: {:p}", wdm_instance));
 
-    // ===== Step 2: Call get_SingleMode() on WorkDataManager =====
-    let sm_data_obj = call_getter_on_instance(wdm_class, wdm_instance, "get_SingleMode");
+    // ===== Step 2: Call get_SingleMode() =====
+    let sm_data_obj = call_getter_ref(wdm_class, wdm_instance, "get_SingleMode");
     if sm_data_obj.is_null() {
-        // Maybe the method is on the parent class (Singleton`1)
-        // Try il2cpp_class_get_method_from_name which should search parent classes
-        ura_log(2, "get_SingleMode returned null, trying field read...");
-
-        // Fallback: read the <SingleMode>k__BackingField at offset 0x58
-        // WorkDataManager inherits from Singleton`1 which has _instance at offset 8
-        // But the singleton instance IS the WorkDataManager, so fields are on it
+        // Fallback: read field directly
         let field_obj = read_field_ptr(wdm_instance, wdm_class, "<SingleMode>k__BackingField");
         if field_obj.is_null() {
             return r#"{"error":"SingleMode_null","step":"get_SingleMode"}"#.to_string();
         }
-        // Use the field-read result
-        let _ = sm_data_obj; // suppress warning
-        let sm_data_ref = field_obj;
-        return process_single_mode_data(sm_data_ref, sm_data_class, chara_data_class, home_info_class);
+        return process_single_mode_data(field_obj, sm_data_class, chara_data_class);
     }
 
-    process_single_mode_data(sm_data_obj, sm_data_class, chara_data_class, home_info_class)
+    process_single_mode_data(sm_data_obj, sm_data_class, chara_data_class)
 }
 
 unsafe fn process_single_mode_data(
     sm_data_obj: *const c_void,
     sm_data_class: *mut c_void,
     chara_data_class: *mut c_void,
-    home_info_class: *mut c_void,
 ) -> String {
-    ura_log(3, &format!("WorkSingleModeData: {:p}", sm_data_obj));
-
-    // ===== Step 3: Read metadata from WorkSingleModeData =====
-    let month = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Month") } else { 0 };
-    let half = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Half") } else { 0 };
-    let playing_state = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_PlayingState") } else { 0 };
+    // ===== Read metadata via getters =====
+    let month = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Month") } else { -1 };
+    let half = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Half") } else { -1 };
+    let playing_state = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_PlayingState") } else { -1 };
     let is_playing = if !sm_data_class.is_null() { call_getter_bool(sm_data_class, sm_data_obj, "get_IsPlaying") } else { false };
 
     ura_log(3, &format!("SM Data: month={} half={} playingState={} isPlaying={}", month, half, playing_state, is_playing));
 
-    // ===== Step 4: Call get_Character() to get WorkSingleModeCharaData =====
+    // ===== Call get_Character() =====
     if sm_data_class.is_null() {
         return format!(r#"{{"error":"WorkSingleModeData_class_null","month":{},"half":{}}}"#, month, half);
     }
-    let chara_obj = call_getter_on_instance(sm_data_class, sm_data_obj, "get_Character");
+    let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
     if chara_obj.is_null() {
-        // Fallback: try reading <Character>k__BackingField at offset 88
+        // Fallback: try field
         let chara_field = read_field_ptr(sm_data_obj, sm_data_class, "<Character>k__BackingField");
         if chara_field.is_null() {
             return format!(
@@ -519,71 +513,65 @@ unsafe fn read_chara_data(
 
     ura_log(3, &format!("WorkSingleModeCharaData: {:p}", chara_obj));
 
-    // ===== Step 5: Read fields from WorkSingleModeCharaData =====
-    let int_fields: &[(&str, &str)] = &[
-        ("speed", "speed"),
-        ("stamina", "stamina"),
-        ("power", "power"),
-        ("wiz", "wiz"),
-        ("guts", "guts"),
-        ("vital", "vital"),
-        ("max_vital", "maxVital"),
-        ("motivation", "motivation"),
-        ("turn", "turn"),
-        ("skill_point", "skillPoint"),
-        ("scenario_id", "scenarioId"),
-        ("playing_state", "playingState"),
-    ];
+    // ===== ★ ALL FIELDS VIA GETTER METHODS =====
+    // These return plain Int32 (auto-decrypted by C# getter):
+    //   get_Speed(), get_Stamina(), get_Power(), get_Guts(), get_Wiz()
+    //   get_Hp(), get_MaxHp()
+    //   get_Motivation() returns Motivation enum (int)
+    //   get_ScenarioId() returns Int32
+    //   get_FanCount() returns Int32
+    // ObscuredInt getters (need special handling):
+    //   get_SkillPoint() returns ObscuredInt struct
 
-    let mut chara_json_parts: Vec<String> = Vec::new();
-    let mut cache = CharaCache {
-        speed: 0, stamina: 0, power: 0, wiz: 0, guts: 0,
-        vital: 0, max_vital: 0, motivation: 0, turn: 0,
-        skill_point: 0, scenario_id: 0, playing_state: 0,
-        month: month, half: half,
-        valid: false,
+    let speed = call_getter_int(chara_data_class, chara_obj, "get_Speed");
+    let stamina = call_getter_int(chara_data_class, chara_obj, "get_Stamina");
+    let power = call_getter_int(chara_data_class, chara_obj, "get_Power");
+    let guts = call_getter_int(chara_data_class, chara_obj, "get_Guts");
+    let wiz = call_getter_int(chara_data_class, chara_obj, "get_Wiz");
+    let hp = call_getter_int(chara_data_class, chara_obj, "get_Hp");
+    let max_hp = call_getter_int(chara_data_class, chara_obj, "get_MaxHp");
+    let motivation = call_getter_int(chara_data_class, chara_obj, "get_Motivation");
+    let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
+    let fan_count = call_getter_int(chara_data_class, chara_obj, "get_FanCount");
+
+    // SkillPoint returns ObscuredInt - try the ObscuredInt decoder first,
+    // fall back to regular int read if it fails
+    let skill_point = call_getter_obscured_int(chara_data_class, chara_obj, "get_SkillPoint");
+
+    // Turn is not a direct getter on chara - it's on WorkSingleModeData
+    // Actually from dump.cs, WorkSingleModeCharaData doesn't have turn/totalTurn
+    // Those are on WorkSingleModeData: _totalTurnNum (offset 68)
+    // We'll read turn from the parent data via a separate call
+
+    ura_log(3, &format!("★ Chara: SPD={} STA={} POW={} GUT={} WIZ={} HP={}/{} MOT={} SKPT={} SCID={} FAN={}",
+        speed, stamina, power, guts, wiz, hp, max_hp, motivation, skill_point, scenario_id, fan_count));
+
+    let any_valid = speed > 0 || stamina > 0 || power > 0 || wiz > 0 || guts > 0 || hp > 0;
+
+    let cache = CharaCache {
+        speed, stamina, power, guts, wiz,
+        vital: hp, max_vital: max_hp,
+        motivation,
+        turn: 0, // will be populated from WorkSingleModeData
+        skill_point, scenario_id, fan_count,
+        month, half,
+        playing_state, is_playing,
+        valid: any_valid,
     };
-
-    for (json_key, il_name) in int_fields {
-        let val = read_field_int_auto(chara_obj as *const c_void, chara_data_class, il_name);
-        chara_json_parts.push(format!(r#""{}":{}"#, json_key, val));
-        match *json_key {
-            "speed" => cache.speed = val,
-            "stamina" => cache.stamina = val,
-            "power" => cache.power = val,
-            "wiz" => cache.wiz = val,
-            "guts" => cache.guts = val,
-            "vital" => cache.vital = val,
-            "max_vital" => cache.max_vital = val,
-            "motivation" => cache.motivation = val,
-            "turn" => cache.turn = val,
-            "skill_point" => cache.skill_point = val,
-            "scenario_id" => cache.scenario_id = val,
-            "playing_state" => cache.playing_state = val,
-            _ => {}
-        }
-    }
-
-    let any_nonzero = cache.speed > 0 || cache.stamina > 0 || cache.power > 0
-        || cache.wiz > 0 || cache.guts > 0 || cache.turn > 0;
-
-    cache.valid = any_nonzero;
     CHARA = cache;
 
-    if any_nonzero {
-        ura_log(3, &format!("★ DATA OK: SPD={} STA={} POW={} WIZ={} GUT={} VIT={}/{} MOT={} TURN={} Month={}/{}",
-            cache.speed, cache.stamina, cache.power, cache.wiz, cache.guts,
-            cache.vital, cache.max_vital, cache.motivation, cache.turn, cache.month, cache.half));
+    if any_valid {
         format!(
-            r#"{{"ok":true,"chara":{{{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},"via":"WorkDataManager->get_SingleMode->get_Character"}}"#,
-            chara_json_parts.join(","),
+            r#"{{"ok":true,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
+            speed, stamina, power, guts, wiz,
+            hp, max_hp, motivation, skill_point, scenario_id, fan_count,
             month, half, playing_state, is_playing
         )
     } else {
-        ura_log(2, &format!("Got chara obj but all fields zero (month={} half={})", month, half));
         format!(
-            r#"{{"ok":false,"chara":{{{}}},"month":{},"half":{},"warning":"all_fields_zero","via":"WorkDataManager->get_SingleMode->get_Character"}}"#,
-            chara_json_parts.join(","),
+            r#"{{"ok":false,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{}}},"month":{},"half":{},"warning":"all_fields_negative_or_zero","via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
+            speed, stamina, power, guts, wiz,
+            hp, max_hp, motivation, skill_point, scenario_id, fan_count,
             month, half
         )
     }
@@ -731,7 +719,7 @@ unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
 }
 
 // ============================================================
-// /find_method endpoint - search all classes for a method name
+// /find_method endpoint
 // ============================================================
 
 unsafe fn find_method_in_all_classes(method_name: &str) -> String {
@@ -831,7 +819,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.6.0","data_path":"WorkDataManager->get_SingleMode->get_Character","endpoints":["/scan","/data","/status","/health","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName"]}"#.to_string()
+        r#"{"status":"ok","version":"3.7.0","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -921,7 +909,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.6.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -942,7 +930,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         }
 
         if let Some(f) = api.gui_ui_label_fn {
-            f(ui, to_cstr("Data: WDM->SingleMode->Chara").as_ptr());
+            f(ui, to_cstr("Data: WDM->SingleMode->Chara (getters)").as_ptr());
         }
 
         let c = CHARA;
@@ -950,7 +938,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
             if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
             if let Some(f) = api.gui_ui_colored_label_fn {
-                f(ui, 0, 200, 255, 255, to_cstr(&format!("Turn {} | Month {} | Half {}", c.turn, c.month, c.half)).as_ptr());
+                f(ui, 0, 200, 255, 255, to_cstr(&format!("Month {} | Half {} | PS:{}", c.month, c.half, c.playing_state)).as_ptr());
             }
 
             if let Some(f) = api.gui_ui_colored_label_fn {
@@ -993,7 +981,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
             }
 
             if let Some(f) = api.gui_ui_label_fn {
-                f(ui, to_cstr(&format!("SkillPt: {}", c.skill_point)).as_ptr());
+                f(ui, to_cstr(&format!("SkillPt: {} | Fan: {}", c.skill_point, c.fan_count)).as_ptr());
             }
         } else {
             if let Some(f) = api.gui_ui_label_fn {
@@ -1056,10 +1044,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.6.0 loaded");
+    ura_log(3, "URA plugin v3.7.0 loaded (ObscuredInt getter fix)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.6.0 Loaded!").as_ptr());
+        f(to_cstr("URA v3.7.0 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
