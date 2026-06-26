@@ -1,5 +1,5 @@
-//! URA Plugin v3.7.6
-//! ★ v3.7.6: Scenario-specific data (Breeders/Ramen) + /scenario endpoint + /export to file
+//! URA Plugin v3.7.7
+//! ★ v3.7.7: Fix empty-namespace class resolve + expand ParamsIncDecInfoArray (TargetType+Value)
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
 //! which return plain Int32 after decryption
@@ -105,22 +105,22 @@ unsafe fn get_image() -> *const c_void {
     }
 }
 
-unsafe fn find_class(image: *const c_void, ns: &str, name: &str) -> *mut c_void {
+unsafe fn find_class(image: *const c_void, ns: *const c_char, name: *const c_char) -> *mut c_void {
     if image.is_null() || API.is_null() { return ptr::null_mut(); }
     match (*API).il2cpp_get_class_fn {
-        Some(fn_ptr) => {
-            let ns_c = to_cstr(ns);
-            let name_c = to_cstr(name);
-            fn_ptr(image, ns_c.as_ptr(), name_c.as_ptr())
-        }
+        Some(fn_ptr) => fn_ptr(image, ns, name),
         None => ptr::null_mut(),
     }
 }
 
 unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
-    let namespaces: &[&str] = &["Gallop", ""];
-    for ns in namespaces {
-        let cls = find_class(image, ns, class_name);
+    let name_c = to_cstr(class_name);
+    // Try namespace "Gallop" first, then empty string "", then null pointer
+    // (some classes have no namespace in IL2CPP and need null pointer to match)
+    let ns_gallop = to_cstr("Gallop");
+    let ns_empty = to_cstr("");
+    for ns in [ns_gallop.as_ptr(), ns_empty.as_ptr(), ptr::null()] {
+        let cls = find_class(image, ns, name_c.as_ptr());
         if !cls.is_null() { return cls; }
     }
     ptr::null_mut()
@@ -622,6 +622,7 @@ unsafe fn read_scenario_detail() -> String {
                 // Element class: ObscuredSingleModeBreedersCommandInfo
                 // Getters: CommandType(ObscuredInt), CommandId(ObscuredInt),
                 //          RankUpPredict(ObscuredInt), ParamsIncDecInfoArray, TeamMemberInfoArray
+                // Sub-element: SingleModeParamsIncDecInfoData (TargetType+Value, both ObscuredInt)
                 if scenario_id == 13 {
                     let cmd_elem_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersCommandInfo");
                     if !cmd_elem_class.is_null() {
@@ -632,7 +633,8 @@ unsafe fn read_scenario_detail() -> String {
                                 &["get_CommandType", "get_CommandId", "get_RankUpPredict"],
                                 &[],
                             );
-                            // Also read array lengths for ParamsIncDecInfoArray and TeamMemberInfoArray
+                            // Resolve ParamsIncDecInfoData class for sub-array expansion
+                            let params_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
                             let base = cmd_arr as *const u8;
                             let cmd_len = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
                             let mut cmd_details = Vec::new();
@@ -640,12 +642,17 @@ unsafe fn read_scenario_detail() -> String {
                                 let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
                                 let mut detail = if i < elements.len() { elements[i].clone() } else { "{}".to_string() };
                                 if !elem_ptr.is_null() {
-                                    // Read ParamsIncDecInfoArray length
-                                    let params_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_ParamsIncDecInfoArray");
-                                    let params_len = if !params_arr.is_null() {
-                                        let pbase = params_arr as *const u8;
-                                        std::ptr::read_unaligned::<usize>(pbase.add(0x18) as *const usize)
-                                    } else { 0 };
+                                    // Expand ParamsIncDecInfoArray: TargetType + Value (both ObscuredInt)
+                                    let params_items = if !params_class.is_null() {
+                                        let params_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_ParamsIncDecInfoArray");
+                                        if !params_arr.is_null() {
+                                            read_array_element_details(
+                                                params_arr, params_class,
+                                                &["get_TargetType", "get_Value"],
+                                                &[],
+                                            )
+                                        } else { Vec::new() }
+                                    } else { Vec::new() };
                                     // Read TeamMemberInfoArray length
                                     let member_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_TeamMemberInfoArray");
                                     let member_len = if !member_arr.is_null() {
@@ -654,7 +661,8 @@ unsafe fn read_scenario_detail() -> String {
                                     } else { 0 };
                                     // Trim trailing } and add new fields
                                     if detail.ends_with('}') { detail.pop(); }
-                                    detail.push_str(&format!(",\"params_inc_dec_len\":{},\"team_member_len\":{}}}", params_len, member_len));
+                                    detail.push_str(&format!(",\"params_inc_dec\":[{}],\"team_member_len\":{}}}",
+                                        params_items.join(","), member_len));
                                 }
                                 cmd_details.push(detail);
                             }
@@ -832,12 +840,12 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// ★ Read Training Data v3.7.6 — All via getter methods
+// ★ Read Training Data v3.7.7 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.7.6...");
+    ura_log(3, "Reading training data v3.7.7...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -1345,7 +1353,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.6").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.7").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1480,10 +1488,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.6 loaded (scenario data + export)");
+    ura_log(3, "URA plugin v3.7.7 loaded (scenario data + export)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.7.6 Loaded!").as_ptr());
+        f(to_cstr("URA v3.7.7 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
