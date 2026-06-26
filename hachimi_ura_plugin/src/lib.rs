@@ -1607,7 +1607,23 @@ unsafe fn debug_params_inc_dec() -> String {
     let scenario_obj = try_get_scenario_obj(chara_data_class, chara_obj, scenario_id);
     if scenario_obj.is_null() { return r#"{"error":"scenario_obj_null"}"#.to_string(); }
 
-    let scenario_class_name = get_scenario_class_name(scenario_id);
+    let scenario_class_name = match scenario_id {
+        1 => "WorkSingleModeScenarioURA",
+        2 => "WorkSingleModeScenarioTeamRace",
+        3 => "WorkSingleModeScenarioLive",
+        4 => "WorkSingleModeScenarioFree",
+        5 => "WorkSingleModeScenarioVenus",
+        6 => "WorkSingleModeScenarioArc",
+        7 => "WorkSingleModeScenarioSport",
+        8 => "WorkSingleModeScenarioCook",
+        9 => "WorkSingleModeScenarioMecha",
+        10 => "WorkSingleModeScenarioLegend",
+        11 => "WorkSingleModeScenarioPioneer",
+        12 => "WorkSingleModeScenarioOnsen",
+        13 => "WorkSingleModeScenarioBreeders",
+        14 => "WorkSingleModeScenarioRamen",
+        _ => return format!(r#"{{"error":"unknown_scenario","id":{}}}"#, scenario_id),
+    };
     let scenario_class = find_class_by_short_name(image, scenario_class_name);
     if scenario_class.is_null() { return format!(r#"{{"error":"scenario_class_null","name":"{}"}}"#, scenario_class_name).to_string(); }
 
