@@ -199,22 +199,21 @@ struct Il2CppFieldInfo {
     _token: u32,
 }
 
-/// Resolve an IL2CPP runtime function by symbol name
-unsafe fn resolve_il2cpp_fn<T>(name: &str) -> Option<T> {
-    if API.is_null() { return None; }
+/// Resolve an IL2CPP runtime function by symbol name, returns raw pointer
+unsafe fn resolve_il2cpp_symbol(name: &str) -> *mut c_void {
+    if API.is_null() { return ptr::null_mut(); }
     match (*API).il2cpp_resolve_symbol_fn {
         Some(resolve) => {
             let cname = to_cstr(name);
             let ptr = resolve(cname.as_ptr());
             if ptr.is_null() {
-                ura_log(2, &format!("resolve_il2cpp_fn: {} not found", name));
-                None
+                ura_log(2, &format!("resolve_il2cpp: {} not found", name));
             } else {
-                ura_log(3, &format!("resolve_il2cpp_fn: {} OK", name));
-                Some(std::mem::transmute::<*mut c_void, T>(ptr))
+                ura_log(3, &format!("resolve_il2cpp: {} OK", name));
             }
+            ptr as *mut c_void
         }
-        None => None,
+        None => ptr::null_mut(),
     }
 }
 
@@ -234,8 +233,14 @@ unsafe fn call_getter_on_instance(
         return ptr::null_mut();
     }
 
-    let get_method_fn: Option<FnClassGetMethodFromName> = resolve_il2cpp_fn("il2cpp_class_get_method_from_name");
-    let invoke_fn: Option<FnRuntimeInvoke> = resolve_il2cpp_fn("il2cpp_runtime_invoke");
+    let get_method_fn: Option<FnClassGetMethodFromName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
+    };
+    let invoke_fn: Option<FnRuntimeInvoke> = {
+        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p)) }
+    };
 
     if get_method_fn.is_none() {
         ura_log(1, "call_getter: il2cpp_class_get_method_from_name unavailable");
@@ -542,9 +547,18 @@ unsafe fn read_training_data() -> String {
 unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
     if class.is_null() || API.is_null() { return r#"{"error":"null_class"}"#.to_string(); }
 
-    let get_fields_fn: Option<FnClassGetFields> = resolve_il2cpp_fn("il2cpp_class_get_fields");
-    let get_parent_fn: Option<FnClassGetParent> = resolve_il2cpp_fn("il2cpp_class_get_parent");
-    let get_class_name_fn: Option<FnClassGetName> = resolve_il2cpp_fn("il2cpp_class_get_name");
+    let get_fields_fn: Option<FnClassGetFields> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_fields");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetFields>(p)) }
+    };
+    let get_parent_fn: Option<FnClassGetParent> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(p)) }
+    };
+    let get_class_name_fn: Option<FnClassGetName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetName>(p)) }
+    };
 
     if get_fields_fn.is_none() {
         return r#"{"error":"no_il2cpp_class_get_fields"}"#.to_string();
@@ -599,10 +613,22 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
 unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
     if class.is_null() || API.is_null() { return r#"{"error":"null_class"}"#.to_string(); }
 
-    let get_methods_fn: Option<FnClassGetMethods> = resolve_il2cpp_fn("il2cpp_class_get_methods");
-    let get_method_name_fn: Option<FnMethodGetName> = resolve_il2cpp_fn("il2cpp_method_get_name");
-    let get_parent_fn: Option<FnClassGetParent> = resolve_il2cpp_fn("il2cpp_class_get_parent");
-    let get_class_name_fn: Option<FnClassGetName> = resolve_il2cpp_fn("il2cpp_class_get_name");
+    let get_methods_fn: Option<FnClassGetMethods> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethods>(p)) }
+    };
+    let get_method_name_fn: Option<FnMethodGetName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnMethodGetName>(p)) }
+    };
+    let get_parent_fn: Option<FnClassGetParent> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(p)) }
+    };
+    let get_class_name_fn: Option<FnClassGetName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetName>(p)) }
+    };
 
     if get_methods_fn.is_none() {
         return r#"{"error":"no_il2cpp_class_get_methods"}"#.to_string();
