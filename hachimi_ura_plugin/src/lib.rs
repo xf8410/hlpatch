@@ -1,11 +1,10 @@
-//! URA Plugin v3.5.0
-//! - BREAKTHROUGH: Try singleton on ALL classes, not just GameSystem!
-//! - GameSystem has NO get_WorkSingleModeData method
-//! - WorkSingleModeData has get_Character, get_HomeInfoData etc.
-//! - Need to find WHO holds WorkSingleModeData instance
-//! - New /singletons endpoint: scan all known classes for singletons
-//! - /methods now shows ALL methods (no filter)
-//! - /data tries multiple singleton paths
+//! URA Plugin v3.6.0
+//! ★ BREAKTHROUGH: WorkDataManager holds WorkSingleModeData!
+//! Data path: WorkDataManager (Singleton) -> get_SingleMode() -> WorkSingleModeData
+//!            WorkSingleModeData -> get_Character() -> WorkSingleModeCharaData
+//!            WorkSingleModeData -> get_HomeInfoData() -> HomeInfo
+//!            WorkSingleModeData -> get_Month(), get_Half(), get_PlayingState()
+//! Found via dump.cs analysis (line 117564)
 
 #![allow(dead_code)]
 
@@ -47,6 +46,7 @@ struct CharaCache {
     speed: i32, stamina: i32, power: i32, guts: i32, wiz: i32,
     vital: i32, max_vital: i32, motivation: i32, turn: i32,
     skill_point: i32, scenario_id: i32, playing_state: i32,
+    month: i32, half: i32,
     valid: bool,
 }
 
@@ -54,6 +54,7 @@ static mut CHARA: CharaCache = CharaCache {
     speed: 0, stamina: 0, power: 0, wiz: 0, guts: 0,
     vital: 0, max_vital: 0, motivation: 0, turn: 0,
     skill_point: 0, scenario_id: 0, playing_state: 0,
+    month: 0, half: 0,
     valid: false,
 };
 
@@ -242,7 +243,7 @@ unsafe fn call_getter_on_instance(
     let method_name_c = to_cstr(method_name);
     let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
     if method_info.is_null() {
-        ura_log(4, &format!("call_getter: '{}' not found", method_name));
+        ura_log(4, &format!("call_getter: '{}' not found on class", method_name));
         return ptr::null_mut();
     }
 
@@ -268,15 +269,13 @@ unsafe fn call_getter_on_instance(
     result
 }
 
-// Call a method with 1 argument (int) via il2cpp_runtime_invoke
-unsafe fn call_method_int_arg(
+// Call getter that returns i32 (value type, not pointer)
+unsafe fn call_getter_int(
     class: *mut c_void,
     instance: *const c_void,
     method_name: &str,
-    arg_count: i32,
-    arg: i32,
-) -> *mut c_void {
-    if class.is_null() || instance.is_null() { return ptr::null_mut(); }
+) -> i32 {
+    if class.is_null() || instance.is_null() { return 0; }
 
     let get_method_fn: Option<FnClassGetMethodFromName> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
@@ -287,34 +286,39 @@ unsafe fn call_method_int_arg(
         if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p)) }
     };
 
-    if get_method_fn.is_none() || invoke_fn.is_none() { return ptr::null_mut(); }
+    if get_method_fn.is_none() || invoke_fn.is_none() { return 0; }
 
     let method_name_c = to_cstr(method_name);
-    let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), arg_count);
-    if method_info.is_null() { return ptr::null_mut(); }
-
-    // Box the int arg so it has a stable address
-    let arg_boxed = Box::new(arg);
-    let arg_ptr = Box::into_raw(arg_boxed) as *mut c_void;
-    let mut args: [*mut c_void; 1] = [arg_ptr];
+    let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
+    if method_info.is_null() { return 0; }
 
     let mut exc: *mut c_void = ptr::null_mut();
     let result = invoke_fn.unwrap()(
         method_info,
         instance as *mut c_void,
-        args.as_mut_ptr(),
+        ptr::null_mut(),
         &mut exc,
     );
 
-    // Free the boxed arg
-    let _ = Box::from_raw(arg_ptr as *mut i32);
+    if !exc.is_null() { return 0; }
 
-    if !exc.is_null() {
-        ura_log(1, &format!("call_method: '{}' threw exception", method_name));
-        return ptr::null_mut();
-    }
+    // For value types (int/bool/enum), il2cpp_runtime_invoke boxes the return value
+    // The result is a pointer to a boxed int, so we need to dereference
+    if result.is_null() { return 0; }
 
-    result
+    // The boxed value starts after the Il2CppObject header (16 bytes on 64-bit)
+    let val_ptr = result as *const u8;
+    let int_val = std::ptr::read_unaligned::<i32>(val_ptr.add(16) as *const i32);
+    int_val
+}
+
+// Call getter that returns bool
+unsafe fn call_getter_bool(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> bool {
+    call_getter_int(class, instance, method_name) != 0
 }
 
 // ============================================================
@@ -322,43 +326,29 @@ unsafe fn call_method_int_arg(
 // ============================================================
 
 const KNOWN_CLASSES: &[(&str, &str)] = &[
-    ("Gallop", "GameSystem"),
-    ("Gallop", "WorkSingleModeCharaData"),
-    ("Gallop", "WorkSingleModeHomeInfo"),
-    ("Gallop", "WorkSingleModeData"),
+    // ★ Core data path
+    ("Gallop", "WorkDataManager"),         // ★ Singleton that holds WorkSingleModeData!
+    ("Gallop", "WorkSingleModeData"),       // Has get_Character, get_HomeInfoData, get_Month, etc.
+    ("Gallop", "WorkSingleModeCharaData"),  // Has speed/stamina/power/guts/wiz/vital/motivation/turn
+    ("Gallop", "WorkSingleModeHomeInfo"),   // Training commands
+    // Other Work* data classes
     ("Gallop", "WorkSingleModeScenarioBreeders"),
     ("Gallop", "WorkSingleModeScenarioLegend"),
     ("Gallop", "WorkSingleModeScenarioMecha"),
     ("Gallop", "WorkSingleModeScenarioOnsen"),
     ("Gallop", "WorkSingleModeScenarioPioneer"),
     ("Gallop", "WorkSingleModeScenarioRamen"),
+    // System classes
+    ("Gallop", "GameSystem"),
+    // Scene classes
     ("Gallop", "HomeScene"),
     ("Gallop", "SingleModeScene"),
     ("Gallop", "RaceScene"),
     ("Gallop", "SingleModeSceneController"),
-    // New candidates to try
-    ("Gallop", "SingleModeDirector"),
-    ("Gallop", "SingleModeManager"),
-    ("Gallop", "SingleModePlayingState"),
-    ("Gallop", "SingleModeSceneControllerBase"),
-    ("Gallop", "SceneControllerBase"),
-    ("Gallop", "WorkSingleMode"),
-    ("Gallop", "SingleModeChara"),
-    ("Gallop", "SingleModeData"),
-    ("Gallop", "GallopManager"),
-    ("Gallop", "GameManager"),
-    ("Gallop", "AppManager"),
-    ("Gallop", "SceneManager"),
-    ("Gallop", "ScreenManager"),
-    ("Gallop", "SystemManager"),
-    ("Gallop", "FunctionalManager"),
-    ("Gallop", "RuntimeObjectManager"),
-    ("", "SingleModeDirector"),
-    ("", "SingleModeManager"),
 ];
 
 // ============================================================
-// Scan Classes (expanded)
+// Scan Classes
 // ============================================================
 
 unsafe fn scan_il2cpp_classes() -> String {
@@ -421,261 +411,180 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// Read Training Data - v3.5.0 with multi-strategy
+// ★ Read Training Data v3.6.0 — via WorkDataManager
 // ============================================================
 
 unsafe fn read_training_data() -> String {
-    if API.is_null() { return r#"{"game_system_ok":false,"chara":null,"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.5.0...");
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    ura_log(3, "Reading training data v3.6.0...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
-        _ => return r#"{"game_system_ok":false,"chara":null,"error":"image_null"}"#.to_string(),
+        _ => return r#"{"error":"image_null"}"#.to_string(),
     };
 
     // Resolve key classes
-    let gs_class = find_class(image, "Gallop", "GameSystem");
+    let wdm_class = find_class(image, "Gallop", "WorkDataManager");
     let sm_data_class = find_class(image, "Gallop", "WorkSingleModeData");
     let chara_data_class = find_class(image, "Gallop", "WorkSingleModeCharaData");
-    let home_info_class = find_class(image, "Gallop", "HomeScene");
-    let sm_scene_ctrl_class = find_class(image, "Gallop", "SingleModeSceneController");
-    let sm_scene_class = find_class(image, "Gallop", "SingleModeScene");
+    let home_info_class = find_class(image, "Gallop", "WorkSingleModeHomeInfo");
 
-    let mut chara_obj: *mut c_void = ptr::null_mut();
-    let mut chara_via = String::new();
-    let mut strategies_tried: Vec<String> = Vec::new();
+    ura_log(3, &format!("Classes: WDM={} SMD={} Chara={} Home={}",
+        if wdm_class.is_null() { "null" } else { "ok" },
+        if sm_data_class.is_null() { "null" } else { "ok" },
+        if chara_data_class.is_null() { "null" } else { "ok" },
+        if home_info_class.is_null() { "null" } else { "ok" },
+    ));
 
-    // ===== Strategy 1: Try singleton on WorkSingleModeData directly =====
-    if !sm_data_class.is_null() {
-        strategies_tried.push("singleton_on_WorkSingleModeData".to_string());
-        let inst = get_singleton(sm_data_class);
-        if !inst.is_null() {
-            ura_log(3, "WorkSingleModeData IS a singleton!");
-            let chara_result = call_getter_on_instance(sm_data_class, inst, "get_Character");
-            if !chara_result.is_null() {
-                chara_obj = chara_result as *mut c_void;
-                chara_via = "WorkSingleModeData.singleton->get_Character".to_string();
-            }
-        } else {
-            ura_log(3, "WorkSingleModeData is NOT a singleton");
+    // ===== Step 1: Get WorkDataManager singleton =====
+    if wdm_class.is_null() {
+        return r#"{"error":"WorkDataManager_class_not_found"}"#.to_string();
+    }
+    let wdm_instance = get_singleton(wdm_class);
+    if wdm_instance.is_null() {
+        return r#"{"error":"WorkDataManager_no_singleton","hint":"start_a_training_run"}"#.to_string();
+    }
+    ura_log(3, &format!("WorkDataManager singleton: {:p}", wdm_instance));
+
+    // ===== Step 2: Call get_SingleMode() on WorkDataManager =====
+    let sm_data_obj = call_getter_on_instance(wdm_class, wdm_instance, "get_SingleMode");
+    if sm_data_obj.is_null() {
+        // Maybe the method is on the parent class (Singleton`1)
+        // Try il2cpp_class_get_method_from_name which should search parent classes
+        ura_log(2, "get_SingleMode returned null, trying field read...");
+
+        // Fallback: read the <SingleMode>k__BackingField at offset 0x58
+        // WorkDataManager inherits from Singleton`1 which has _instance at offset 8
+        // But the singleton instance IS the WorkDataManager, so fields are on it
+        let field_obj = read_field_ptr(wdm_instance, wdm_class, "<SingleMode>k__BackingField");
+        if field_obj.is_null() {
+            return r#"{"error":"SingleMode_null","step":"get_SingleMode"}"#.to_string();
         }
+        // Use the field-read result
+        let _ = sm_data_obj; // suppress warning
+        let sm_data_ref = field_obj;
+        return process_single_mode_data(sm_data_ref, sm_data_class, chara_data_class, home_info_class);
     }
 
-    // ===== Strategy 2: Try singleton on SingleModeSceneController =====
-    if chara_obj.is_null() && !sm_scene_ctrl_class.is_null() {
-        strategies_tried.push("singleton_on_SingleModeSceneController".to_string());
-        let ctrl_inst = get_singleton(sm_scene_ctrl_class);
-        if !ctrl_inst.is_null() {
-            ura_log(3, "SingleModeSceneController IS a singleton!");
-            // Try various getters on the controller
-            let ctrl_getters: &[&str] = &[
-                "get_WorkSingleModeData",
-                "get_SingleModeData",
-                "get_Data",
-                "get_WorkSingleMode",
-            ];
-            for getter in ctrl_getters {
-                let result = call_getter_on_instance(sm_scene_ctrl_class, ctrl_inst, getter);
-                if !result.is_null() {
-                    ura_log(3, &format!("Controller.{}() returned data!", getter));
-                    // Now get Character from WorkSingleModeData
-                    if !sm_data_class.is_null() {
-                        let chara_result = call_getter_on_instance(sm_data_class, result, "get_Character");
-                        if !chara_result.is_null() {
-                            chara_obj = chara_result as *mut c_void;
-                            chara_via = format!("SceneCtrl.singleton->{}->get_Character", getter);
-                            break;
-                        }
-                    }
-                    // Maybe the result IS the chara data directly
-                    if !chara_data_class.is_null() {
-                        chara_obj = result as *mut c_void;
-                        chara_via = format!("SceneCtrl.singleton->{}", getter);
-                        break;
-                    }
-                }
-            }
-            // Also try reading _scene field then get data from scene
-            if chara_obj.is_null() {
-                let scene_obj = read_field_ptr_auto(ctrl_inst, sm_scene_ctrl_class, "scene");
-                if !scene_obj.is_null() && !sm_scene_class.is_null() {
-                    ura_log(3, "Got _scene from controller, trying methods...");
-                    let scene_getters: &[&str] = &[
-                        "get_WorkSingleModeData",
-                        "get_SingleModeData",
-                        "get_Data",
-                    ];
-                    for getter in scene_getters {
-                        let result = call_getter_on_instance(sm_scene_class, scene_obj, getter);
-                        if !result.is_null() {
-                            if !sm_data_class.is_null() {
-                                let chara_result = call_getter_on_instance(sm_data_class, result, "get_Character");
-                                if !chara_result.is_null() {
-                                    chara_obj = chara_result as *mut c_void;
-                                    chara_via = format!("SceneCtrl._scene->{}->get_Character", getter);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            ura_log(3, "SingleModeSceneController is NOT a singleton");
-        }
-    }
+    process_single_mode_data(sm_data_obj, sm_data_class, chara_data_class, home_info_class)
+}
 
-    // ===== Strategy 3: Scan ALL known classes for singletons, try getters on each =====
+unsafe fn process_single_mode_data(
+    sm_data_obj: *const c_void,
+    sm_data_class: *mut c_void,
+    chara_data_class: *mut c_void,
+    home_info_class: *mut c_void,
+) -> String {
+    ura_log(3, &format!("WorkSingleModeData: {:p}", sm_data_obj));
+
+    // ===== Step 3: Read metadata from WorkSingleModeData =====
+    let month = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Month") } else { 0 };
+    let half = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Half") } else { 0 };
+    let playing_state = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_PlayingState") } else { 0 };
+    let is_playing = if !sm_data_class.is_null() { call_getter_bool(sm_data_class, sm_data_obj, "get_IsPlaying") } else { false };
+
+    ura_log(3, &format!("SM Data: month={} half={} playingState={} isPlaying={}", month, half, playing_state, is_playing));
+
+    // ===== Step 4: Call get_Character() to get WorkSingleModeCharaData =====
+    if sm_data_class.is_null() {
+        return format!(r#"{{"error":"WorkSingleModeData_class_null","month":{},"half":{}}}"#, month, half);
+    }
+    let chara_obj = call_getter_on_instance(sm_data_class, sm_data_obj, "get_Character");
     if chara_obj.is_null() {
-        strategies_tried.push("scan_all_singletons".to_string());
-        for (ns, cls) in KNOWN_CLASSES {
-            let class = find_class(image, ns, cls);
-            if class.is_null() { continue; }
-            let inst = get_singleton(class);
-            if inst.is_null() { continue; }
+        // Fallback: try reading <Character>k__BackingField at offset 88
+        let chara_field = read_field_ptr(sm_data_obj, sm_data_class, "<Character>k__BackingField");
+        if chara_field.is_null() {
+            return format!(
+                r#"{{"error":"Character_null","month":{},"half":{},"playingState":{},"isPlaying":{}}}"#,
+                month, half, playing_state, is_playing
+            );
+        }
+        return read_chara_data(chara_field, chara_data_class, month, half, playing_state, is_playing);
+    }
 
-            let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
-            ura_log(3, &format!("Found singleton: {}", full_name));
+    read_chara_data(chara_obj, chara_data_class, month, half, playing_state, is_playing)
+}
 
-            // Skip GameSystem (already tried) and WorkSingleModeData (already tried)
-            if full_name.contains("GameSystem") || full_name.contains("WorkSingleModeData") {
-                continue;
-            }
+unsafe fn read_chara_data(
+    chara_obj: *const c_void,
+    chara_data_class: *mut c_void,
+    month: i32,
+    half: i32,
+    playing_state: i32,
+    is_playing: bool,
+) -> String {
+    if chara_data_class.is_null() {
+        return r#"{"error":"WorkSingleModeCharaData_class_null"}"#.to_string();
+    }
 
-            // Try calling get_WorkSingleModeData on this singleton
-            let data_getters: &[&str] = &[
-                "get_WorkSingleModeData",
-                "get_WorkSingleModeCharaData",
-                "get_SingleModeData",
-                "get_WorkSingleMode",
-            ];
-            for getter in data_getters {
-                let result = call_getter_on_instance(class, inst, getter);
-                if !result.is_null() {
-                    ura_log(3, &format!("{}.{}() returned data!", full_name, getter));
-                    // Try to get Character from the result
-                    if !sm_data_class.is_null() {
-                        let chara_result = call_getter_on_instance(sm_data_class, result, "get_Character");
-                        if !chara_result.is_null() {
-                            chara_obj = chara_result as *mut c_void;
-                            chara_via = format!("{}->{}->get_Character", full_name, getter);
-                            break;
-                        }
-                    }
-                    // Maybe result IS chara data
-                    chara_obj = result as *mut c_void;
-                    chara_via = format!("{}->{}", full_name, getter);
-                    break;
-                }
-            }
-            if !chara_obj.is_null() { break; }
+    ura_log(3, &format!("WorkSingleModeCharaData: {:p}", chara_obj));
+
+    // ===== Step 5: Read fields from WorkSingleModeCharaData =====
+    let int_fields: &[(&str, &str)] = &[
+        ("speed", "speed"),
+        ("stamina", "stamina"),
+        ("power", "power"),
+        ("wiz", "wiz"),
+        ("guts", "guts"),
+        ("vital", "vital"),
+        ("max_vital", "maxVital"),
+        ("motivation", "motivation"),
+        ("turn", "turn"),
+        ("skill_point", "skillPoint"),
+        ("scenario_id", "scenarioId"),
+        ("playing_state", "playingState"),
+    ];
+
+    let mut chara_json_parts: Vec<String> = Vec::new();
+    let mut cache = CharaCache {
+        speed: 0, stamina: 0, power: 0, wiz: 0, guts: 0,
+        vital: 0, max_vital: 0, motivation: 0, turn: 0,
+        skill_point: 0, scenario_id: 0, playing_state: 0,
+        month: month, half: half,
+        valid: false,
+    };
+
+    for (json_key, il_name) in int_fields {
+        let val = read_field_int_auto(chara_obj as *const c_void, chara_data_class, il_name);
+        chara_json_parts.push(format!(r#""{}":{}"#, json_key, val));
+        match *json_key {
+            "speed" => cache.speed = val,
+            "stamina" => cache.stamina = val,
+            "power" => cache.power = val,
+            "wiz" => cache.wiz = val,
+            "guts" => cache.guts = val,
+            "vital" => cache.vital = val,
+            "max_vital" => cache.max_vital = val,
+            "motivation" => cache.motivation = val,
+            "turn" => cache.turn = val,
+            "skill_point" => cache.skill_point = val,
+            "scenario_id" => cache.scenario_id = val,
+            "playing_state" => cache.playing_state = val,
+            _ => {}
         }
     }
 
-    // ===== Strategy 4: Read GameSystem manager pointers =====
-    if chara_obj.is_null() && !gs_class.is_null() {
-        let gs_inst = get_singleton(gs_class);
-        if !gs_inst.is_null() {
-            strategies_tried.push("gs_manager_pointers".to_string());
-            // Read _runtimeObjectManager at offset 72
-            let mgr = read_field_ptr(gs_inst, gs_class, "_runtimeObjectManager");
-            if !mgr.is_null() {
-                ura_log(3, &format!("Got _runtimeObjectManager at {:p}", mgr));
-                // Try to read WorkSingleModeData from it (blind pointer chase)
-                // The RuntimeObjectManager might have a field pointing to SingleMode data
-                // We can try reading pointer at various offsets
-                // But this is risky - let's just report it for now
-                strategies_tried.push(format!("runtimeObjectManager={:p}", mgr));
-            }
-            // Read _functionalManagerRoot at offset 40
-            let fmr = read_field_ptr(gs_inst, gs_class, "_functionalManagerRoot");
-            if !fmr.is_null() {
-                strategies_tried.push(format!("functionalManagerRoot={:p}", fmr));
-            }
-        }
-    }
+    let any_nonzero = cache.speed > 0 || cache.stamina > 0 || cache.power > 0
+        || cache.wiz > 0 || cache.guts > 0 || cache.turn > 0;
 
-    // ===== Read fields from chara data object =====
-    if !chara_obj.is_null() {
-        let ref_class = if !chara_data_class.is_null() { chara_data_class } else { gs_class };
+    cache.valid = any_nonzero;
+    CHARA = cache;
 
-        let int_fields: &[(&str, &str)] = &[
-            ("speed", "speed"),
-            ("stamina", "stamina"),
-            ("power", "power"),
-            ("wiz", "wiz"),
-            ("guts", "guts"),
-            ("vital", "vital"),
-            ("max_vital", "maxVital"),
-            ("motivation", "motivation"),
-            ("turn", "turn"),
-            ("skill_point", "skillPoint"),
-            ("scenario_id", "scenarioId"),
-            ("playing_state", "playingState"),
-        ];
-
-        let mut chara_json_parts: Vec<String> = Vec::new();
-        let mut cache = CharaCache {
-            speed: 0, stamina: 0, power: 0, wiz: 0, guts: 0,
-            vital: 0, max_vital: 0, motivation: 0, turn: 0,
-            skill_point: 0, scenario_id: 0, playing_state: 0,
-            valid: false,
-        };
-
-        for (json_key, il_name) in int_fields {
-            let val = read_field_int_auto(chara_obj as *const c_void, ref_class, il_name);
-            chara_json_parts.push(format!(r#""{}":{}"#, json_key, val));
-            match *json_key {
-                "speed" => cache.speed = val,
-                "stamina" => cache.stamina = val,
-                "power" => cache.power = val,
-                "wiz" => cache.wiz = val,
-                "guts" => cache.guts = val,
-                "vital" => cache.vital = val,
-                "max_vital" => cache.max_vital = val,
-                "motivation" => cache.motivation = val,
-                "turn" => cache.turn = val,
-                "skill_point" => cache.skill_point = val,
-                "scenario_id" => cache.scenario_id = val,
-                "playing_state" => cache.playing_state = val,
-                _ => {}
-            }
-        }
-
-        let any_nonzero = cache.speed > 0 || cache.stamina > 0 || cache.power > 0
-            || cache.wiz > 0 || cache.guts > 0 || cache.turn > 0;
-
-        cache.valid = any_nonzero;
-        CHARA = cache;
-
-        if any_nonzero {
-            ura_log(3, &format!("Chara OK: SPD={} STA={} POW={} WIZ={} GUT={} VIT={}/{} MOT={} TURN={}",
-                cache.speed, cache.stamina, cache.power, cache.wiz, cache.guts,
-                cache.vital, cache.max_vital, cache.motivation, cache.turn));
-            format!(
-                r#"{{"game_system_ok":true,"chara":{{{}}},"found_via":"{}","strategies":["{}"],"chara_class":{},"error":null}}"#,
-                chara_json_parts.join(","),
-                chara_via,
-                strategies_tried.join("\",\""),
-                if !chara_data_class.is_null() { "true" } else { "false" },
-            )
-        } else {
-            ura_log(2, &format!("Got chara obj via {} but all fields zero", chara_via));
-            format!(
-                r#"{{"game_system_ok":true,"chara":{{{}}},"found_via":"{}","warning":"all_fields_zero","strategies":["{}"],"error":null}}"#,
-                chara_json_parts.join(","),
-                chara_via,
-                strategies_tried.join("\",\""),
-            )
-        }
-    } else {
-        // Nothing found - report strategies tried
+    if any_nonzero {
+        ura_log(3, &format!("★ DATA OK: SPD={} STA={} POW={} WIZ={} GUT={} VIT={}/{} MOT={} TURN={} Month={}/{}",
+            cache.speed, cache.stamina, cache.power, cache.wiz, cache.guts,
+            cache.vital, cache.max_vital, cache.motivation, cache.turn, cache.month, cache.half));
         format!(
-            r#"{{"game_system_ok":true,"chara":null,"strategies_tried":["{}"],"chara_class":{},"sm_data_class":{},"home_info_class":{},"error":"no_chara_ref"}}"#,
-            strategies_tried.join("\",\""),
-            if !chara_data_class.is_null() { "true" } else { "false" },
-            if !sm_data_class.is_null() { "true" } else { "false" },
-            if !home_info_class.is_null() { "true" } else { "false" },
+            r#"{{"ok":true,"chara":{{{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},"via":"WorkDataManager->get_SingleMode->get_Character"}}"#,
+            chara_json_parts.join(","),
+            month, half, playing_state, is_playing
+        )
+    } else {
+        ura_log(2, &format!("Got chara obj but all fields zero (month={} half={})", month, half));
+        format!(
+            r#"{{"ok":false,"chara":{{{}}},"month":{},"half":{},"warning":"all_fields_zero","via":"WorkDataManager->get_SingleMode->get_Character"}}"#,
+            chara_json_parts.join(","),
+            month, half
         )
     }
 }
@@ -747,7 +656,7 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
 }
 
 // ============================================================
-// Enumerate methods on a class - v3.5.0: NO FILTER, show all
+// Enumerate methods on a class
 // ============================================================
 
 unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
@@ -805,7 +714,6 @@ unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
                 } else { String::from("?") }
             } else { String::from("?") };
 
-            // v3.5.0: NO FILTER - show ALL methods
             all_methods.push(format!(r#"{{"name":"{}","class":"{}"}}"#, method_name, class_name));
         }
 
@@ -852,15 +760,13 @@ unsafe fn find_method_in_all_classes(method_name: &str) -> String {
 
         let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
 
-        // Try with 0 args (getter)
         let method = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
         if !method.is_null() {
             found.push(format!(r#"{{"class":"{}","args":0}}"#, full_name));
         }
 
-        // Try with 1 arg
         let method1 = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 1);
-        if !method1.is_null() && !method.is_null() == false {
+        if !method1.is_null() && method.is_null() {
             found.push(format!(r#"{{"class":"{}","args":1}}"#, full_name));
         }
     }
@@ -925,7 +831,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.5.0","endpoints":["/scan","/data","/status","/health","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName"]}"#.to_string()
+        r#"{"status":"ok","version":"3.6.0","data_path":"WorkDataManager->get_SingleMode->get_Character","endpoints":["/scan","/data","/status","/health","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -938,16 +844,16 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { find_all_singletons() }
     } else if path.starts_with("/find_method") {
         let method_name = if path == "/find_method" || path == "/find_method/" {
-            "get_WorkSingleModeData"
+            "get_SingleMode"
         } else {
-            path.strip_prefix("/find_method/").unwrap_or("get_WorkSingleModeData")
+            path.strip_prefix("/find_method/").unwrap_or("get_SingleMode")
         };
         unsafe { find_method_in_all_classes(method_name) }
     } else if path.starts_with("/fields") {
         let class_name = if path == "/fields" || path == "/fields/" {
-            "GameSystem"
+            "WorkDataManager"
         } else {
-            path.strip_prefix("/fields/").unwrap_or("GameSystem")
+            path.strip_prefix("/fields/").unwrap_or("WorkDataManager")
         };
         unsafe {
             let image = get_image();
@@ -964,9 +870,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else if path.starts_with("/methods") {
         let class_name = if path == "/methods" || path == "/methods/" {
-            "GameSystem"
+            "WorkDataManager"
         } else {
-            path.strip_prefix("/methods/").unwrap_or("GameSystem")
+            path.strip_prefix("/methods/").unwrap_or("WorkDataManager")
         };
         unsafe {
             let image = get_image();
@@ -1015,7 +921,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.5.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.6.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1035,9 +941,17 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
             }
         }
 
+        if let Some(f) = api.gui_ui_label_fn {
+            f(ui, to_cstr("Data: WDM->SingleMode->Chara").as_ptr());
+        }
+
         let c = CHARA;
         if c.valid {
             if let Some(f) = api.gui_ui_separator_fn { f(ui); }
+
+            if let Some(f) = api.gui_ui_colored_label_fn {
+                f(ui, 0, 200, 255, 255, to_cstr(&format!("Turn {} | Month {} | Half {}", c.turn, c.month, c.half)).as_ptr());
+            }
 
             if let Some(f) = api.gui_ui_colored_label_fn {
                 f(ui, 255, 100, 100, 255, to_cstr(&format!("SPD: {}", c.speed)).as_ptr());
@@ -1079,16 +993,20 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
             }
 
             if let Some(f) = api.gui_ui_label_fn {
-                f(ui, to_cstr(&format!("Turn: {}  SkillPt: {}", c.turn, c.skill_point)).as_ptr());
+                f(ui, to_cstr(&format!("SkillPt: {}", c.skill_point)).as_ptr());
+            }
+        } else {
+            if let Some(f) = api.gui_ui_label_fn {
+                f(ui, to_cstr("No training data yet").as_ptr());
+            }
+            if let Some(f) = api.gui_ui_label_fn {
+                f(ui, to_cstr("Start a training run first").as_ptr());
             }
         }
 
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
         if let Some(f) = api.gui_ui_label_fn {
-            f(ui, to_cstr("127.0.0.1:18765/singletons").as_ptr());
-        }
-        if let Some(f) = api.gui_ui_label_fn {
-            f(ui, to_cstr("127.0.0.1:18765/find_method/get_WorkSingleModeData").as_ptr());
+            f(ui, to_cstr("127.0.0.1:18765/data").as_ptr());
         }
     }
 }
@@ -1138,10 +1056,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.5.0 loaded");
+    ura_log(3, "URA plugin v3.6.0 loaded");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.5.0 Loaded!").as_ptr());
+        f(to_cstr("URA v3.6.0 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
