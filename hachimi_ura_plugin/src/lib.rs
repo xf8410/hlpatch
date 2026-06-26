@@ -1,5 +1,5 @@
-//! URA Plugin v3.7.4
-//! ★ v3.7.4: Scenario-specific data (Breeders/Ramen) + /scenario endpoint + /export to file
+//! URA Plugin v3.7.5
+//! ★ v3.7.5: Scenario-specific data (Breeders/Ramen) + /scenario endpoint + /export to file
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
 //! which return plain Int32 after decryption
@@ -520,7 +520,7 @@ unsafe fn read_scenario_detail() -> String {
             if !dataset_class.is_null() {
                 result_parts.push(format!(r#""dataset_class":"{}""#, dataset_class_name));
 
-                // ★ Read int-type DataSet getters (try int first, fall back to ObscuredInt)
+                // ★ Read int-type DataSet getters (CY uses ObscuredInt for everything)
                 let int_getters = [
                     "get_TeamRank", "get_HavingEnhancePoint", "get_PredictEnhancePoint",
                     "get_BcRaceTrackId", "get_DeckId", "get_TeamSpLevelLimit",
@@ -528,16 +528,10 @@ unsafe fn read_scenario_detail() -> String {
                 ];
                 let mut ds_ints = Vec::new();
                 for getter in &int_getters {
-                    // Try plain int first
-                    let val = call_getter_int(dataset_class, dataset_obj, getter);
+                    // DataSet getters return ObscuredInt - must use obscured_int decoder
+                    let val = call_getter_obscured_int(dataset_class, dataset_obj, getter);
                     if val >= 0 {
                         ds_ints.push(format!(r#""{}":{}"#, getter, val));
-                    } else {
-                        // Try ObscuredInt
-                        let oval = call_getter_obscured_int(dataset_class, dataset_obj, getter);
-                        if oval >= 0 {
-                            ds_ints.push(format!(r#""{}":{}"#, getter, oval));
-                        }
                     }
                 }
                 if !ds_ints.is_empty() {
@@ -732,12 +726,12 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// ★ Read Training Data v3.7.4 — All via getter methods
+// ★ Read Training Data v3.7.5 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.7.4...");
+    ura_log(3, "Reading training data v3.7.5...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -1146,7 +1140,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.7.4","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.7.5","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1245,7 +1239,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.4").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.5").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1380,10 +1374,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.4 loaded (scenario data + export)");
+    ura_log(3, "URA plugin v3.7.5 loaded (scenario data + export)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.7.4 Loaded!").as_ptr());
+        f(to_cstr("URA v3.7.5 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
