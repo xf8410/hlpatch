@@ -1,4 +1,4 @@
-//! URA Plugin v3.7.0
+//! URA Plugin v3.7.1
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
 //! which return plain Int32 after decryption
@@ -318,19 +318,22 @@ unsafe fn call_getter_obscured_int(
     let result = call_getter_on_instance(class, instance, method_name);
     if result.is_null() { return -1; }
 
-    // Boxed ObscuredInt struct starts at offset 0x10 (after Il2CppObject header)
+    // Boxed ObscuredInt struct layout (from dump.cs Anti-Cheat Toolkit):
+    // offset 0x10: currentCryptoKey (Int32) — the decryption key
+    // offset 0x14: hiddenValue (Int32) — the encrypted value
+    // offset 0x18: inited (Boolean)
+    // offset 0x1C: fakeValue (Int32)
+    // offset 0x20: fakeValueActive (Boolean)
     let base = result as *const u8;
 
-    // ObscuredInt fields (offsets relative to boxed data start = +0x10 from object start)
-    // These are the ACTUAL memory layout of ObscuredInt in Anti-Cheat Toolkit
-    let current_value = std::ptr::read_unaligned::<i32>(base.add(0x10) as *const i32);
-    let crypto_key = std::ptr::read_unaligned::<u8>(base.add(0x1C) as *const u8);
+    let current_crypto_key = std::ptr::read_unaligned::<i32>(base.add(0x10) as *const i32);
+    let hidden_value = std::ptr::read_unaligned::<i32>(base.add(0x14) as *const i32);
 
-    // Decrypt: result = currentValue ^ cryptoKey
-    let decrypted = current_value ^ (crypto_key as i32);
+    // Decrypt: hiddenValue ^ currentCryptoKey
+    let decrypted = hidden_value ^ current_crypto_key;
 
-    ura_log(4, &format!("ObscuredInt {}: current={} key={} decrypted={}", 
-        method_name, current_value, crypto_key, decrypted));
+    ura_log(4, &format!("ObscuredInt {}: hidden={} key={} decrypted={}", 
+        method_name, hidden_value, current_crypto_key, decrypted));
 
     decrypted
 }
@@ -421,12 +424,12 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// ★ Read Training Data v3.7.0 — All via getter methods
+// ★ Read Training Data v3.7.1 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.7.0...");
+    ura_log(3, "Reading training data v3.7.1...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -909,7 +912,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.1").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1044,10 +1047,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.0 loaded (ObscuredInt getter fix)");
+    ura_log(3, "URA plugin v3.7.1 loaded (ObscuredInt getter fix)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.7.0 Loaded!").as_ptr());
+        f(to_cstr("URA v3.7.1 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
