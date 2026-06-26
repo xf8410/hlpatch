@@ -1,10 +1,11 @@
-//! URA Plugin v3.4.4
-//! - BREAKTHROUGH: Use il2cpp_runtime_invoke to call getter methods!
-//! - /fields confirmed GameSystem has NO _workSingleModeCharaData field
-//! - Data is accessed via get_WorkSingleModeCharaData() getter method
-//! - Added /methods endpoint to enumerate class methods
-//! - Generalized /fields to support any class name
-//! - Falls back to field approach if method invocation fails
+//! URA Plugin v3.5.0
+//! - BREAKTHROUGH: Try singleton on ALL classes, not just GameSystem!
+//! - GameSystem has NO get_WorkSingleModeData method
+//! - WorkSingleModeData has get_Character, get_HomeInfoData etc.
+//! - Need to find WHO holds WorkSingleModeData instance
+//! - New /singletons endpoint: scan all known classes for singletons
+//! - /methods now shows ALL methods (no filter)
+//! - /data tries multiple singleton paths
 
 #![allow(dead_code)]
 
@@ -43,7 +44,7 @@ static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
 struct CharaCache {
-    speed: i32, stamina: i32, power: i32, wiz: i32, guts: i32,
+    speed: i32, stamina: i32, power: i32, guts: i32, wiz: i32,
     vital: i32, max_vital: i32, motivation: i32, turn: i32,
     skill_point: i32, scenario_id: i32, playing_state: i32,
     valid: bool,
@@ -108,13 +109,8 @@ unsafe fn find_class(image: *const c_void, ns: &str, name: &str) -> *mut c_void 
     }
 }
 
-/// Find a class by trying multiple known namespaces
 unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
-    let namespaces: &[&str] = &[
-        "Gallop",
-        "Gallop.WorkSingleModeCharaData",
-        "",
-    ];
+    let namespaces: &[&str] = &["Gallop", ""];
     for ns in namespaces {
         let cls = find_class(image, ns, class_name);
         if !cls.is_null() { return cls; }
@@ -179,7 +175,7 @@ unsafe fn read_field_ptr_auto(obj: *const c_void, class: *mut c_void, base_name:
 }
 
 // ============================================================
-// IL2CPP Runtime API types for method invocation
+// IL2CPP Runtime API types
 // ============================================================
 
 type FnClassGetFields = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *mut Il2CppFieldInfo;
@@ -199,7 +195,6 @@ struct Il2CppFieldInfo {
     _token: u32,
 }
 
-/// Resolve an IL2CPP runtime function by symbol name, returns raw pointer
 unsafe fn resolve_il2cpp_symbol(name: &str) -> *mut c_void {
     if API.is_null() { return ptr::null_mut(); }
     match (*API).il2cpp_resolve_symbol_fn {
@@ -207,9 +202,9 @@ unsafe fn resolve_il2cpp_symbol(name: &str) -> *mut c_void {
             let cname = to_cstr(name);
             let ptr = resolve(cname.as_ptr());
             if ptr.is_null() {
-                ura_log(2, &format!("resolve_il2cpp: {} not found", name));
+                ura_log(4, &format!("resolve: {} NOT found", name));
             } else {
-                ura_log(3, &format!("resolve_il2cpp: {} OK", name));
+                ura_log(4, &format!("resolve: {} OK", name));
             }
             ptr as *mut c_void
         }
@@ -221,15 +216,12 @@ unsafe fn resolve_il2cpp_symbol(name: &str) -> *mut c_void {
 // Call getter method via il2cpp_runtime_invoke
 // ============================================================
 
-/// Call a getter method (0 params) on an object instance.
-/// Returns the result object pointer, or null if failed.
 unsafe fn call_getter_on_instance(
     class: *mut c_void,
     instance: *const c_void,
     method_name: &str,
 ) -> *mut c_void {
     if class.is_null() || instance.is_null() {
-        ura_log(1, "call_getter: null class or instance");
         return ptr::null_mut();
     }
 
@@ -242,25 +234,18 @@ unsafe fn call_getter_on_instance(
         if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p)) }
     };
 
-    if get_method_fn.is_none() {
-        ura_log(1, "call_getter: il2cpp_class_get_method_from_name unavailable");
-        return ptr::null_mut();
-    }
-    if invoke_fn.is_none() {
-        ura_log(1, "call_getter: il2cpp_runtime_invoke unavailable");
+    if get_method_fn.is_none() || invoke_fn.is_none() {
+        ura_log(1, "call_getter: runtime API unavailable");
         return ptr::null_mut();
     }
 
-    // Find the method
     let method_name_c = to_cstr(method_name);
     let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
     if method_info.is_null() {
-        ura_log(2, &format!("call_getter: method '{}' not found on class", method_name));
+        ura_log(4, &format!("call_getter: '{}' not found", method_name));
         return ptr::null_mut();
     }
-    ura_log(3, &format!("call_getter: found method '{}'", method_name));
 
-    // Invoke the method
     let mut exc: *mut c_void = ptr::null_mut();
     let result = invoke_fn.unwrap()(
         method_info,
@@ -270,21 +255,110 @@ unsafe fn call_getter_on_instance(
     );
 
     if !exc.is_null() {
-        ura_log(1, &format!("call_getter: method '{}' threw exception", method_name));
+        ura_log(1, &format!("call_getter: '{}' threw exception", method_name));
         return ptr::null_mut();
     }
 
     if result.is_null() {
-        ura_log(2, &format!("call_getter: method '{}' returned null (not in training mode?)", method_name));
+        ura_log(3, &format!("call_getter: '{}' returned null", method_name));
     } else {
-        ura_log(3, &format!("call_getter: '{}' returned {:p}", method_name, result));
+        ura_log(3, &format!("call_getter: '{}' OK -> {:p}", method_name, result));
+    }
+
+    result
+}
+
+// Call a method with 1 argument (int) via il2cpp_runtime_invoke
+unsafe fn call_method_int_arg(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+    arg_count: i32,
+    arg: i32,
+) -> *mut c_void {
+    if class.is_null() || instance.is_null() { return ptr::null_mut(); }
+
+    let get_method_fn: Option<FnClassGetMethodFromName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
+    };
+    let invoke_fn: Option<FnRuntimeInvoke> = {
+        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p)) }
+    };
+
+    if get_method_fn.is_none() || invoke_fn.is_none() { return ptr::null_mut(); }
+
+    let method_name_c = to_cstr(method_name);
+    let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), arg_count);
+    if method_info.is_null() { return ptr::null_mut(); }
+
+    // Box the int arg so it has a stable address
+    let arg_boxed = Box::new(arg);
+    let arg_ptr = Box::into_raw(arg_boxed) as *mut c_void;
+    let mut args: [*mut c_void; 1] = [arg_ptr];
+
+    let mut exc: *mut c_void = ptr::null_mut();
+    let result = invoke_fn.unwrap()(
+        method_info,
+        instance as *mut c_void,
+        args.as_mut_ptr(),
+        &mut exc,
+    );
+
+    // Free the boxed arg
+    let _ = Box::from_raw(arg_ptr as *mut i32);
+
+    if !exc.is_null() {
+        ura_log(1, &format!("call_method: '{}' threw exception", method_name));
+        return ptr::null_mut();
     }
 
     result
 }
 
 // ============================================================
-// Scan Classes
+// All known classes for scanning
+// ============================================================
+
+const KNOWN_CLASSES: &[(&str, &str)] = &[
+    ("Gallop", "GameSystem"),
+    ("Gallop", "WorkSingleModeCharaData"),
+    ("Gallop", "WorkSingleModeHomeInfo"),
+    ("Gallop", "WorkSingleModeData"),
+    ("Gallop", "WorkSingleModeScenarioBreeders"),
+    ("Gallop", "WorkSingleModeScenarioLegend"),
+    ("Gallop", "WorkSingleModeScenarioMecha"),
+    ("Gallop", "WorkSingleModeScenarioOnsen"),
+    ("Gallop", "WorkSingleModeScenarioPioneer"),
+    ("Gallop", "WorkSingleModeScenarioRamen"),
+    ("Gallop", "HomeScene"),
+    ("Gallop", "SingleModeScene"),
+    ("Gallop", "RaceScene"),
+    ("Gallop", "SingleModeSceneController"),
+    // New candidates to try
+    ("Gallop", "SingleModeDirector"),
+    ("Gallop", "SingleModeManager"),
+    ("Gallop", "SingleModePlayingState"),
+    ("Gallop", "SingleModeSceneControllerBase"),
+    ("Gallop", "SceneControllerBase"),
+    ("Gallop", "WorkSingleMode"),
+    ("Gallop", "SingleModeChara"),
+    ("Gallop", "SingleModeData"),
+    ("Gallop", "GallopManager"),
+    ("Gallop", "GameManager"),
+    ("Gallop", "AppManager"),
+    ("Gallop", "SceneManager"),
+    ("Gallop", "ScreenManager"),
+    ("Gallop", "SystemManager"),
+    ("Gallop", "FunctionalManager"),
+    ("Gallop", "RuntimeObjectManager"),
+    ("", "SingleModeDirector"),
+    ("", "SingleModeManager"),
+];
+
+// ============================================================
+// Scan Classes (expanded)
 // ============================================================
 
 unsafe fn scan_il2cpp_classes() -> String {
@@ -295,35 +369,16 @@ unsafe fn scan_il2cpp_classes() -> String {
         _ => return r#"{"error":"image_null"}"#.to_string(),
     };
 
-    let classes_to_try: &[(&str, &str)] = &[
-        ("Gallop", "GameSystem"),
-        ("Gallop", "WorkSingleModeCharaData"),
-        ("Gallop", "WorkSingleModeHomeInfo"),
-        ("Gallop", "WorkSingleModeData"),
-        ("Gallop", "WorkSingleModeScenarioBreeders"),
-        ("Gallop", "WorkSingleModeScenarioLegend"),
-        ("Gallop", "WorkSingleModeScenarioMecha"),
-        ("Gallop", "WorkSingleModeScenarioOnsen"),
-        ("Gallop", "WorkSingleModeScenarioPioneer"),
-        ("Gallop", "WorkSingleModeScenarioRamen"),
-        ("Gallop", "SingleModeCharaLight"),
-        ("Gallop", "HomeScene"),
-        ("Gallop", "SingleModeScene"),
-        ("Gallop", "RaceScene"),
-        ("Gallop", "SingleModeSceneController"),
-        ("Gallop", "SingleModePlayingState"),
-        ("", "WorkSingleModeCharaData"),
-        ("", "WorkSingleModeData"),
-    ];
-
     let mut found_list: Vec<String> = Vec::new();
     let mut singleton_list: Vec<String> = Vec::new();
 
-    for (ns, cls) in classes_to_try {
+    for (ns, cls) in KNOWN_CLASSES {
         let class = find_class(image, ns, cls);
         if !class.is_null() {
             let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
-            found_list.push(full_name.clone());
+            if !found_list.contains(&full_name) {
+                found_list.push(full_name.clone());
+            }
             let inst = get_singleton(class);
             if !inst.is_null() {
                 singleton_list.push(full_name);
@@ -338,119 +393,204 @@ unsafe fn scan_il2cpp_classes() -> String {
 }
 
 // ============================================================
-// Read Training Data - v3.4.4 with method invocation
+// /singletons endpoint - scan ALL known classes for singletons
+// ============================================================
+
+unsafe fn find_all_singletons() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let mut results: Vec<String> = Vec::new();
+
+    for (ns, cls) in KNOWN_CLASSES {
+        let class = find_class(image, ns, cls);
+        if !class.is_null() {
+            let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
+            let inst = get_singleton(class);
+            let has_singleton = !inst.is_null();
+            results.push(format!(r#"{{"class":"{}","singleton":{},"instance":"{:p}"}}"#,
+                full_name, has_singleton, inst));
+        }
+    }
+
+    format!(r#"{{"total":{},"classes":[{}]}}"#, results.len(), results.join(","))
+}
+
+// ============================================================
+// Read Training Data - v3.5.0 with multi-strategy
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"game_system_ok":false,"chara":null,"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.4.4...");
+    ura_log(3, "Reading training data v3.5.0...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
         _ => return r#"{"game_system_ok":false,"chara":null,"error":"image_null"}"#.to_string(),
     };
 
-    // 1. Get GameSystem singleton
+    // Resolve key classes
     let gs_class = find_class(image, "Gallop", "GameSystem");
-    if gs_class.is_null() {
-        return r#"{"game_system_ok":false,"chara":null,"error":"no_GameSystem_class"}"#.to_string();
-    }
-    let gs_inst = get_singleton(gs_class);
-    if gs_inst.is_null() {
-        return r#"{"game_system_ok":false,"chara":null,"error":"no_GameSystem_singleton"}"#.to_string();
-    }
-
-    let chara_data_class = find_class(image, "Gallop", "WorkSingleModeCharaData");
     let sm_data_class = find_class(image, "Gallop", "WorkSingleModeData");
-    let home_info_class = find_class(image, "Gallop", "WorkSingleModeHomeInfo");
+    let chara_data_class = find_class(image, "Gallop", "WorkSingleModeCharaData");
+    let home_info_class = find_class(image, "Gallop", "HomeScene");
+    let sm_scene_ctrl_class = find_class(image, "Gallop", "SingleModeSceneController");
+    let sm_scene_class = find_class(image, "Gallop", "SingleModeScene");
 
     let mut chara_obj: *mut c_void = ptr::null_mut();
     let mut chara_via = String::new();
-    let mut methods_tried: Vec<String> = Vec::new();
+    let mut strategies_tried: Vec<String> = Vec::new();
 
-    // ===== Strategy A: Call get_WorkSingleModeCharaData directly =====
-    let getter_names: &[&str] = &[
-        "get_WorkSingleModeCharaData",
-        "GetWorkSingleModeCharaData",
-        "get_WorkSingleModeData",
-        "GetWorkSingleModeData",
-        "get_WorkSingleMode",
-        "GetWorkSingleMode",
-    ];
-
-    for getter_name in getter_names {
-        methods_tried.push(getter_name.to_string());
-        let result = call_getter_on_instance(gs_class, gs_inst, getter_name);
-        if !result.is_null() {
-            if getter_name.contains("CharaData") {
-                // Direct hit!
-                chara_obj = result;
-                chara_via = getter_name.to_string();
-                ura_log(3, &format!("GOT chara data via {}!", getter_name));
-                break;
-            } else if getter_name.contains("SingleModeData") || getter_name.contains("SingleMode") {
-                // Got WorkSingleMode or WorkSingleModeData - try drilling into it
-                ura_log(3, &format!("Got {} result, trying to find chara data inside...", getter_name));
-                let drill_class = if !sm_data_class.is_null() { sm_data_class } else { gs_class };
-                let inner = read_field_ptr_auto(result as *const c_void, drill_class, "workSingleModeCharaData");
-                if !inner.is_null() {
-                    chara_obj = inner as *mut c_void;
-                    chara_via = format!("{}->workSingleModeCharaData", getter_name);
-                    ura_log(3, "Got chara data via indirect path!");
-                    break;
-                }
-                // Also try _charaData
-                let inner2 = read_field_ptr_auto(result as *const c_void, drill_class, "charaData");
-                if !inner2.is_null() {
-                    chara_obj = inner2 as *mut c_void;
-                    chara_via = format!("{}->charaData", getter_name);
-                    ura_log(3, "Got chara data via charaData path!");
-                    break;
-                }
+    // ===== Strategy 1: Try singleton on WorkSingleModeData directly =====
+    if !sm_data_class.is_null() {
+        strategies_tried.push("singleton_on_WorkSingleModeData".to_string());
+        let inst = get_singleton(sm_data_class);
+        if !inst.is_null() {
+            ura_log(3, "WorkSingleModeData IS a singleton!");
+            let chara_result = call_getter_on_instance(sm_data_class, inst, "get_Character");
+            if !chara_result.is_null() {
+                chara_obj = chara_result as *mut c_void;
+                chara_via = "WorkSingleModeData.singleton->get_Character".to_string();
             }
+        } else {
+            ura_log(3, "WorkSingleModeData is NOT a singleton");
         }
     }
 
-    // ===== Strategy B: Field-based fallback (old approach) =====
-    if chara_obj.is_null() {
-        ura_log(2, "Getter approach failed, trying field-based fallback...");
-        let field_candidates: &[&str] = &[
-            "_workSingleModeCharaData", "workSingleModeCharaData",
-            "_workSingleModeData", "workSingleModeData",
-            "_singleModeData", "singleModeData",
-        ];
-        for c in field_candidates {
-            let val = read_field_ptr_auto(gs_inst, gs_class, c);
-            if !val.is_null() {
-                chara_obj = val as *mut c_void;
-                chara_via = format!("field:{}", c);
-                ura_log(3, &format!("Found via field fallback: {}", c));
-                break;
-            }
-        }
-    }
-
-    // ===== Strategy C: Try SingleModeScene controller =====
-    if chara_obj.is_null() {
-        let sm_scene_class = find_class(image, "Gallop", "SingleModeScene");
-        if !sm_scene_class.is_null() {
-            let sm_scene_inst = call_getter_on_instance(gs_class, gs_inst, "get_SingleModeScene");
-            if sm_scene_inst.is_null() {
-                // Try singleton
-                let inst = get_singleton(sm_scene_class);
-                if !inst.is_null() {
-                    let inner = read_field_ptr_auto(inst, sm_scene_class, "workSingleModeCharaData");
-                    if !inner.is_null() {
-                        chara_obj = inner as *mut c_void;
-                        chara_via = "SingleModeScene->workSingleModeCharaData".to_string();
+    // ===== Strategy 2: Try singleton on SingleModeSceneController =====
+    if chara_obj.is_null() && !sm_scene_ctrl_class.is_null() {
+        strategies_tried.push("singleton_on_SingleModeSceneController".to_string());
+        let ctrl_inst = get_singleton(sm_scene_ctrl_class);
+        if !ctrl_inst.is_null() {
+            ura_log(3, "SingleModeSceneController IS a singleton!");
+            // Try various getters on the controller
+            let ctrl_getters: &[&str] = &[
+                "get_WorkSingleModeData",
+                "get_SingleModeData",
+                "get_Data",
+                "get_WorkSingleMode",
+            ];
+            for getter in ctrl_getters {
+                let result = call_getter_on_instance(sm_scene_ctrl_class, ctrl_inst, getter);
+                if !result.is_null() {
+                    ura_log(3, &format!("Controller.{}() returned data!", getter));
+                    // Now get Character from WorkSingleModeData
+                    if !sm_data_class.is_null() {
+                        let chara_result = call_getter_on_instance(sm_data_class, result, "get_Character");
+                        if !chara_result.is_null() {
+                            chara_obj = chara_result as *mut c_void;
+                            chara_via = format!("SceneCtrl.singleton->{}->get_Character", getter);
+                            break;
+                        }
+                    }
+                    // Maybe the result IS the chara data directly
+                    if !chara_data_class.is_null() {
+                        chara_obj = result as *mut c_void;
+                        chara_via = format!("SceneCtrl.singleton->{}", getter);
+                        break;
                     }
                 }
-            } else {
-                let inner = read_field_ptr_auto(sm_scene_inst as *const c_void, sm_scene_class, "workSingleModeCharaData");
-                if !inner.is_null() {
-                    chara_obj = inner as *mut c_void;
-                    chara_via = "get_SingleModeScene->workSingleModeCharaData".to_string();
+            }
+            // Also try reading _scene field then get data from scene
+            if chara_obj.is_null() {
+                let scene_obj = read_field_ptr_auto(ctrl_inst, sm_scene_ctrl_class, "scene");
+                if !scene_obj.is_null() && !sm_scene_class.is_null() {
+                    ura_log(3, "Got _scene from controller, trying methods...");
+                    let scene_getters: &[&str] = &[
+                        "get_WorkSingleModeData",
+                        "get_SingleModeData",
+                        "get_Data",
+                    ];
+                    for getter in scene_getters {
+                        let result = call_getter_on_instance(sm_scene_class, scene_obj, getter);
+                        if !result.is_null() {
+                            if !sm_data_class.is_null() {
+                                let chara_result = call_getter_on_instance(sm_data_class, result, "get_Character");
+                                if !chara_result.is_null() {
+                                    chara_obj = chara_result as *mut c_void;
+                                    chara_via = format!("SceneCtrl._scene->{}->get_Character", getter);
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+        } else {
+            ura_log(3, "SingleModeSceneController is NOT a singleton");
+        }
+    }
+
+    // ===== Strategy 3: Scan ALL known classes for singletons, try getters on each =====
+    if chara_obj.is_null() {
+        strategies_tried.push("scan_all_singletons".to_string());
+        for (ns, cls) in KNOWN_CLASSES {
+            let class = find_class(image, ns, cls);
+            if class.is_null() { continue; }
+            let inst = get_singleton(class);
+            if inst.is_null() { continue; }
+
+            let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
+            ura_log(3, &format!("Found singleton: {}", full_name));
+
+            // Skip GameSystem (already tried) and WorkSingleModeData (already tried)
+            if full_name.contains("GameSystem") || full_name.contains("WorkSingleModeData") {
+                continue;
+            }
+
+            // Try calling get_WorkSingleModeData on this singleton
+            let data_getters: &[&str] = &[
+                "get_WorkSingleModeData",
+                "get_WorkSingleModeCharaData",
+                "get_SingleModeData",
+                "get_WorkSingleMode",
+            ];
+            for getter in data_getters {
+                let result = call_getter_on_instance(class, inst, getter);
+                if !result.is_null() {
+                    ura_log(3, &format!("{}.{}() returned data!", full_name, getter));
+                    // Try to get Character from the result
+                    if !sm_data_class.is_null() {
+                        let chara_result = call_getter_on_instance(sm_data_class, result, "get_Character");
+                        if !chara_result.is_null() {
+                            chara_obj = chara_result as *mut c_void;
+                            chara_via = format!("{}->{}->get_Character", full_name, getter);
+                            break;
+                        }
+                    }
+                    // Maybe result IS chara data
+                    chara_obj = result as *mut c_void;
+                    chara_via = format!("{}->{}", full_name, getter);
+                    break;
+                }
+            }
+            if !chara_obj.is_null() { break; }
+        }
+    }
+
+    // ===== Strategy 4: Read GameSystem manager pointers =====
+    if chara_obj.is_null() && !gs_class.is_null() {
+        let gs_inst = get_singleton(gs_class);
+        if !gs_inst.is_null() {
+            strategies_tried.push("gs_manager_pointers".to_string());
+            // Read _runtimeObjectManager at offset 72
+            let mgr = read_field_ptr(gs_inst, gs_class, "_runtimeObjectManager");
+            if !mgr.is_null() {
+                ura_log(3, &format!("Got _runtimeObjectManager at {:p}", mgr));
+                // Try to read WorkSingleModeData from it (blind pointer chase)
+                // The RuntimeObjectManager might have a field pointing to SingleMode data
+                // We can try reading pointer at various offsets
+                // But this is risky - let's just report it for now
+                strategies_tried.push(format!("runtimeObjectManager={:p}", mgr));
+            }
+            // Read _functionalManagerRoot at offset 40
+            let fmr = read_field_ptr(gs_inst, gs_class, "_functionalManagerRoot");
+            if !fmr.is_null() {
+                strategies_tried.push(format!("functionalManagerRoot={:p}", fmr));
             }
         }
     }
@@ -513,26 +653,26 @@ unsafe fn read_training_data() -> String {
                 cache.speed, cache.stamina, cache.power, cache.wiz, cache.guts,
                 cache.vital, cache.max_vital, cache.motivation, cache.turn));
             format!(
-                r#"{{"game_system_ok":true,"chara":{{{}}},"found_via":"{}","chara_class":{},"home_info_class":{},"error":null}}"#,
+                r#"{{"game_system_ok":true,"chara":{{{}}},"found_via":"{}","strategies":["{}"],"chara_class":{},"error":null}}"#,
                 chara_json_parts.join(","),
                 chara_via,
+                strategies_tried.join("\",\""),
                 if !chara_data_class.is_null() { "true" } else { "false" },
-                if !home_info_class.is_null() { "true" } else { "false" },
             )
         } else {
             ura_log(2, &format!("Got chara obj via {} but all fields zero", chara_via));
             format!(
-                r#"{{"game_system_ok":true,"chara":{{{}}},"found_via":"{}","warning":"all_fields_zero","chara_class":{},"error":null}}"#,
+                r#"{{"game_system_ok":true,"chara":{{{}}},"found_via":"{}","warning":"all_fields_zero","strategies":["{}"],"error":null}}"#,
                 chara_json_parts.join(","),
                 chara_via,
-                if !chara_data_class.is_null() { "true" } else { "false" },
+                strategies_tried.join("\",\""),
             )
         }
     } else {
-        // Nothing found
+        // Nothing found - report strategies tried
         format!(
-            r#"{{"game_system_ok":true,"chara":null,"methods_tried":["{}"],"chara_class":{},"sm_data_class":{},"home_info_class":{},"error":"no_chara_ref"}}"#,
-            methods_tried.join("\",\""),
+            r#"{{"game_system_ok":true,"chara":null,"strategies_tried":["{}"],"chara_class":{},"sm_data_class":{},"home_info_class":{},"error":"no_chara_ref"}}"#,
+            strategies_tried.join("\",\""),
             if !chara_data_class.is_null() { "true" } else { "false" },
             if !sm_data_class.is_null() { "true" } else { "false" },
             if !home_info_class.is_null() { "true" } else { "false" },
@@ -607,7 +747,7 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
 }
 
 // ============================================================
-// Enumerate methods on a class
+// Enumerate methods on a class - v3.5.0: NO FILTER, show all
 // ============================================================
 
 unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
@@ -637,7 +777,7 @@ unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
     let mut all_methods: Vec<String> = Vec::new();
     let mut current_class = class;
     let mut depth = 0;
-    let max_methods = 200;
+    let max_methods = 500;
 
     loop {
         if current_class.is_null() || depth > 5 { break; }
@@ -665,10 +805,8 @@ unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
                 } else { String::from("?") }
             } else { String::from("?") };
 
-            // Filter: only show get_/set_/.ctor methods to keep output manageable
-            if method_name.starts_with("get_") || method_name.starts_with("set_") || method_name == ".ctor" || method_name.contains("SingleMode") || method_name.contains("Work") {
-                all_methods.push(format!(r#"{{"name":"{}","class":"{}"}}"#, method_name, class_name));
-            }
+            // v3.5.0: NO FILTER - show ALL methods
+            all_methods.push(format!(r#"{{"name":"{}","class":"{}"}}"#, method_name, class_name));
         }
 
         if let Some(ref get_parent) = get_parent_fn {
@@ -682,6 +820,53 @@ unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
     }
 
     format!(r#"{{"total":{},"methods":[{}]}}"#, all_methods.len(), all_methods.join(","))
+}
+
+// ============================================================
+// /find_method endpoint - search all classes for a method name
+// ============================================================
+
+unsafe fn find_method_in_all_classes(method_name: &str) -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let get_method_fn: Option<FnClassGetMethodFromName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
+    };
+
+    if get_method_fn.is_none() {
+        return r#"{"error":"no_class_get_method_from_name"}"#.to_string();
+    }
+
+    let method_name_c = to_cstr(method_name);
+    let mut found: Vec<String> = Vec::new();
+
+    for (ns, cls) in KNOWN_CLASSES {
+        let class = find_class(image, ns, cls);
+        if class.is_null() { continue; }
+
+        let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
+
+        // Try with 0 args (getter)
+        let method = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
+        if !method.is_null() {
+            found.push(format!(r#"{{"class":"{}","args":0}}"#, full_name));
+        }
+
+        // Try with 1 arg
+        let method1 = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 1);
+        if !method1.is_null() && !method.is_null() == false {
+            found.push(format!(r#"{{"class":"{}","args":1}}"#, full_name));
+        }
+    }
+
+    format!(r#"{{"method":"{}","found":{},"results":[{}]}}"#,
+        method_name, !found.is_empty(), found.join(","))
 }
 
 // ============================================================
@@ -734,13 +919,13 @@ fn parse_path(req: &str) -> String {
 
 fn handle_http(mut stream: std::net::TcpStream) {
     use std::io::{Read, Write};
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; 8192];
     let n = match stream.read(&mut buf) { Ok(n) if n > 0 => n, _ => return };
     let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.4.4","endpoints":["/scan","/data","/status","/health","/fields","/fields/ClassName","/methods","/methods/ClassName"]}"#.to_string()
+        r#"{"status":"ok","version":"3.5.0","endpoints":["/scan","/data","/status","/health","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -749,6 +934,15 @@ fn handle_http(mut stream: std::net::TcpStream) {
         format!(r#"{{"game_initialized":{},"http_running":{}}}"#,
             GAME_INITIALIZED.load(Ordering::Relaxed),
             HTTP_RUNNING.load(Ordering::Relaxed))
+    } else if path == "/singletons" {
+        unsafe { find_all_singletons() }
+    } else if path.starts_with("/find_method") {
+        let method_name = if path == "/find_method" || path == "/find_method/" {
+            "get_WorkSingleModeData"
+        } else {
+            path.strip_prefix("/find_method/").unwrap_or("get_WorkSingleModeData")
+        };
+        unsafe { find_method_in_all_classes(method_name) }
     } else if path.starts_with("/fields") {
         let class_name = if path == "/fields" || path == "/fields/" {
             "GameSystem"
@@ -788,7 +982,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             }
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/fields","/methods"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/fields","/methods","/singletons","/find_method"]}}"#, path)
     };
 
     let resp = format!(
@@ -821,7 +1015,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.4.4").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.5.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -891,10 +1085,10 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
 
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
         if let Some(f) = api.gui_ui_label_fn {
-            f(ui, to_cstr("Data: 127.0.0.1:18765/data").as_ptr());
+            f(ui, to_cstr("127.0.0.1:18765/singletons").as_ptr());
         }
         if let Some(f) = api.gui_ui_label_fn {
-            f(ui, to_cstr("Methods: 127.0.0.1:18765/methods").as_ptr());
+            f(ui, to_cstr("127.0.0.1:18765/find_method/get_WorkSingleModeData").as_ptr());
         }
     }
 }
@@ -944,10 +1138,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.4.4 loaded");
+    ura_log(3, "URA plugin v3.5.0 loaded");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.4.4 Loaded!").as_ptr());
+        f(to_cstr("URA v3.5.0 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
