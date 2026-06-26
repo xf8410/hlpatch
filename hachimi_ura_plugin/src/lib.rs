@@ -1,5 +1,5 @@
-//! URA Plugin v3.7.3
-//! ★ v3.7.3: Scenario-specific data (Breeders/Ramen) + /scenario endpoint + /export to file
+//! URA Plugin v3.7.4
+//! ★ v3.7.4: Scenario-specific data (Breeders/Ramen) + /scenario endpoint + /export to file
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
 //! which return plain Int32 after decryption
@@ -498,41 +498,90 @@ unsafe fn read_scenario_detail() -> String {
         if !dataset_obj.is_null() {
             result_parts.push(format!(r#""dataset_obj":"{:p}""#, dataset_obj));
 
-            // Try to enumerate DataSet fields
-            let dataset_class_name = format!("WorkSingleModeScenario{}DataSet",
-                match scenario_id {
-                    13 => "Breeders",
-                    14 => "Ramen",
-                    6 => "Arc",
-                    _ => "Unknown",
-                });
-            let dataset_class = find_class_by_short_name(image, &dataset_class_name);
+            // Determine DataSet class name for all known scenarios
+            let dataset_class_name = match scenario_id {
+                1 => "WorkSingleModeScenarioURADataSet",
+                2 => "WorkSingleModeScenarioTeamRaceDataSet",
+                3 => "WorkSingleModeScenarioLiveDataSet",
+                4 => "WorkSingleModeScenarioFreeDataSet",
+                5 => "WorkSingleModeScenarioVenusDataSet",
+                6 => "WorkSingleModeScenarioArcDataSet",
+                7 => "WorkSingleModeScenarioSportDataSet",
+                8 => "WorkSingleModeScenarioCookDataSet",
+                9 => "WorkSingleModeScenarioMechaDataSet",
+                10 => "WorkSingleModeScenarioLegendDataSet",
+                11 => "WorkSingleModeScenarioPioneerDataSet",
+                12 => "WorkSingleModeScenarioOnsenDataSet",
+                13 => "WorkSingleModeScenarioBreedersDataSet",
+                14 => "WorkSingleModeScenarioRamenDataSet",
+                _ => "UnknownDataSet",
+            };
+            let dataset_class = find_class_by_short_name(image, dataset_class_name);
             if !dataset_class.is_null() {
-                let fields_json = enumerate_class_fields(dataset_class);
                 result_parts.push(format!(r#""dataset_class":"{}""#, dataset_class_name));
-                result_parts.push(format!(r#""dataset_fields":{}"#, fields_json));
 
-                // Try to read some common DataSet getters
-                let ds_getters = ["get_CommandInfo", "get_EnhanceGroup", "get_TeamMemberInfo",
-                                  "get_ActiveEffectInfo", "get_Feeling", "get_CheckPointInfo"];
-                let mut ds_results = Vec::new();
-                for getter in &ds_getters {
-                    let val = call_getter_on_instance(dataset_class, dataset_obj, getter);
-                    if !val.is_null() {
-                        ds_results.push(format!(r#"{{"{}":"{:p}"}}"#, getter, val));
+                // ★ Read int-type DataSet getters (try int first, fall back to ObscuredInt)
+                let int_getters = [
+                    "get_TeamRank", "get_HavingEnhancePoint", "get_PredictEnhancePoint",
+                    "get_BcRaceTrackId", "get_DeckId", "get_TeamSpLevelLimit",
+                    "get_TeamUnionProgress",
+                ];
+                let mut ds_ints = Vec::new();
+                for getter in &int_getters {
+                    // Try plain int first
+                    let val = call_getter_int(dataset_class, dataset_obj, getter);
+                    if val >= 0 {
+                        ds_ints.push(format!(r#""{}":{}"#, getter, val));
+                    } else {
+                        // Try ObscuredInt
+                        let oval = call_getter_obscured_int(dataset_class, dataset_obj, getter);
+                        if oval >= 0 {
+                            ds_ints.push(format!(r#""{}":{}"#, getter, oval));
+                        }
                     }
                 }
-                if !ds_results.is_empty() {
-                    result_parts.push(format!(r#""dataset_getters":[{}]"#, ds_results.join(",")));
+                if !ds_ints.is_empty() {
+                    result_parts.push(format!(r#""dataset_values":{{{}}}"#, ds_ints.join(",")));
+                }
+
+                // ★ Read array-type DataSet getters (report length + element pointers)
+                let array_getters = [
+                    "get_EnhanceGroupArray", "get_CommandInfoArray",
+                    "get_TeamMemberInfoArray", "get_TeamReviewResultArray",
+                    "get_BcRaceResultArray", "get_CommandGainExpArray",
+                ];
+                let mut ds_arrays = Vec::new();
+                for getter in &array_getters {
+                    let arr_obj = call_getter_on_instance(dataset_class, dataset_obj, getter);
+                    if !arr_obj.is_null() {
+                        let base = arr_obj as *const u8;
+                        let length = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
+                        ds_arrays.push(format!(r#""{}":{{"len":{},"ptr":"{:p}"}}"#, getter, length, arr_obj));
+                    }
+                }
+                if !ds_arrays.is_empty() {
+                    result_parts.push(format!(r#""dataset_arrays":{{{}}}"#, ds_arrays.join(",")));
+                }
+
+                // ★ Read object-type DataSet getters
+                let obj_getters = [
+                    "get_TeamSpTrainingInfo", "get_NotUpParameterInfo",
+                    "get_ScenarioDressSetting", "get_TeamUnionEvent",
+                ];
+                let mut ds_objs = Vec::new();
+                for getter in &obj_getters {
+                    let obj = call_getter_on_instance(dataset_class, dataset_obj, getter);
+                    if !obj.is_null() {
+                        ds_objs.push(format!(r#""{}":"{:p}""#, getter, obj));
+                    }
+                }
+                if !ds_objs.is_empty() {
+                    result_parts.push(format!(r#""dataset_objects":{{{}}}"#, ds_objs.join(",")));
                 }
             }
         } else {
             result_parts.push(r#""dataset_obj":"null""#.to_string());
         }
-
-        // Also enumerate scenario class fields for debugging
-        let fields_json = enumerate_class_fields(scenario_class);
-        result_parts.push(format!(r#""scenario_fields":{}"#, fields_json));
     }
 
     format!(r#"{{{}}}"#, result_parts.join(","))
@@ -683,12 +732,12 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// ★ Read Training Data v3.7.3 — All via getter methods
+// ★ Read Training Data v3.7.4 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.7.3...");
+    ura_log(3, "Reading training data v3.7.4...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -1097,7 +1146,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.7.3","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.7.4","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1196,7 +1245,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.3").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.4").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1331,10 +1380,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.3 loaded (scenario data + export)");
+    ura_log(3, "URA plugin v3.7.4 loaded (scenario data + export)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.7.3 Loaded!").as_ptr());
+        f(to_cstr("URA v3.7.4 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
