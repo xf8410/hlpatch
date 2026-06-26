@@ -1,7 +1,8 @@
-//! URA Plugin v3.4.2
-//! - FIXED: parse_path proxy-style URL missing leading "/" (was returning "data" not "/data")
-//! - FIXED: Added received path to not_found error for debugging
-//! - Handles trailing slashes, proxy-style URLs, query params
+//! URA Plugin v3.4.3
+//! - FIXED: il2cpp_get_field_from_name doesn't search parent class fields!
+//! - Added /fields endpoint to enumerate ALL fields (including inherited) for debugging
+//! - Uses il2cpp_resolve_symbol to find il2cpp_class_get_fields/field_get_name runtime APIs
+//! - Walks class hierarchy to find fields defined in parent classes
 
 #![allow(dead_code)]
 
@@ -493,6 +494,96 @@ unsafe fn read_training_data() -> String {
 }
 
 // ============================================================
+// Enumerate ALL fields including parent classes
+// Uses il2cpp_resolve_symbol to find il2cpp runtime APIs
+// ============================================================
+
+// IL2CPP runtime struct: Il2CppFieldInfo
+// We only need the name and offset
+#[repr(C)]
+struct Il2CppFieldInfo {
+    name: *const c_char,
+    _ty: *const c_void,  // Il2CppType*
+    parent: *mut c_void,  // Il2CppClass*
+    offset: i32,
+    _token: u32,
+}
+
+// Function pointer types for resolved IL2CPP runtime APIs
+type FnClassGetFields = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *mut Il2CppFieldInfo;
+type FnClassGetParent = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+type FnClassGetName = unsafe extern "C" fn(*mut c_void) -> *const c_char;
+
+unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
+    if class.is_null() || API.is_null() { return r#"{"error":"null_class"}"#.to_string(); }
+
+    let get_fields_fn: Option<FnClassGetFields> = if let Some(resolve) = (*API).il2cpp_resolve_symbol_fn {
+        let name = to_cstr("il2cpp_class_get_fields");
+        let ptr = resolve(name.as_ptr());
+        if ptr.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetFields>(ptr)) }
+    } else { None };
+
+    let get_parent_fn: Option<FnClassGetParent> = if let Some(resolve) = (*API).il2cpp_resolve_symbol_fn {
+        let name = to_cstr("il2cpp_class_get_parent");
+        let ptr = resolve(name.as_ptr());
+        if ptr.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(ptr)) }
+    } else { None };
+
+    let get_class_name_fn: Option<FnClassGetName> = if let Some(resolve) = (*API).il2cpp_resolve_symbol_fn {
+        let name = to_cstr("il2cpp_class_get_name");
+        let ptr = resolve(name.as_ptr());
+        if ptr.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetName>(ptr)) }
+    } else { None };
+
+    if get_fields_fn.is_none() {
+        return r#"{"error":"no_il2cpp_class_get_fields"}"#.to_string();
+    }
+
+    let mut all_fields: Vec<String> = Vec::new();
+    let mut current_class = class;
+    let mut depth = 0;
+
+    // Walk up the class hierarchy
+    loop {
+        if current_class.is_null() || depth > 10 { break; }
+
+        let class_name = if let Some(ref get_name) = get_class_name_fn {
+            let name_ptr = get_name(current_class);
+            if !name_ptr.is_null() {
+                let s = std::ffi::CStr::from_ptr(name_ptr);
+                s.to_string_lossy().to_string()
+            } else { format!("depth{}", depth) }
+        } else { format!("depth{}", depth) };
+
+        let mut iter: *mut c_void = ptr::null_mut();
+        loop {
+            let field_info = get_fields_fn.unwrap()(current_class, &mut iter);
+            if field_info.is_null() { break; }
+
+            let field_name = if !(*field_info).name.is_null() {
+                let s = std::ffi::CStr::from_ptr((*field_info).name);
+                s.to_string_lossy().to_string()
+            } else { String::from("?") };
+
+            let offset = (*field_info).offset;
+            all_fields.push(format!(r#"{{"name":"{}","offset":{},"class":"{}"}}"#, field_name, offset, class_name));
+        }
+
+        // Move to parent class
+        if let Some(ref get_parent) = get_parent_fn {
+            let parent = get_parent(current_class);
+            if parent.is_null() || parent == current_class { break; }
+            current_class = parent;
+        } else {
+            break;
+        }
+        depth += 1;
+    }
+
+    format!(r#"{{"total":{},"fields":[{}]}}"#, all_fields.len(), all_fields.join(","))
+}
+
+// ============================================================
 // HTTP Server - with fixed path parsing
 // ============================================================
 
@@ -560,7 +651,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = match path.as_str() {
-        "/" | "/health" => r#"{"status":"ok","version":"3.4.2","endpoints":["/scan","/data","/status","/health"]}"#.to_string(),
+        "/" | "/health" => r#"{"status":"ok","version":"3.4.3","endpoints":["/scan","/data","/status","/health","/fields","/fields/GameSystem"]}"#.to_string(),
         "/scan" => {
             unsafe { scan_il2cpp_classes() }
         }
@@ -572,7 +663,20 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 GAME_INITIALIZED.load(Ordering::Relaxed),
                 HTTP_RUNNING.load(Ordering::Relaxed))
         }
-        _ => format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health"]}}"#, path),
+        "/fields" | "/fields/GameSystem" => {
+            unsafe {
+                let image = match get_image() {
+                    img if !img.is_null() => img,
+                    _ => return r#"{"error":"image_null"}"#.to_string(),
+                };
+                let gs_class = find_class(image, "Gallop", "GameSystem");
+                if gs_class.is_null() {
+                    return r#"{"error":"no_GameSystem_class"}"#.to_string();
+                }
+                enumerate_class_fields(gs_class)
+            }
+        }
+        _ => format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/fields"]}}"#, path),
     };
 
     let resp = format!(
@@ -605,7 +709,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.4.2").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.4.3").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -732,10 +836,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.4.2 loaded");
+    ura_log(3, "URA plugin v3.4.3 loaded");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.4.2 Loaded!").as_ptr());
+        f(to_cstr("URA v3.4.3 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
