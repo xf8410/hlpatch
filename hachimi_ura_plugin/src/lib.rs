@@ -1,5 +1,5 @@
-//! URA Plugin v3.7.5
-//! ★ v3.7.5: Scenario-specific data (Breeders/Ramen) + /scenario endpoint + /export to file
+//! URA Plugin v3.7.6
+//! ★ v3.7.6: Scenario-specific data (Breeders/Ramen) + /scenario endpoint + /export to file
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
 //! which return plain Int32 after decryption
@@ -388,6 +388,49 @@ unsafe fn read_obscured_int_array(
 }
 
 // ============================================================
+// ★ Read reference-type array elements with getter calls
+// For expanding EnhanceGroupArray, CommandInfoArray, etc.
+// ============================================================
+
+unsafe fn read_array_element_details(
+    array_obj: *mut c_void,
+    element_class: *mut c_void,
+    obscured_getters: &[&str],
+    plain_getters: &[&str],
+) -> Vec<String> {
+    let mut results = Vec::new();
+    if array_obj.is_null() || element_class.is_null() { return results; }
+
+    let base = array_obj as *const u8;
+    let length = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
+    if length == 0 || length > 100 { return results; }
+
+    for i in 0..length {
+        let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
+        if elem_ptr.is_null() {
+            results.push(r#"{"_null":true}"#.to_string());
+            continue;
+        }
+
+        let mut fields = Vec::new();
+        for getter in obscured_getters {
+            let val = call_getter_obscured_int(element_class, elem_ptr, getter);
+            let key = getter.strip_prefix("get_").unwrap_or(*getter);
+            fields.push(format!(r#""{}":{}"#, key, val));
+        }
+        for getter in plain_getters {
+            let val = call_getter_int(element_class, elem_ptr, getter);
+            let key = getter.strip_prefix("get_").unwrap_or(*getter);
+            fields.push(format!(r#""{}":{}"#, key, val));
+        }
+        results.push(format!(r#"{{{}}}"#, fields.join(",")));
+    }
+
+    ura_log(4, &format!("read_array_elements: {} elements, {} getters", length, obscured_getters.len() + plain_getters.len()));
+    results
+}
+
+// ============================================================
 // ★ Try to get scenario-specific object from chara
 // Based on scenario_id, try multiple possible getter names
 // ============================================================
@@ -555,6 +598,46 @@ unsafe fn read_scenario_detail() -> String {
                 }
                 if !ds_arrays.is_empty() {
                     result_parts.push(format!(r#""dataset_arrays":{{{}}}"#, ds_arrays.join(",")));
+                }
+
+                // ★ Expand EnhanceGroupArray elements (Breeders buff data)
+                // Element class: ObscuredSingleModeBreedersEnhanceGroup
+                // Getters: get_GroupType (ObscuredInt), get_Level (ObscuredInt)
+                if scenario_id == 13 {
+                    let enhance_elem_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersEnhanceGroup");
+                    if !enhance_elem_class.is_null() {
+                        let enhance_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_EnhanceGroupArray");
+                        if !enhance_arr.is_null() {
+                            let elements = read_array_element_details(
+                                enhance_arr, enhance_elem_class,
+                                &["get_GroupType", "get_Level"],
+                                &[],
+                            );
+                            result_parts.push(format!(r#""enhance_groups":[{}]"#, elements.join(",")));
+                        }
+                    }
+                }
+
+                // ★ Expand CommandInfoArray elements (Breeders training commands)
+                // Element class: need runtime search, try common names
+                if scenario_id == 13 {
+                    // Try to find the command info element class
+                    let cmd_class_names = ["SingleModeBreedersCommandInfo", "ObscuredSingleModeBreedersCommandInfo"];
+                    for cmd_name in &cmd_class_names {
+                        let cmd_elem_class = find_class_by_short_name(image, cmd_name);
+                        if !cmd_elem_class.is_null() {
+                            let cmd_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandInfoArray");
+                            if !cmd_arr.is_null() {
+                                let elements = read_array_element_details(
+                                    cmd_arr, cmd_elem_class,
+                                    &["get_CommandType", "get_Level", "get_GainValue"],
+                                    &["get_CommandId"],
+                                );
+                                result_parts.push(format!(r#""command_info":[{}]"#, elements.join(",")));
+                            }
+                            break;
+                        }
+                    }
                 }
 
                 // ★ Read object-type DataSet getters
@@ -726,12 +809,12 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// ★ Read Training Data v3.7.5 — All via getter methods
+// ★ Read Training Data v3.7.6 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.7.5...");
+    ura_log(3, "Reading training data v3.7.6...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -1140,7 +1223,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.7.5","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.7.6","fix":"ObscuredInt_via_getters","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1239,7 +1322,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.5").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.6").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1374,10 +1457,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.5 loaded (scenario data + export)");
+    ura_log(3, "URA plugin v3.7.6 loaded (scenario data + export)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.7.5 Loaded!").as_ptr());
+        f(to_cstr("URA v3.7.6 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
