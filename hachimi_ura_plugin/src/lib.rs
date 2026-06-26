@@ -486,17 +486,17 @@ unsafe fn read_scenario_detail() -> String {
         _ => return r#"{"error":"image_null"}"#.to_string(),
     };
 
-    let wdm_class = find_class(image, "Gallop", "WorkDataManager");
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
     if wdm_class.is_null() { return r#"{"error":"no_wdm_class"}"#.to_string(); }
 
     let wdm_instance = get_singleton(wdm_class);
     if wdm_instance.is_null() { return r#"{"error":"no_wdm_singleton"}"#.to_string(); }
 
-    let sm_data_class = find_class(image, "Gallop", "WorkSingleModeData");
+    let sm_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_data_obj = call_getter_ref(wdm_class, wdm_instance, "get_SingleMode");
     if sm_data_obj.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
 
-    let chara_data_class = find_class(image, "Gallop", "WorkSingleModeCharaData");
+    let chara_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
     let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
     if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
 
@@ -792,7 +792,9 @@ unsafe fn scan_il2cpp_classes() -> String {
     let mut singleton_list: Vec<String> = Vec::new();
 
     for (ns, cls) in KNOWN_CLASSES {
-        let class = find_class(image, ns, cls);
+        let ns_c = to_cstr(ns);
+        let cls_c = to_cstr(cls);
+        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
         if !class.is_null() {
             let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
             if !found_list.contains(&full_name) {
@@ -826,7 +828,9 @@ unsafe fn find_all_singletons() -> String {
     let mut results: Vec<String> = Vec::new();
 
     for (ns, cls) in KNOWN_CLASSES {
-        let class = find_class(image, ns, cls);
+        let ns_c = to_cstr(ns);
+        let cls_c = to_cstr(cls);
+        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
         if !class.is_null() {
             let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
             let inst = get_singleton(class);
@@ -852,9 +856,9 @@ unsafe fn read_training_data() -> String {
         _ => return r#"{"error":"image_null"}"#.to_string(),
     };
 
-    let wdm_class = find_class(image, "Gallop", "WorkDataManager");
-    let sm_data_class = find_class(image, "Gallop", "WorkSingleModeData");
-    let chara_data_class = find_class(image, "Gallop", "WorkSingleModeCharaData");
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    let sm_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let chara_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
 
     ura_log(3, &format!("Classes: WDM={} SMD={} Chara={}",
         if wdm_class.is_null() { "null" } else { "ok" },
@@ -1178,7 +1182,9 @@ unsafe fn find_method_in_all_classes(method_name: &str) -> String {
     let mut found: Vec<String> = Vec::new();
 
     for (ns, cls) in KNOWN_CLASSES {
-        let class = find_class(image, ns, cls);
+        let ns_c = to_cstr(ns);
+        let cls_c = to_cstr(cls);
+        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
         if class.is_null() { continue; }
 
         let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
