@@ -1,8 +1,7 @@
-//! URA Plugin v3.4.1
-//! - FIXED: Real IL2CPP class names (WorkSingleModeCharaData, not SingleModeChara!)
-//! - FIXED: URL path parsing (handle full URL and query params)
-//! - Updated scan class list with all Work* data classes
-//! - /data endpoint reads training data via GameSystem singleton
+//! URA Plugin v3.4.2
+//! - FIXED: parse_path proxy-style URL missing leading "/" (was returning "data" not "/data")
+//! - FIXED: Added received path to not_found error for debugging
+//! - Handles trailing slashes, proxy-style URLs, query params
 
 #![allow(dead_code)]
 
@@ -527,21 +526,30 @@ fn start_http_server() {
 /// - "GET /data HTTP/1.1" -> "/data"
 /// - "GET http://127.0.0.1:18765/data HTTP/1.1" -> "/data" (proxy-style)
 /// - Strips query params: "/data?foo=bar" -> "/data"
-fn parse_path(req: &str) -> &str {
+/// - Strips trailing slashes: "/data/" -> "/data"
+fn parse_path(req: &str) -> String {
     // Get the request line (first line)
     let first_line = req.lines().next().unwrap_or("");
     // Split into parts: METHOD URI PROTOCOL
     let uri = first_line.split(' ').nth(1).unwrap_or("/");
     // Strip query params
     let path = uri.split('?').next().unwrap_or(uri);
-    // Handle full URL (proxy-style requests)
+    // Handle full URL (proxy-style requests, e.g. via VPN/proxy)
     if path.starts_with("http://") || path.starts_with("https://") {
-        // Extract path from full URL
+        // "http://host:port/data" split by '/' => ["http:", "", "host:port", "data"]
+        // nth(3) gives "data" without leading "/" — MUST prepend "/"!
         if let Some(after_host) = path.splitn(4, '/').nth(3) {
-            return after_host;
+            let result = if after_host.is_empty() { "/".to_string() } else { format!("/{}", after_host) };
+            return result.trim_end_matches('/').to_string();
         }
+        return "/".to_string();
     }
-    path
+    // Strip trailing slash (except root)
+    if path.len() > 1 && path.ends_with('/') {
+        path[..path.len()-1].to_string()
+    } else {
+        path.to_string()
+    }
 }
 
 fn handle_http(mut stream: std::net::TcpStream) {
@@ -551,8 +559,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let path = parse_path(req);
 
-    let body = match path {
-        "/" | "/health" => r#"{"status":"ok","version":"3.4.1","endpoints":["/scan","/data","/status","/health"]}"#.to_string(),
+    let body = match path.as_str() {
+        "/" | "/health" => r#"{"status":"ok","version":"3.4.2","endpoints":["/scan","/data","/status","/health"]}"#.to_string(),
         "/scan" => {
             unsafe { scan_il2cpp_classes() }
         }
@@ -564,7 +572,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 GAME_INITIALIZED.load(Ordering::Relaxed),
                 HTTP_RUNNING.load(Ordering::Relaxed))
         }
-        _ => r#"{"error":"not_found","available":["/scan","/data","/status","/health"]}"#.to_string(),
+        _ => format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health"]}}"#, path),
     };
 
     let resp = format!(
@@ -597,7 +605,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.4.1").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.4.2").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -724,10 +732,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.4.1 loaded");
+    ura_log(3, "URA plugin v3.4.2 loaded");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.4.1 Loaded!").as_ptr());
+        f(to_cstr("URA v3.4.2 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
