@@ -1458,4 +1458,48 @@ unsafe fn resolve_api(get_api: extern "C" fn(*const c_char) -> *mut c_void) -> A
         gui_ui_colored_label_fn: try_api!("gui_ui_colored_label", unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool),
         gui_ui_separator_fn: try_api!("gui_ui_separator", unsafe extern "C" fn(*mut c_void) -> bool),
         il2cpp_get_assembly_image_fn: try_api!("il2cpp_get_assembly_image", unsafe extern "C" fn(*const c_char) -> *const c_void),
-        il2cpp_get_class_fn: try_api!("il2cpp_get_class", unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) 
+        il2cpp_get_class_fn: try_api!("il2cpp_get_class", unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) -> *mut c_void),
+        il2cpp_get_field_from_name_fn: try_api!("il2cpp_get_field_from_name", unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
+        il2cpp_get_field_value_fn: try_api!("il2cpp_get_field_value", unsafe extern "C" fn(*const c_void, *const c_void, *mut c_void)),
+        il2cpp_get_static_field_value_fn: try_api!("il2cpp_get_static_field_value", unsafe extern "C" fn(*const c_void, *mut c_void)),
+        il2cpp_resolve_symbol_fn: try_api!("il2cpp_resolve_symbol", unsafe extern "C" fn(*const c_char) -> *mut c_void),
+        il2cpp_get_singleton_like_instance_fn: try_api!("il2cpp_get_singleton_like_instance", unsafe extern "C" fn(*mut c_void) -> *const c_void),
+        il2cpp_string_chars_fn: try_api!("il2cpp_string_chars", unsafe extern "C" fn(*const c_void) -> *mut u16),
+        il2cpp_string_length_fn: try_api!("il2cpp_string_length", unsafe extern "C" fn(*const c_void) -> i32),
+    }
+}
+
+// ============================================================
+// hachimi_init_v3
+// ============================================================
+
+#[no_mangle]
+pub unsafe extern "C" fn hachimi_init_v3(
+    get_api: extern "C" fn(*const c_char) -> *mut c_void,
+    version: i32,
+) -> i32 {
+    let api = resolve_api(get_api);
+    API = Box::into_raw(Box::new(api));
+    ura_log(3, "URA plugin v3.7.6 loaded (scenario data + export)");
+
+    if let Some(f) = (*API).gui_show_notification_fn {
+        f(to_cstr("URA v3.7.6 Loaded!").as_ptr());
+    }
+
+    if let Some(f) = (*API).gui_register_menu_item_fn {
+        f(to_cstr("URA Assistant").as_ptr(), Some(on_menu_item_click), ptr::null_mut());
+    }
+
+    if let Some(f) = (*API).gui_register_menu_section_fn {
+        f(Some(on_menu_section), ptr::null_mut());
+    }
+
+    if let Some(f) = (*API).hachimi_register_on_game_initialized_fn {
+        f(Some(on_game_initialized), ptr::null_mut());
+    }
+
+    start_http_server();
+
+    ura_log(3, &format!("hachimi_init_v3 done, api_version={}", version));
+    InitResult::Ok as i32
+}
