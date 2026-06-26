@@ -665,15 +665,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
         "/fields" | "/fields/GameSystem" => {
             unsafe {
-                let image = match get_image() {
-                    img if !img.is_null() => img,
-                    _ => return r#"{"error":"image_null"}"#.to_string(),
-                };
-                let gs_class = find_class(image, "Gallop", "GameSystem");
-                if gs_class.is_null() {
-                    return r#"{"error":"no_GameSystem_class"}"#.to_string();
+                let image = get_image();
+                if image.is_null() {
+                    r#"{"error":"image_null"}"#.to_string()
+                } else {
+                    let gs_class = find_class(image, "Gallop", "GameSystem");
+                    if gs_class.is_null() {
+                        r#"{"error":"no_GameSystem_class"}"#.to_string()
+                    } else {
+                        enumerate_class_fields(gs_class)
+                    }
                 }
-                enumerate_class_fields(gs_class)
             }
         }
         _ => format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/fields"]}}"#, path),
@@ -856,6 +858,4 @@ pub unsafe extern "C" fn hachimi_init_v3(
 
     start_http_server();
 
-    ura_log(3, &format!("hachimi_init_v3 done, api_version={}", version));
-    InitResult::Ok as i32
-}
+    ura_log(3, &format!("hachimi_init_v3 done, api_version={}", ver
