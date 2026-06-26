@@ -1,5 +1,5 @@
-//! URA Plugin v3.7.7
-//! ★ v3.7.7: Fix empty-namespace class resolve + expand ParamsIncDecInfoArray (TargetType+Value)
+//! URA Plugin v3.7.8
+//! ★ v3.7.8: Fix crash from null namespace ptr + expand ParamsIncDecInfoArray (TargetType+Value)
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
 //! which return plain Int32 after decryption
@@ -115,13 +115,42 @@ unsafe fn find_class(image: *const c_void, ns: *const c_char, name: *const c_cha
 
 unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
     let name_c = to_cstr(class_name);
-    // Try namespace "Gallop" first, then empty string "", then null pointer
-    // (some classes have no namespace in IL2CPP and need null pointer to match)
+    // Try known namespaces first (fast path)
     let ns_gallop = to_cstr("Gallop");
     let ns_empty = to_cstr("");
-    for ns in [ns_gallop.as_ptr(), ns_empty.as_ptr(), ptr::null()] {
+    for ns in [ns_gallop.as_ptr(), ns_empty.as_ptr()] {
         let cls = find_class(image, ns, name_c.as_ptr());
         if !cls.is_null() { return cls; }
+    }
+    // Fallback: iterate all classes to find by name (slow but handles any namespace)
+    find_class_by_iteration(image, class_name)
+}
+
+/// Slow fallback: iterate all classes in the assembly to find one by name
+unsafe fn find_class_by_iteration(image: *const c_void, class_name: &str) -> *mut c_void {
+    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
+    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
+    if get_count_fn.is_null() || get_class_fn.is_null() { return ptr::null_mut(); }
+
+    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
+    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
+    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
+
+    let count = get_count(image);
+    for i in 0..count {
+        let cls = get_class(image, i);
+        if cls.is_null() { continue; }
+        if !get_name_fn.is_null() {
+            let get_name: FnClassGetName = std::mem::transmute(get_name_fn);
+            let name_ptr = get_name(cls);
+            if !name_ptr.is_null() {
+                let len = (0usize..).find(|&j| *name_ptr.add(j) == 0).unwrap_or(0);
+                let bytes = std::slice::from_raw_parts(name_ptr as *const u8, len);
+                if bytes == class_name.as_bytes() {
+                    return cls;
+                }
+            }
+        }
     }
     ptr::null_mut()
 }
@@ -844,12 +873,12 @@ unsafe fn find_all_singletons() -> String {
 }
 
 // ============================================================
-// ★ Read Training Data v3.7.7 — All via getter methods
+// ★ Read Training Data v3.7.8 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.7.7...");
+    ura_log(3, "Reading training data v3.7.8...");
 
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -1359,7 +1388,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.7").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.7.8").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1494,10 +1523,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.7 loaded (scenario data + export)");
+    ura_log(3, "URA plugin v3.7.8 loaded (scenario data + export)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.7.7 Loaded!").as_ptr());
+        f(to_cstr("URA v3.7.8 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
