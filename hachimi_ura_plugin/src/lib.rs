@@ -858,4 +858,6 @@ pub unsafe extern "C" fn hachimi_init_v3(
 
     start_http_server();
 
-    ura_log(3, &format!("hachimi_init_v3 done, api_version={}", ver
+    ura_log(3, &format!("hachimi_init_v3 done, api_version={}", version));
+    InitResult::Ok as i32
+}
