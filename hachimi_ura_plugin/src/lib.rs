@@ -2244,8 +2244,6 @@ unsafe fn read_summary_inner() -> String {
 
     // ★ state field removed: get_State() doesn't exist on WorkSingleModeCharaData
     // Health condition is now detected via chara_effect_ids (top-level array)
-    format!(
-
     // ★ AI Evaluation (v3.15.0): compute score and training recommendation
     let ai_json = {
         // Compute turn from month+half (URA: turn = (month-1)*2 + (half-1), max 71 for training)
