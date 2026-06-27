@@ -1,5 +1,5 @@
-//! URA Plugin v3.9.0
-//! ★ v3.9.0: Add /summary endpoint — clean player-friendly JSON for floating window app
+//! URA Plugin v3.10.0
+//! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
 //! ★ v3.8.7: TargetType 3=Guts,4=Power (实测); CommandId→name mapping
 //! ★ v3.8.1: Fix crash — safe class name detection via il2cpp_class_get_name
 //! ★ v3.7.8: Fix crash from null namespace ptr + expand ParamsIncDecInfoArray (TargetType+Value)
@@ -48,6 +48,10 @@ struct Api {
 static mut API: *const Api = ptr::null();
 static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
+
+// ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
+static mut LAST_PUSH_HASH: u64 = 0;
+static PUSH_INTERVAL_SECS: u64 = 3;
 
 // ★ Training log (v3.7.9): auto-record snapshots from /data and /scenario
 const MAX_LOG_ENTRIES: usize = 30;
@@ -1299,7 +1303,7 @@ unsafe fn find_method_in_all_classes(method_name: &str) -> String {
 
 // ============================================================
 // ★ Clean summary for floating window app (/summary endpoint)
-// v3.9.0: Player-friendly output — stats + training gains in one response
+// v3.10.0: Player-friendly output — stats + training gains in one response
 // ============================================================
 
 unsafe fn read_summary() -> String {
@@ -1421,7 +1425,7 @@ unsafe fn read_summary() -> String {
     }
 
     format!(
-        r#"{{"version":"3.9.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{}}}"#,
+        r#"{{"version":"3.10.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{}}}"#,
         mon, half, scn_s, spd, sta, pow, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json
     )
 }
@@ -1429,6 +1433,72 @@ unsafe fn read_summary() -> String {
 // ============================================================
 // HTTP Server
 // ============================================================
+
+
+// ============================================================
+// ★ Push-to-app (v3.10.0): auto-push /summary JSON to uma-juece
+// When game data changes, POST the /summary JSON to 127.0.0.1:18766/data
+// The uma-juece floating window app receives and displays the data
+// ============================================================
+
+fn simple_hash(s: &str) -> u64 {
+    let mut h: u64 = 5381;
+    for b in s.bytes() {
+        h = h.wrapping_mul(33).wrapping_add(b as u64);
+    }
+    h
+}
+
+fn push_to_app(json: &str) {
+    use std::io::{Read, Write};
+    let addr: std::net::SocketAddr = match "127.0.0.1:18766".parse() {
+        Ok(a) => a,
+        Err(_) => return,
+    };
+    let mut stream = match std::net::TcpStream::connect_timeout(
+        &addr, std::time::Duration::from_secs(2)
+    ) {
+        Ok(s) => s,
+        Err(_) => return, // App not running, that's fine
+    };
+    let body = json.as_bytes();
+    let req = format!(
+        "POST /data HTTP/1.1\r\nHost: 127.0.0.1:18766\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(req.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
+    let mut buf = [0u8; 256];
+    let _ = stream.read(&mut buf);
+}
+
+fn push_loop() {
+    let interval = std::time::Duration::from_secs(PUSH_INTERVAL_SECS);
+    loop {
+        std::thread::sleep(interval);
+        if !GAME_INITIALIZED.load(Ordering::Relaxed) {
+            continue;
+        }
+        let summary = unsafe { read_summary() };
+        if summary.contains("\"error\"") {
+            continue;
+        }
+        let hash = simple_hash(&summary);
+        let should_push = unsafe {
+            if hash != LAST_PUSH_HASH {
+                LAST_PUSH_HASH = hash;
+                true
+            } else {
+                false
+            }
+        };
+        if should_push {
+            unsafe { ura_log(3, "Push: data changed, pushing to app"); }
+            push_to_app(&summary);
+        }
+    }
+}
 
 fn start_http_server() {
     if HTTP_RUNNING.load(Ordering::Relaxed) { return; }
@@ -1445,6 +1515,12 @@ fn start_http_server() {
         };
         unsafe { ura_log(3, "HTTP listening on :18765"); }
         unsafe { ura_notify("URA HTTP :18765 ON"); }
+
+        // ★ Start push-to-app loop (v3.10.0)
+        std::thread::spawn(|| {
+            push_loop();
+        });
+
         for stream in listener.incoming() {
             if !HTTP_RUNNING.load(Ordering::Relaxed) { break; }
             match stream {
@@ -1482,7 +1558,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.9.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.10.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1591,7 +1667,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.9.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.10.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
