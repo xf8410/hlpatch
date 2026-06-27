@@ -2321,9 +2321,21 @@ unsafe fn read_summary_inner() -> String {
         ai_result_to_json(&result)
     };
 
+    // ★ Breeders team member data (v3.15.4)
+    let team_json = if sid == 13 {
+        let team_result = read_breeders_team();
+        if team_result.contains("\"team_members\"") {
+            format!(r#","team_data":{}"#, team_result)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
     format!(
-        r#"{{"version":"3.15.3","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}}}"#,
-        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json
+        r#"{{"version":"3.15.4","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
+        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json
     )
 }
 
@@ -2496,7 +2508,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.15.3","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.15.4","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -2564,6 +2576,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { get_training_log() }
     } else if path == "/debug/params" {
         unsafe { debug_params_inc_dec() }
+    } else if path == "/debug/breeders" {
+        unsafe { debug_breeders_team() }
     } else if path == "/config" {
         // POST /config to update, GET /config to read current
         let is_post = req.starts_with("POST");
@@ -3030,4 +3044,280 @@ unsafe fn debug_params_inc_dec() -> String {
 
     format!(r#"{{"scenario_id":{},"actual_elem_class":"{}","elem_is_info_type":{},"items":[{}]}}"#,
         scenario_id, actual_elem_class_name, elem_is_info_type, debug_items.join(","))
+}
+
+// ============================================================
+// ★ Debug: Breeders scenario team member exploration (v3.15.4)
+// Explores the Breeders DataSet to find team member fields
+// Also reads team member data for the /summary endpoint
+// ============================================================
+
+/// Read team member data for the Breeders (Dreams) scenario
+/// Returns JSON: {"team_members":[...], "team_rank":N, "dream_training_left":N}
+/// Or {"error":"..."} if not available
+unsafe fn read_breeders_team() -> String {
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"wdm_class_null"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"wdm_no_singleton"}"#.to_string(); }
+
+    let sm_data_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_data_obj.is_null() { return r#"{"error":"sm_data_null"}"#.to_string(); }
+
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr()), sm_data_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"chara_null"}"#.to_string(); }
+
+    let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    if sid != 13 { return format!(r#"{{"error":"not_breeders","scenario_id":{}}}"#, sid); }
+
+    let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
+    if scenario_obj.is_null() { return r#"{"error":"scenario_obj_null"}"#.to_string(); }
+
+    let sc_class = find_class_by_short_name(image, "WorkSingleModeScenarioBreeders");
+    if sc_class.is_null() { return r#"{"error":"sc_class_null"}"#.to_string(); }
+
+    let ds_obj = call_getter_on_instance(sc_class, scenario_obj, "get_DataSet");
+    if ds_obj.is_null() { return r#"{"error":"dataset_null"}"#.to_string(); }
+
+    let ds_class = find_class_by_short_name(image, "WorkSingleModeScenarioBreedersDataSet");
+    if ds_class.is_null() { return r#"{"error":"ds_class_null"}"#.to_string(); }
+
+    // ★ Try to read MemberArray from DataSet
+    let member_arr_names = ["get_MemberArray", "get_TeamMemberArray", "get_CharaArray",
+                            "get_BreedersMemberArray", "get_UnitArray", "get_UnitInfoArray"];
+    let mut member_arr: *mut c_void = std::ptr::null_mut();
+    let mut found_arr_name = "";
+    for &name in &member_arr_names {
+        let arr = call_getter_on_instance(ds_class, ds_obj, name);
+        if !arr.is_null() {
+            let ab = arr as *const u8;
+            let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+            if al > 0 && al <= 10 {
+                member_arr = arr;
+                found_arr_name = name;
+                break;
+            }
+        }
+    }
+
+    // ★ Also try on the scenario object itself
+    if member_arr.is_null() {
+        for &name in &member_arr_names {
+            let arr = call_getter_on_instance(sc_class, scenario_obj, name);
+            if !arr.is_null() {
+                let ab = arr as *const u8;
+                let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+                if al > 0 && al <= 10 {
+                    member_arr = arr;
+                    found_arr_name = name;
+                    break;
+                }
+            }
+        }
+    }
+
+    // ★ Try dream training count
+    let dream_names = ["get_DreamTrainingCount", "get_DreamTrainingLeft",
+                       "get_RemainDreamTrainingCount", "get_DreamTrainingRemain"];
+    let mut dream_left: i32 = -1;
+    for &name in &dream_names {
+        let v = call_getter_int(ds_class, ds_obj, name);
+        if v >= 0 && v <= 10 {
+            dream_left = v;
+            break;
+        }
+        let v2 = call_getter_int(sc_class, scenario_obj, name);
+        if v2 >= 0 && v2 <= 10 {
+            dream_left = v2;
+            break;
+        }
+        let v3 = call_getter_obscured_int(ds_class, ds_obj, name);
+        if v3 >= 0 && v3 <= 10 {
+            dream_left = v3;
+            break;
+        }
+    }
+
+    if member_arr.is_null() {
+        return format!(r#"{{"error":"member_arr_not_found","scenario_id":13,"dream_left":{},"tried_ds":[{}],"tried_sc":[{}]}}"#,
+            dream_left,
+            member_arr_names.iter().map(|n| format!("\"{}\"", n)).collect::<Vec<_>>().join(","),
+            member_arr_names.iter().map(|n| format!("\"{}\"", n)).collect::<Vec<_>>().join(",")
+        );
+    }
+
+    // ★ Read member data
+    let mb = member_arr as *const u8;
+    let ml = std::ptr::read_unaligned::<usize>(mb.add(0x18) as *const usize);
+
+    let mut members_json = Vec::new();
+    let mut min_level: i32 = 999;
+
+    for i in 0..ml {
+        let ep = std::ptr::read_unaligned::<*mut c_void>(mb.add(0x20 + i * 8) as *const *mut c_void);
+        if ep.is_null() { continue; }
+
+        let member_class_names = [
+            "ObscuredSingleModeBreedersMemberInfo",
+            "SingleModeBreedersMemberInfo",
+            "ObscuredSingleModeBreedersUnitInfo",
+            "SingleModeBreedersUnitInfo",
+        ];
+        let mut member_class: *mut c_void = std::ptr::null_mut();
+        for &cn in &member_class_names {
+            let cls = find_class_by_short_name(image, cn);
+            if !cls.is_null() {
+                member_class = cls;
+                break;
+            }
+        }
+
+        let level_names = ["get_Level", "get_Rank", "get_Grade"];
+        let gauge_names = ["get_DreamGauge", "get_DreamCount", "get_SoulGauge", "get_Gauge"];
+        let charaid_names = ["get_CharaId", "get_CharacterId"];
+
+        let mut level: i32 = 0;
+        let mut gauge: i32 = 0;
+        let mut chara_id: i32 = 0;
+        let mut found_level = false;
+
+        if !member_class.is_null() {
+            for &ln in &level_names {
+                let v = call_getter_int(member_class, ep, ln);
+                if v >= 0 && v <= 12 {
+                    level = v;
+                    found_level = true;
+                    break;
+                }
+                let v2 = call_getter_obscured_int(member_class, ep, ln);
+                if v2 >= 0 && v2 <= 12 {
+                    level = v2;
+                    found_level = true;
+                    break;
+                }
+            }
+            for &gn in &gauge_names {
+                let v = call_getter_int(member_class, ep, gn);
+                if v >= 0 && v <= 3 {
+                    gauge = v;
+                    break;
+                }
+                let v2 = call_getter_obscured_int(member_class, ep, gn);
+                if v2 >= 0 && v2 <= 3 {
+                    gauge = v2;
+                    break;
+                }
+            }
+            for &cn in &charaid_names {
+                let v = call_getter_int(member_class, ep, cn);
+                if v > 0 {
+                    chara_id = v;
+                    break;
+                }
+                let v2 = call_getter_obscured_int(member_class, ep, cn);
+                if v2 > 0 {
+                    chara_id = v2;
+                    break;
+                }
+            }
+        }
+
+        if !found_level {
+            let mut hex = String::new();
+            let epb = ep as *const u8;
+            for b in 0..0x40 {
+                if b > 0 && b % 4 == 0 { hex.push(' '); }
+                hex.push_str(&format!("{:02x}", *epb.add(b)));
+            }
+            members_json.push(format!(
+                r#"{{"idx":{},"chara_id":{},"level":{},"gauge":{},"is_burst":{},"raw":"{}"}}"#,
+                i, chara_id, level, gauge, gauge >= 3, hex
+            ));
+        } else {
+            let is_burst = gauge >= 3;
+            if level < min_level { min_level = level; }
+            members_json.push(format!(
+                r#"{{"chara_id":{},"level":{},"dream_gauge":{},"is_burst":{}}}"#,
+                chara_id, level, gauge, is_burst
+            ));
+        }
+    }
+
+    if min_level == 999 { min_level = 0; }
+
+    format!(
+        r#"{{"team_members":[{}],"team_rank":{},"dream_training_left":{},"found_arr_name":"{}","member_count":{}}}"#,
+        members_json.join(","), min_level, dream_left, found_arr_name, ml
+    )
+}
+
+/// Debug endpoint for Breeders team exploration
+unsafe fn debug_breeders_team() -> String {
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"wdm_class_null"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"wdm_no_singleton"}"#.to_string(); }
+
+    let sm_data_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_data_obj.is_null() { return r#"{"error":"sm_data_null"}"#.to_string(); }
+
+    let chara_obj = call_getter_ref(find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr()), sm_data_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"chara_null"}"#.to_string(); }
+
+    let sid = call_getter_int(find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr()), chara_obj, "get_ScenarioId");
+    if sid != 13 { return format!(r#"{{"error":"not_breeders","scenario_id":{}}}"#, sid); }
+
+    let scenario_obj = try_get_scenario_obj(find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr()), chara_obj, sid);
+    if scenario_obj.is_null() { return r#"{"error":"scenario_obj_null"}"#.to_string(); }
+
+    let team_data = read_breeders_team();
+
+    let breeders_classes = search_classes("Breeders");
+
+    format!(
+        r#"{{"scenario_id":13,"team_data":{},"available_classes":{}}}"#,
+        team_data, breeders_classes
+    )
+}
+
+/// Search for IL2CPP classes containing a keyword
+unsafe fn search_classes(_keyword: &str) -> String {
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"[{"error":"image_null"}]"#.to_string(),
+    };
+
+    let class_names = [
+        "WorkSingleModeScenarioBreeders",
+        "WorkSingleModeScenarioBreedersDataSet",
+        "ObscuredSingleModeBreedersMemberInfo",
+        "SingleModeBreedersMemberInfo",
+        "ObscuredSingleModeBreedersUnitInfo",
+        "SingleModeBreedersUnitInfo",
+        "ObscuredSingleModeBreedersEnhanceGroup",
+        "ObscuredSingleModeBreedersCommandInfo",
+    ];
+
+    let mut found = Vec::new();
+    for &cn in &class_names {
+        let cls = find_class_by_short_name(image, cn);
+        if !cls.is_null() {
+            found.push(format!(r#"{{"name":"{}","found":true}}"#, cn));
+        } else {
+            found.push(format!(r#"{{"name":"{}","found":false}}"#, cn));
+        }
+    }
+
+    format!("[{}]", found.join(","))
 }
