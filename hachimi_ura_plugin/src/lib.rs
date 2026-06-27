@@ -1,5 +1,6 @@
-//! URA Plugin v3.12.0
+//! URA Plugin v3.13.0
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
+//! ★ v3.13.0: Add all training runtime fields to /summary via HomeInfoData path (all scenarios)
 //! ★ v3.12.0: Add gui_ui_text_edit_singleline for config input fields (Push Host/Port)
 //! ★ v3.8.7: TargetType 3=Guts,4=Power (实测); CommandId→name mapping
 //! ★ v3.8.1: Fix crash — safe class name detection via il2cpp_class_get_name
@@ -291,6 +292,24 @@ unsafe fn read_field_ptr(obj: *const c_void, class: *mut c_void, field_name: &st
         Some(fn_ptr) => fn_ptr(obj as *mut c_void, field, &mut value as *mut *const c_void as *mut c_void),
         None => return ptr::null(),
     }
+    value
+}
+
+
+// ★ Read a field value from an object by class + field name (returns *mut c_void)
+// Used for reading public fields (not getter properties) like CommandInfoArray
+unsafe fn read_field_value(class: *mut c_void, obj: *const c_void, field_name: &str) -> *mut c_void {
+    if class.is_null() || obj.is_null() || API.is_null() { return ptr::null_mut(); }
+    let field_info = match (*API).il2cpp_get_field_from_name_fn {
+        Some(f) => f(class, to_cstr(field_name).as_ptr()),
+        None => return ptr::null_mut(),
+    };
+    if field_info.is_null() { return ptr::null_mut(); }
+    let mut value: *mut c_void = ptr::null_mut();
+    match (*API).il2cpp_get_field_value_fn {
+        Some(f) => f(field_info, obj, &mut value as *mut _ as *mut c_void),
+        None => return ptr::null_mut(),
+    };
     value
 }
 
@@ -1465,7 +1484,7 @@ unsafe fn read_summary() -> String {
 
     let spd = call_getter_obscured_int(chara_class, chara_obj, "get_Speed");
     let sta = call_getter_obscured_int(chara_class, chara_obj, "get_Stamina");
-    let pow = call_getter_obscured_int(chara_class, chara_obj, "get_Power");
+    let pow_ = call_getter_obscured_int(chara_class, chara_obj, "get_Power");
     let gut = call_getter_obscured_int(chara_class, chara_obj, "get_Guts");
     let wiz = call_getter_obscured_int(chara_class, chara_obj, "get_Wiz");
     let vit = call_getter_obscured_int(chara_class, chara_obj, "get_Hp");
@@ -1477,6 +1496,9 @@ unsafe fn read_summary() -> String {
     let half = call_getter_int(chara_class, chara_obj, "get_Half");
     let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
 
+    // ★ State field (0=normal, non-zero=illness/etc) — graceful fallback
+    let state = call_getter_int(chara_class, chara_obj, "get_State");
+
     let mot_s = match mot { 5=>"Best", 4=>"Good", 3=>"Normal", 2=>"Bad", 1=>"Worst", _=>"?" };
     let scn_s = match sid {
         1=>"URA", 2=>"TeamRace", 3=>"Live", 4=>"Free", 5=>"Venus",
@@ -1484,8 +1506,239 @@ unsafe fn read_summary() -> String {
         11=>"Pioneer", 12=>"Onsen", 13=>"Breeders", 14=>"Ramen", _=>"Unknown"
     };
 
-    // --- Training gains ---
+    // --- Training data via HomeInfoData (ALL scenarios) ---
     let mut tr_json = "[]".to_string();
+    let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
+    if !home_info_obj.is_null() {
+        let hi_class = find_class_by_short_name(image, "WorkSingleModeHomeInfoData");
+        if !hi_class.is_null() {
+            // CommandInfoArray is a public field (not a getter), at offset 0x10
+            let cmd_arr = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
+            if !cmd_arr.is_null() {
+                let cmd_base = cmd_arr as *const u8;
+                let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(0x18) as *const usize);
+                if cmd_len > 0 && cmd_len < 100 {
+                    let cmd_elem_class = find_class_by_short_name(image, "SingleModeCommandInfoData");
+                    let mut trs = Vec::new();
+                    for i in 0..cmd_len {
+                        let ep = std::ptr::read_unaligned::<*mut c_void>(cmd_base.add(0x20 + i * 8) as *const *mut c_void);
+                        if ep.is_null() { continue; }
+
+                        let cid = if !cmd_elem_class.is_null() {
+                            call_getter_obscured_int(cmd_elem_class, ep, "get_CommandId")
+                        } else { -1 };
+                        let cname = match cid {
+                            101=>"Speed", 102=>"Stamina", 103=>"Guts",
+                            105=>"Power", 106=>"Wiz", _=>"Unknown"
+                        };
+                        let is_enable = if !cmd_elem_class.is_null() {
+                            call_getter_obscured_int(cmd_elem_class, ep, "get_IsEnable")
+                        } else { -1 };
+                        let failure_rate = if !cmd_elem_class.is_null() {
+                            call_getter_obscured_int(cmd_elem_class, ep, "get_FailureRate")
+                        } else { -1 };
+
+                        // Heads count = TrainingPartnerArray length
+                        let heads = if !cmd_elem_class.is_null() {
+                            let arr = call_getter_on_instance(cmd_elem_class, ep, "get_TrainingPartnerArray");
+                            if !arr.is_null() {
+                                let ab = arr as *const u8;
+                                let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+                                al as i32
+                            } else { -1 }
+                        } else { -1 };
+
+                        // Shining count = TipsEventPartnerArray length
+                        let shining = if !cmd_elem_class.is_null() {
+                            let arr = call_getter_on_instance(cmd_elem_class, ep, "get_TipsEventPartnerArray");
+                            if !arr.is_null() {
+                                let ab = arr as *const u8;
+                                let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+                                al as i32
+                            } else { -1 }
+                        } else { -1 };
+
+                        // Gains from ParamsIncDecInfoArray (ObscuredInt getters)
+                        let mut gains = Vec::new();
+                        if !cmd_elem_class.is_null() {
+                            let pa = call_getter_on_instance(cmd_elem_class, ep, "get_ParamsIncDecInfoArray");
+                            if !pa.is_null() {
+                                let pb = pa as *const u8;
+                                let pl = std::ptr::read_unaligned::<usize>(pb.add(0x18) as *const usize);
+                                if pl > 0 && pl < 100 {
+                                    let pid_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
+                                    for j in 0..pl {
+                                        let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(0x20 + j * 8) as *const *mut c_void);
+                                        if pe.is_null() { continue; }
+                                        let tt = if !pid_class.is_null() {
+                                            call_getter_obscured_int(pid_class, pe, "get_TargetType")
+                                        } else { -1 };
+                                        let v = if !pid_class.is_null() {
+                                            call_getter_obscured_int(pid_class, pe, "get_Value")
+                                        } else { 0 };
+                                        if v == 0 { continue; }
+                                        let tn = match tt {
+                                            1=>"Speed", 2=>"Stamina", 3=>"Guts",
+                                            4=>"Power", 5=>"Wiz", 10=>"HP",
+                                            20=>"Motivation", 30=>"SkillPt", _=>"Unknown"
+                                        };
+                                        gains.push(format!(r#""{}":{}"#, tn, v));
+                                    }
+                                }
+                            }
+                        }
+
+                        trs.push(format!(
+                            r#"{{"name":"{}","command_id":{},"is_enable":{},"failure_rate":{},"heads":{},"shining":{},"gains":{{{}}}}}"#,
+                            cname, cid, is_enable, failure_rate, heads, shining, gains.join(",")
+                        ));
+                    }
+                    tr_json = format!("[{}]", trs.join(","));
+                }
+            }
+        }
+    }
+
+    // --- Support cards (graceful fallback) ---
+    let mut sc_json = "[]".to_string();
+    let sc_arr = read_field_value(chara_class, chara_obj, "support_card_array");
+    if sc_arr.is_null() {
+        // Try getter
+        let arr = call_getter_on_instance(chara_class, chara_obj, "get_SupportCardArray");
+        if !arr.is_null() {
+            let ab = arr as *const u8;
+            let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+            if al > 0 && al < 100 {
+                let mut scs = Vec::new();
+                for i in 0..al {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                    if ep.is_null() { continue; }
+                    let b = ep as *const u8;
+                    let position = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                    let support_card_id = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                    let limit_break_count = std::ptr::read_unaligned::<i32>(b.add(0x18) as *const i32);
+                    let training_partner_state = std::ptr::read_unaligned::<i32>(b.add(0x20) as *const i32);
+                    scs.push(format!(
+                        r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{}}}"#,
+                        position, support_card_id, limit_break_count, training_partner_state
+                    ));
+                }
+                sc_json = format!("[{}]", scs.join(","));
+            }
+        }
+    } else {
+        let ab = sc_arr as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+        if al > 0 && al < 100 {
+            let mut scs = Vec::new();
+            for i in 0..al {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                if ep.is_null() { continue; }
+                let b = ep as *const u8;
+                let position = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                let support_card_id = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                let limit_break_count = std::ptr::read_unaligned::<i32>(b.add(0x18) as *const i32);
+                let training_partner_state = std::ptr::read_unaligned::<i32>(b.add(0x20) as *const i32);
+                scs.push(format!(
+                    r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{}}}"#,
+                    position, support_card_id, limit_break_count, training_partner_state
+                ));
+            }
+            sc_json = format!("[{}]", scs.join(","));
+        }
+    }
+
+    // --- Evaluation info (graceful fallback) ---
+    let mut ev_json = "[]".to_string();
+    let ev_arr = read_field_value(chara_class, chara_obj, "evaluation_info_array");
+    if ev_arr.is_null() {
+        let arr = call_getter_on_instance(chara_class, chara_obj, "get_EvaluationInfoArray");
+        if !arr.is_null() {
+            let ab = arr as *const u8;
+            let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+            if al > 0 && al < 1000 {
+                let mut evs = Vec::new();
+                for i in 0..al {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                    if ep.is_null() { continue; }
+                    let b = ep as *const u8;
+                    let target_id = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                    let evaluation = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                    let is_appear = std::ptr::read_unaligned::<i32>(b.add(0x20) as *const i32);
+                    evs.push(format!(
+                        r#"{{"target_id":{},"evaluation":{},"is_appear":{}}}"#,
+                        target_id, evaluation, is_appear
+                    ));
+                }
+                ev_json = format!("[{}]", evs.join(","));
+            }
+        }
+    } else {
+        let ab = ev_arr as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+        if al > 0 && al < 1000 {
+            let mut evs = Vec::new();
+            for i in 0..al {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                if ep.is_null() { continue; }
+                let b = ep as *const u8;
+                let target_id = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                let evaluation = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                let is_appear = std::ptr::read_unaligned::<i32>(b.add(0x20) as *const i32);
+                evs.push(format!(
+                    r#"{{"target_id":{},"evaluation":{},"is_appear":{}}}"#,
+                    target_id, evaluation, is_appear
+                ));
+            }
+            ev_json = format!("[{}]", evs.join(","));
+        }
+    }
+
+    // --- Training levels (graceful fallback) ---
+    let mut tl_json = "[]".to_string();
+    let tl_arr = read_field_value(chara_class, chara_obj, "training_level_info_array");
+    if tl_arr.is_null() {
+        let arr = call_getter_on_instance(chara_class, chara_obj, "get_TrainingLevelInfoArray");
+        if !arr.is_null() {
+            let ab = arr as *const u8;
+            let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+            if al > 0 && al < 100 {
+                let mut tls = Vec::new();
+                for i in 0..al {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                    if ep.is_null() { continue; }
+                    let b = ep as *const u8;
+                    let command_id = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                    let level = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                    tls.push(format!(
+                        r#"{{"command_id":{},"level":{}}}"#,
+                        command_id, level
+                    ));
+                }
+                tl_json = format!("[{}]", tls.join(","));
+            }
+        }
+    } else {
+        let ab = tl_arr as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+        if al > 0 && al < 100 {
+            let mut tls = Vec::new();
+            for i in 0..al {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                if ep.is_null() { continue; }
+                let b = ep as *const u8;
+                let command_id = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                let level = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                tls.push(format!(
+                    r#"{{"command_id":{},"level":{}}}"#,
+                    command_id, level
+                ));
+            }
+            tl_json = format!("[{}]", tls.join(","));
+        }
+    }
+
+    // --- Buffs (Breeders enhance groups, keep existing logic) ---
     let mut buff_json = "[]".to_string();
     let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
     if !scenario_obj.is_null() {
@@ -1507,57 +1760,7 @@ unsafe fn read_summary() -> String {
                     let ds_name = format!("{}DataSet", sc_name);
                     let ds_class = find_class_by_short_name(image, &ds_name);
                     if !ds_class.is_null() {
-                        let cmd_cls_name = match sid {
-                            13 => "ObscuredSingleModeBreedersCommandInfo",
-                            _ => ""
-                        };
-                        if !cmd_cls_name.is_empty() {
-                            let cmd_cls = find_class_by_short_name(image, cmd_cls_name);
-                            if !cmd_cls.is_null() {
-                                let cmd_arr = call_getter_on_instance(ds_class, ds_obj, "get_CommandInfoArray");
-                                if !cmd_arr.is_null() {
-                                    let base = cmd_arr as *const u8;
-                                    let len = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
-                                    let mut trs = Vec::new();
-                                    for i in 0..len {
-                                        let ep = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
-                                        if ep.is_null() { continue; }
-                                        let cid = call_getter_obscured_int(cmd_cls, ep, "get_CommandId");
-                                        let cname = match cid {
-                                            101=>"Speed", 102=>"Stamina", 103=>"Guts",
-                                            105=>"Power", 106=>"Wiz", _=>"Unknown"
-                                        };
-                                        let pa = call_getter_on_instance(cmd_cls, ep, "get_ParamsIncDecInfoArray");
-                                        let mut gains = Vec::new();
-                                        if !pa.is_null() {
-                                            let pb = pa as *const u8;
-                                            let pl = std::ptr::read_unaligned::<usize>(pb.add(0x18) as *const usize);
-                                            for j in 0..pl {
-                                                let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(0x20 + j * 8) as *const *mut c_void);
-                                                if pe.is_null() { continue; }
-                                                let b = pe as *const u8;
-                                                // ★ Breeders: plain Int32 (SingleModeParamsIncDecInfo)
-                                                // TargetType mapping (实测，非枚举定义): 3=Guts, 4=Power
-                                                let tt = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
-                                                let v = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
-                                                if v == 0 { continue; }
-                                                let tn = match tt {
-                                                    1=>"Speed", 2=>"Stamina", 3=>"Guts",
-                                                    4=>"Power", 5=>"Wiz", 10=>"HP",
-                                                    20=>"Motivation", 30=>"SkillPt", _=>"Unknown"
-                                                };
-                                                gains.push(format!(r#""{}":{}"#, tn, v));
-                                            }
-                                        }
-                                        trs.push(format!(r#"{{"name":"{}","gains":{{{}}}}}"#, cname, gains.join(",")));
-                                    }
-                                    tr_json = format!("[{}]", trs.join(","));
-                                }
-                            }
-                        }
-
                         // ★ EnhanceGroups (Breeders buff data) → human-readable descriptions
-                        // Plugin translates game data into readable text so the app doesn't need to understand game mechanics
                         let enhance_cls_name = match sid {
                             13 => "ObscuredSingleModeBreedersEnhanceGroup",
                             _ => ""
@@ -1575,7 +1778,6 @@ unsafe fn read_summary() -> String {
                                         if ep.is_null() { continue; }
                                         let gt = call_getter_obscured_int(enhance_cls, ep, "get_GroupType");
                                         let lv = call_getter_obscured_int(enhance_cls, ep, "get_Level");
-                                        // GroupType: 1=Physical(フィジカル), 2=Technique(テクニック), 3=Mental(メンタル)
                                         let (gtn, desc) = breeders_buff_desc(gt, lv);
                                         buffs.push(format!(r#"{{"name":"{}","level":{},"desc":"{}"}}"#, gtn, lv, desc));
                                     }
@@ -1590,8 +1792,8 @@ unsafe fn read_summary() -> String {
     }
 
     format!(
-        r#"{{"version":"3.11.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"buffs":{}}}"#,
-        mon, half, scn_s, spd, sta, pow, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, buff_json
+        r#"{{"version":"3.13.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{},"state":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{}}}"#,
+        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, state, tr_json, sc_json, ev_json, tl_json, buff_json
     )
 }
 
@@ -1740,7 +1942,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.11.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.13.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1878,7 +2080,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.12.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.13.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -2083,7 +2285,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.12.0 loaded (scenario data + export)");
+    ura_log(3, "URA plugin v3.13.0 loaded (scenario data + export)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr("URA v3.7.8 Loaded!").as_ptr());
