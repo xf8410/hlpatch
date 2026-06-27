@@ -1741,8 +1741,8 @@ fn evaluate_ai(
     // Per-training data: (command_id, [5 stat gains], skill_pt_gain, vital_cost, failure_rate, is_enable)
     trainings: &[(i32, [i32; 5], i32, i32, i32, i32)],
     // Buff effects
-    has_ai_jiao: bool,    // 愛嬌 buff
-    has_renshou_jouzu: bool, // 練習上手 buff
+    _has_ai_jiao: bool,    // 愛嬌 buff (TODO: implement buff effect)
+    _has_renshou_jouzu: bool, // 練習上手 buff (TODO: implement buff effect)
 ) -> AiResult {
     // Total turns per scenario
     let total_turn: i32 = match scenario_id {
@@ -2257,8 +2257,9 @@ unsafe fn read_summary_inner() -> String {
         let mut eval_trainings: Vec<(i32, [i32; 5], i32, i32, i32, i32)> = Vec::new();
 
         // Re-read training data for AI evaluation
-        if !home_info_obj.is_null() && !hi_class.is_null() {
-            let cmd_arr2 = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
+        let hi_class2 = find_class_by_short_name(image, "WorkSingleModeHomeInfoData");
+        if !home_info_obj.is_null() && !hi_class2.is_null() {
+            let cmd_arr2 = read_field_value(hi_class2, home_info_obj, "CommandInfoArray");
             if !cmd_arr2.is_null() {
                 let cb2 = cmd_arr2 as *const u8;
                 let cl2 = std::ptr::read_unaligned::<usize>(cb2.add(0x18) as *const usize);
