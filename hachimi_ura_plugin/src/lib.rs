@@ -51,6 +51,7 @@ struct Api {
 static mut API: *const Api = ptr::null();
 static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
+static LAST_PHASE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 // ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
 static mut LAST_PUSH_HASH: u64 = 0;
@@ -1477,6 +1478,7 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Chara stats ---
     ura_log(3, "★ read_summary phase1: chara stats");
+    LAST_PHASE.store(1, Ordering::Relaxed);
     let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
@@ -1521,6 +1523,7 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Training data via HomeInfoData (ALL scenarios) ---
     ura_log(3, "★ read_summary phase2: training data");
+    LAST_PHASE.store(2, Ordering::Relaxed);
     let mut tr_json = "[]".to_string();
     let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
     if !home_info_obj.is_null() {
@@ -1615,6 +1618,7 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Support cards (graceful fallback) ---
     ura_log(3, "★ read_summary phase3: support cards");
+    LAST_PHASE.store(3, Ordering::Relaxed);
     let mut sc_json = "[]".to_string();
     let sc_arr = read_field_value(chara_class, chara_obj, "support_card_array");
     if sc_arr.is_null() {
@@ -1665,6 +1669,7 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Evaluation info (graceful fallback) ---
     ura_log(3, "★ read_summary phase4: evaluation");
+    LAST_PHASE.store(4, Ordering::Relaxed);
     let mut ev_json = "[]".to_string();
     let ev_arr = read_field_value(chara_class, chara_obj, "evaluation_info_array");
     if ev_arr.is_null() {
@@ -1712,6 +1717,7 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Training levels (graceful fallback) ---
     ura_log(3, "★ read_summary phase5: training_levels");
+    LAST_PHASE.store(5, Ordering::Relaxed);
     let mut tl_json = "[]".to_string();
     let tl_arr = read_field_value(chara_class, chara_obj, "training_level_info_array");
     if tl_arr.is_null() {
@@ -1757,6 +1763,7 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Buffs (Breeders enhance groups, keep existing logic) ---
     ura_log(3, "★ read_summary phase6: buffs");
+    LAST_PHASE.store(6, Ordering::Relaxed);
     let mut buff_json = "[]".to_string();
     let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
     if !scenario_obj.is_null() {
@@ -1983,9 +1990,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { log_snapshot("data", &result); }
         result
     } else if path == "/status" {
-        format!(r#"{{"game_initialized":{},"http_running":{}}}"#,
+        format!(r#"{{"game_initialized":{},"http_running":{},"last_phase":{}}}"#,
             GAME_INITIALIZED.load(Ordering::Relaxed),
-            HTTP_RUNNING.load(Ordering::Relaxed))
+            HTTP_RUNNING.load(Ordering::Relaxed),
+            LAST_PHASE.load(Ordering::Relaxed))
     } else if path == "/singletons" {
         unsafe { find_all_singletons() }
     } else if path.starts_with("/find_method") {
