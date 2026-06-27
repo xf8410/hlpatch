@@ -725,6 +725,17 @@ unsafe fn read_scenario_detail() -> String {
                                             let p_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(0x20 + j * 8) as *const *mut c_void);
                                             if p_elem.is_null() { continue; }
                                             // ★ Breeders: always plain Int32 (SingleModeParamsIncDecInfo)
+                                            // TargetType 编号 ≠ 游戏界面顺序！实测数据验证：
+                                            //   1=Speed, 2=Stamina, 3=Guts, 4=Power, 5=Wiz, 30=SkillPt
+                                            // 界面顺序: Speed/Stamina/Power/Guts/Wiz，但代码里3是Guts不是Power
+                                            // 验证依据 — 各训练实际属性(Breeders无溅射):
+                                            //   Speed(101): Speed + SkillPt
+                                            //   Stamina(102): Stamina + Guts + SkillPt
+                                            //   Power(105): Power + Stamina + SkillPt
+                                            //   Guts(103): Speed + Power + Guts + SkillPt
+                                            //   Wiz(106): Speed + Wiz + SkillPt
+                                            // Stamina训练数据含TargetType3→加Guts→3=Guts
+                                            // Power训练数据含TargetType4→加Power→4=Power
                                             let bytes = p_elem as *const u8;
                                             let t = std::ptr::read_unaligned::<i32>(bytes.add(0x10) as *const i32);
                                             let v = std::ptr::read_unaligned::<i32>(bytes.add(0x14) as *const i32);
@@ -1346,7 +1357,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.8.4","fix":"revert_correct_mapping_3Guts_4Power","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.8.5","fix":"add_training_rules_comments","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
