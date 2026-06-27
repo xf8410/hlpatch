@@ -1,5 +1,6 @@
-//! URA Plugin v3.11.0
+//! URA Plugin v3.12.0
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
+//! ★ v3.12.0: Add gui_ui_text_edit_singleline for config input fields (Push Host/Port)
 //! ★ v3.8.7: TargetType 3=Guts,4=Power (实测); CommandId→name mapping
 //! ★ v3.8.1: Fix crash — safe class name detection via il2cpp_class_get_name
 //! ★ v3.7.8: Fix crash from null namespace ptr + expand ParamsIncDecInfoArray (TargetType+Value)
@@ -34,6 +35,7 @@ struct Api {
     gui_ui_label_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> bool>,
     gui_ui_colored_label_fn: Option<unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool>,
     gui_ui_separator_fn: Option<unsafe extern "C" fn(*mut c_void) -> bool>,
+    gui_ui_text_edit_singleline_fn: Option<unsafe extern "C" fn(*mut c_void, *mut c_char, i32) -> bool>,
     il2cpp_get_assembly_image_fn: Option<unsafe extern "C" fn(*const c_char) -> *const c_void>,
     il2cpp_get_class_fn: Option<unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) -> *mut c_void>,
     il2cpp_get_field_from_name_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void>,
@@ -55,6 +57,7 @@ static PUSH_INTERVAL_SECS: u64 = 1;
 
 // ★ Config (v3.11.0): runtime config updated via POST /config from App
 // No file editing needed — App settings page sends config to plugin HTTP endpoint
+#[derive(Clone)]
 struct PluginConfig {
     push_host: String,      // default: "127.0.0.1"
     push_port: u16,         // default: 18766
@@ -115,6 +118,12 @@ impl PluginConfig {
 }
 
 static mut PLUGIN_CONFIG: Option<PluginConfig> = None;
+
+// ★ Text edit buffers for GUI config (v3.12.0): persist across frames for egui immediate mode
+static mut GUI_HOST_BUF: [u8; 64] = [0u8; 64];  // push_host input buffer
+static mut GUI_HOST_BUF_LEN: i32 = 0;
+static mut GUI_PORT_BUF: [u8; 8] = [0u8; 8];    // push_port input buffer
+static mut GUI_PORT_BUF_LEN: i32 = 0;
 
 unsafe fn get_config() -> &'static PluginConfig {
     if PLUGIN_CONFIG.is_none() {
@@ -1869,7 +1878,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.10.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.12.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1953,9 +1962,77 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         }
 
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
-        if let Some(f) = api.gui_ui_label_fn {
+
+        // ★ Config input fields (v3.12.0): editable push_host and push_port
+        {
             let cfg = unsafe { get_config() };
-            f(ui, to_cstr(&format!("{}:{}/data", cfg.push_host, cfg.http_port)).as_ptr());
+
+            // Initialize buffers from config on first frame or when config changes externally
+            unsafe {
+                let host_bytes = cfg.push_host.as_bytes();
+                let host_len = host_bytes.len().min(63);
+                if GUI_HOST_BUF_LEN == 0 && host_len > 0 {
+                    GUI_HOST_BUF[..host_len].copy_from_slice(&host_bytes[..host_len]);
+                    GUI_HOST_BUF[host_len] = 0;
+                    GUI_HOST_BUF_LEN = host_len as i32;
+                }
+                let port_str = cfg.push_port.to_string();
+                let port_bytes = port_str.as_bytes();
+                let port_len = port_bytes.len().min(7);
+                if GUI_PORT_BUF_LEN == 0 && port_len > 0 {
+                    GUI_PORT_BUF[..port_len].copy_from_slice(&port_bytes[..port_len]);
+                    GUI_PORT_BUF[port_len] = 0;
+                    GUI_PORT_BUF_LEN = port_len as i32;
+                }
+            }
+
+            // Push Host label + input
+            if let Some(f) = api.gui_ui_label_fn {
+                f(ui, to_cstr("Push Host:").as_ptr());
+            }
+            if let Some(f) = api.gui_ui_text_edit_singleline_fn {
+                let changed = f(ui, unsafe { GUI_HOST_BUF.as_mut_ptr() }, 64);
+                if changed {
+                    unsafe {
+                        // Find null terminator
+                        let mut len = 0;
+                        while len < 64 && GUI_HOST_BUF[len] != 0 { len += 1; }
+                        GUI_HOST_BUF_LEN = len as i32;
+                        if let Ok(s) = std::str::from_utf8(&GUI_HOST_BUF[..len]) {
+                            let trimmed = s.trim();
+                            if !trimmed.is_empty() {
+                                let mut new_cfg = get_config().clone();
+                                new_cfg.push_host = trimmed.to_string();
+                                update_config(new_cfg);
+                                ura_log(3, &format!("Config updated: push_host={}", trimmed));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Push Port label + input
+            if let Some(f) = api.gui_ui_label_fn {
+                f(ui, to_cstr("Push Port:").as_ptr());
+            }
+            if let Some(f) = api.gui_ui_text_edit_singleline_fn {
+                let changed = f(ui, unsafe { GUI_PORT_BUF.as_mut_ptr() }, 8);
+                if changed {
+                    unsafe {
+                        let mut len = 0;
+                        while len < 8 && GUI_PORT_BUF[len] != 0 { len += 1; }
+                        GUI_PORT_BUF_LEN = len as i32;
+                        if let Ok(s) = std::str::from_utf8(&GUI_PORT_BUF[..len]) {
+                            if let Ok(port) = s.trim().parse::<u16>() {
+                                let mut new_cfg = get_config().clone();
+                                new_cfg.push_port = port;
+                                update_config(new_cfg);
+                                ura_log(3, &format!("Config updated: push_port={}", port));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1982,6 +2059,7 @@ unsafe fn resolve_api(get_api: extern "C" fn(*const c_char) -> *mut c_void) -> A
         gui_ui_label_fn: try_api!("gui_ui_label", unsafe extern "C" fn(*mut c_void, *const c_char) -> bool),
         gui_ui_colored_label_fn: try_api!("gui_ui_colored_label", unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool),
         gui_ui_separator_fn: try_api!("gui_ui_separator", unsafe extern "C" fn(*mut c_void) -> bool),
+        gui_ui_text_edit_singleline_fn: try_api!("gui_ui_text_edit_singleline", unsafe extern "C" fn(*mut c_void, *mut c_char, i32) -> bool),
         il2cpp_get_assembly_image_fn: try_api!("il2cpp_get_assembly_image", unsafe extern "C" fn(*const c_char) -> *const c_void),
         il2cpp_get_class_fn: try_api!("il2cpp_get_class", unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) -> *mut c_void),
         il2cpp_get_field_from_name_fn: try_api!("il2cpp_get_field_from_name", unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
@@ -2005,7 +2083,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.7.8 loaded (scenario data + export)");
+    ura_log(3, "URA plugin v3.12.0 loaded (scenario data + export)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr("URA v3.7.8 Loaded!").as_ptr());
