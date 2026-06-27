@@ -1822,6 +1822,18 @@ fn evaluate_ai(
         // Skill point value
         value += pt_score_rate * skill_pt as f64;
 
+        // ★ v3.15.3: Motivation factor — higher mood = more future training value
+        // Low motivation reduces effective training value; high motivation boosts it
+        // mot_factor: 1=0.6, 2=0.75, 3=0.9, 4=1.0, 5=1.1
+        let mot_factor = match motivation {
+            1 => 0.6,
+            2 => 0.75,
+            3 => 0.9,
+            4 => 1.0,
+            _ => 1.1,  // 5 = 絶好調
+        };
+        value *= mot_factor;
+
         // Vital change effect
         let vital_after = std::cmp::min(max_vital_eq, vital + vital_cost);
         value += vital_factor * (vital_evaluation(vital_after, max_vital) - vital_before);
@@ -1864,8 +1876,17 @@ fn evaluate_ai(
         best_action = "Rest".to_string();
     }
 
-    // === Evaluate Outgoing (if motivation < 5,外出 is better than rest) ===
-    let outgoing_bonus = if motivation < 5 { 200.0 } else { 0.0 };
+    // === Evaluate Outgoing ===
+    // ★ v3.15.3: outgoing bonus scales with motivation deficit
+    // Only recommend外出 when motivation is low (≤3 = 普通 or worse)
+    // mot 1→2: big value (80), mot 2→3: medium (50), mot 3→4: small (25), mot 4→5: negligible (10)
+    let outgoing_bonus = match motivation {
+        1 => 80.0,   // 絶不調 → 不調: urgent
+        2 => 50.0,   // 不調 → 普通: important
+        3 => 25.0,   // 普通 → 好調: moderate
+        4 => 10.0,   // 好調 → 絶好調: minor gain
+        _ => 0.0,    // already 絶好調
+    };
     let outgoing_vital_gain = 50;
     let vital_after_outgoing = std::cmp::min(max_vital_eq, vital + outgoing_vital_gain);
     let outgoing_value = vital_factor * (vital_evaluation(vital_after_outgoing, max_vital) - vital_before)
