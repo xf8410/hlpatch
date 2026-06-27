@@ -51,7 +51,6 @@ struct Api {
 static mut API: *const Api = ptr::null();
 static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
-static LAST_PHASE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 // ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
 static mut LAST_PUSH_HASH: u64 = 0;
@@ -1478,7 +1477,6 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Chara stats ---
     ura_log(3, "★ read_summary phase1: chara stats");
-    LAST_PHASE.store(1, Ordering::Relaxed);
     let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
@@ -1492,27 +1490,25 @@ unsafe fn read_summary_inner() -> String {
     let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
     if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
 
-    let spd = call_getter_obscured_int(chara_class, chara_obj, "get_Speed");
-    let sta = call_getter_obscured_int(chara_class, chara_obj, "get_Stamina");
-    let pow_ = call_getter_obscured_int(chara_class, chara_obj, "get_Power");
-    let gut = call_getter_obscured_int(chara_class, chara_obj, "get_Guts");
-    let wiz = call_getter_obscured_int(chara_class, chara_obj, "get_Wiz");
-    let vit = call_getter_obscured_int(chara_class, chara_obj, "get_Hp");
-    let mvit = call_getter_obscured_int(chara_class, chara_obj, "get_MaxHp");
+    // ★ C# property types from dump.cs:
+    //   Int32 Speed/Stamina/Power/Guts/Wiz/Hp/MaxHp/FanCount/Motivation/Month/Half/ScenarioId
+    //   → getter returns boxed Int32, use call_getter_int
+    //   ObscuredInt SkillPoint/ScenarioProgress/CharaEffectIdArray
+    //   → getter returns boxed ObscuredInt struct, use call_getter_obscured_int
+    // Previous bug: used call_getter_obscured_int for Int32 fields → read wrong offsets → always 0
+    let spd = call_getter_int(chara_class, chara_obj, "get_Speed");
+    let sta = call_getter_int(chara_class, chara_obj, "get_Stamina");
+    let pow_ = call_getter_int(chara_class, chara_obj, "get_Power");
+    let gut = call_getter_int(chara_class, chara_obj, "get_Guts");
+    let wiz = call_getter_int(chara_class, chara_obj, "get_Wiz");
+    let vit = call_getter_int(chara_class, chara_obj, "get_Hp");
+    let mvit = call_getter_int(chara_class, chara_obj, "get_MaxHp");
     let mot = call_getter_int(chara_class, chara_obj, "get_Motivation");
     let spt = call_getter_obscured_int(chara_class, chara_obj, "get_SkillPoint");
-    let fan = call_getter_obscured_int(chara_class, chara_obj, "get_FanCount");
+    let fan = call_getter_int(chara_class, chara_obj, "get_FanCount");
     let mon = call_getter_int(chara_class, chara_obj, "get_Month");
     let half = call_getter_int(chara_class, chara_obj, "get_Half");
     let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
-
-    // ★ State field — NOT available on WorkSingleModeCharaData (get_State doesn't exist)
-    // Use CharaEffectIdArray to detect bad conditions instead
-    let chara_effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
-    let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
-    // Check if any effect has Bad type (CharaEffectType.Bad=2)
-    // Effect IDs are looked up in master data; for now pass them through
-    let has_bad_condition = !chara_effect_ids.is_empty(); // will refine in App
 
     let mot_s = match mot { 5=>"Best", 4=>"Good", 3=>"Normal", 2=>"Bad", 1=>"Worst", _=>"?" };
     let scn_s = match sid {
@@ -1523,7 +1519,6 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Training data via HomeInfoData (ALL scenarios) ---
     ura_log(3, "★ read_summary phase2: training data");
-    LAST_PHASE.store(2, Ordering::Relaxed);
     let mut tr_json = "[]".to_string();
     let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
     if !home_info_obj.is_null() {
@@ -1618,7 +1613,6 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Support cards (graceful fallback) ---
     ura_log(3, "★ read_summary phase3: support cards");
-    LAST_PHASE.store(3, Ordering::Relaxed);
     let mut sc_json = "[]".to_string();
     let sc_arr = read_field_value(chara_class, chara_obj, "support_card_array");
     if sc_arr.is_null() {
@@ -1669,7 +1663,6 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Evaluation info (graceful fallback) ---
     ura_log(3, "★ read_summary phase4: evaluation");
-    LAST_PHASE.store(4, Ordering::Relaxed);
     let mut ev_json = "[]".to_string();
     let ev_arr = read_field_value(chara_class, chara_obj, "evaluation_info_array");
     if ev_arr.is_null() {
@@ -1717,7 +1710,6 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Training levels (graceful fallback) ---
     ura_log(3, "★ read_summary phase5: training_levels");
-    LAST_PHASE.store(5, Ordering::Relaxed);
     let mut tl_json = "[]".to_string();
     let tl_arr = read_field_value(chara_class, chara_obj, "training_level_info_array");
     if tl_arr.is_null() {
@@ -1763,7 +1755,6 @@ unsafe fn read_summary_inner() -> String {
 
     // --- Buffs (Breeders enhance groups, keep existing logic) ---
     ura_log(3, "★ read_summary phase6: buffs");
-    LAST_PHASE.store(6, Ordering::Relaxed);
     let mut buff_json = "[]".to_string();
     let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
     if !scenario_obj.is_null() {
@@ -1817,8 +1808,8 @@ unsafe fn read_summary_inner() -> String {
     }
 
     format!(
-        r#"{{"version":"3.14.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}]}}"#,
-        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(",")
+        r#"{{"version":"3.14.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{},"state":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{}}}"#,
+        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, state, tr_json, sc_json, ev_json, tl_json, buff_json
     )
 }
 
@@ -1982,7 +1973,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.14.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.14.1","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1990,10 +1981,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { log_snapshot("data", &result); }
         result
     } else if path == "/status" {
-        format!(r#"{{"game_initialized":{},"http_running":{},"last_phase":{}}}"#,
+        format!(r#"{{"game_initialized":{},"http_running":{}}}"#,
             GAME_INITIALIZED.load(Ordering::Relaxed),
-            HTTP_RUNNING.load(Ordering::Relaxed),
-            LAST_PHASE.load(Ordering::Relaxed))
+            HTTP_RUNNING.load(Ordering::Relaxed))
     } else if path == "/singletons" {
         unsafe { find_all_singletons() }
     } else if path.starts_with("/find_method") {
