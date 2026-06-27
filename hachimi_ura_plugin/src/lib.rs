@@ -1,4 +1,4 @@
-//! URA Plugin v3.15.2
+//! URA Plugin v3.15.5
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -2334,7 +2334,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.15.4","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
+        r#"{{"version":"3.15.5","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json
     )
 }
@@ -2508,7 +2508,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.15.4","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.15.5","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3090,7 +3090,9 @@ unsafe fn read_breeders_team() -> String {
 
     // ★ Try to read MemberArray from DataSet
     let member_arr_names = ["get_MemberArray", "get_TeamMemberArray", "get_CharaArray",
-                            "get_BreedersMemberArray", "get_UnitArray", "get_UnitInfoArray"];
+                            "get_BreedersMemberArray", "get_UnitArray", "get_UnitInfoArray",
+                            "get_BreedersUnitInfoArray", "get_PartnerArray", "get_PartnerInfoArray",
+                            "get_TrainingPartnerArray", "get_DreamMemberArray"];
     let mut member_arr: *mut c_void = std::ptr::null_mut();
     let mut found_arr_name = "";
     for &name in &member_arr_names {
@@ -3124,7 +3126,10 @@ unsafe fn read_breeders_team() -> String {
 
     // ★ Try dream training count
     let dream_names = ["get_DreamTrainingCount", "get_DreamTrainingLeft",
-                       "get_RemainDreamTrainingCount", "get_DreamTrainingRemain"];
+                       "get_RemainDreamTrainingCount", "get_DreamTrainingRemain",
+                       "get_DreamTrainingNum", "get_RemainDreamTraining", "get_DreamTrainingRest",
+                       "get_DreamTrainingLeftCount", "get_SpecialTrainingCount",
+                       "get_SpecialTrainingLeft", "get_DreamCommandCount"];
     let mut dream_left: i32 = -1;
     for &name in &dream_names {
         let v = call_getter_int(ds_class, ds_obj, name);
@@ -3236,14 +3241,14 @@ unsafe fn read_breeders_team() -> String {
                 hex.push_str(&format!("{:02x}", *epb.add(b)));
             }
             members_json.push(format!(
-                r#"{{"idx":{},"chara_id":{},"level":{},"gauge":{},"is_burst":{},"raw":"{}"}}"#,
+                r#"{{"idx":{},"chara_id":{},"level":{},"gauge":{},"burst_ready":{},"raw":"{}"}}"#,
                 i, chara_id, level, gauge, gauge >= 3, hex
             ));
         } else {
             let is_burst = gauge >= 3;
             if level < min_level { min_level = level; }
             members_json.push(format!(
-                r#"{{"chara_id":{},"level":{},"dream_gauge":{},"is_burst":{}}}"#,
+                r#"{{"chara_id":{},"level":{},"dream_gauge":{},"burst_ready":{}}}"#,
                 chara_id, level, gauge, is_burst
             ));
         }
@@ -3257,7 +3262,7 @@ unsafe fn read_breeders_team() -> String {
     )
 }
 
-/// Debug endpoint for Breeders team exploration
+/// Debug endpoint for Breeders team exploration — auto-enumerates methods & fields
 unsafe fn debug_breeders_team() -> String {
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -3279,15 +3284,59 @@ unsafe fn debug_breeders_team() -> String {
     if sid != 13 { return format!(r#"{{"error":"not_breeders","scenario_id":{}}}"#, sid); }
 
     let scenario_obj = try_get_scenario_obj(find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr()), chara_obj, sid);
-    if scenario_obj.is_null() { return r#"{"error":"scenario_obj_null"}"#.to_string(); }
+
+    // ★ Auto-enumerate all Breeders-related classes
+    let class_names = [
+        "WorkSingleModeScenarioBreeders",
+        "WorkSingleModeScenarioBreedersDataSet",
+        "ObscuredSingleModeBreedersMemberInfo",
+        "SingleModeBreedersMemberInfo",
+        "ObscuredSingleModeBreedersUnitInfo",
+        "SingleModeBreedersUnitInfo",
+        "ObscuredSingleModeBreedersEnhanceGroup",
+        "ObscuredSingleModeBreedersCommandInfo",
+        "SingleModeBreedersDataSet",
+        "WorkSingleModeChangeParameterInfoScenarioBreeders",
+        "MasterSingleModeBreedersMember",
+        "MasterSingleModeBreedersTraining",
+        "SingleModeBreedersPartnerInfo",
+        "SingleModeBreedersMemberInfoData",
+    ];
+
+    let mut class_details = Vec::new();
+    for &cn in &class_names {
+        let cls = find_class_by_short_name(image, cn);
+        if cls.is_null() {
+            class_details.push(format!(r#"{{"name":"{}","found":false}}"#, cn));
+        } else {
+            let methods = enumerate_class_methods(cls);
+            let fields = enumerate_class_fields(cls);
+            class_details.push(format!(
+                r#"{{"name":"{}","found":true,"methods":{},"fields":{}}}"#,
+                cn, methods, fields
+            ));
+        }
+    }
+
+    // ★ Also try to read CharaData's Breeders getter
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let breeders_getter_names = ["get_ScenarioBreeders", "get_WorkScenarioBreeders", "get_Breeders",
+                                  "get_Dreams", "get_ScenarioDreams"];
+    let mut getter_results = Vec::new();
+    if !chara_class.is_null() && !chara_obj.is_null() {
+        for &gn in &breeders_getter_names {
+            let result = call_getter_ref(chara_class, chara_obj, gn);
+            getter_results.push(format!(r#"{{"name":"{}","found":{}}}"#, gn, !result.is_null()));
+        }
+    }
 
     let team_data = read_breeders_team();
 
-    let breeders_classes = search_classes("Breeders");
-
     format!(
-        r#"{{"scenario_id":13,"team_data":{},"available_classes":{}}}"#,
-        team_data, breeders_classes
+        r#"{{"scenario_id":13,"team_data":{},"class_details":[{}],"chara_getters":[{}]}}"#,
+        team_data,
+        class_details.join(","),
+        getter_results.join(",")
     )
 }
 
