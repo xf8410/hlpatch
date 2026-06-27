@@ -1,5 +1,7 @@
-//! URA Plugin v3.7.9
-//! ★ v3.7.9: Fix Value=115 bug + training log + debug/params raw memory dump
+//! URA Plugin v3.9.0
+//! ★ v3.9.0: Add /summary endpoint — clean player-friendly JSON for floating window app
+//! ★ v3.8.7: TargetType 3=Guts,4=Power (实测); CommandId→name mapping
+//! ★ v3.8.1: Fix crash — safe class name detection via il2cpp_class_get_name
 //! ★ v3.7.8: Fix crash from null namespace ptr + expand ParamsIncDecInfoArray (TargetType+Value)
 //! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
 //! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
@@ -1296,6 +1298,135 @@ unsafe fn find_method_in_all_classes(method_name: &str) -> String {
 }
 
 // ============================================================
+// ★ Clean summary for floating window app (/summary endpoint)
+// v3.9.0: Player-friendly output — stats + training gains in one response
+// ============================================================
+
+unsafe fn read_summary() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    // --- Chara stats ---
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    let spd = call_getter_obscured_int(chara_class, chara_obj, "get_Speed");
+    let sta = call_getter_obscured_int(chara_class, chara_obj, "get_Stamina");
+    let pow = call_getter_obscured_int(chara_class, chara_obj, "get_Power");
+    let gut = call_getter_obscured_int(chara_class, chara_obj, "get_Guts");
+    let wiz = call_getter_obscured_int(chara_class, chara_obj, "get_Wiz");
+    let vit = call_getter_obscured_int(chara_class, chara_obj, "get_Hp");
+    let mvit = call_getter_obscured_int(chara_class, chara_obj, "get_MaxHp");
+    let mot = call_getter_int(chara_class, chara_obj, "get_Motivation");
+    let spt = call_getter_obscured_int(chara_class, chara_obj, "get_SkillPoint");
+    let fan = call_getter_obscured_int(chara_class, chara_obj, "get_FanCount");
+    let mon = call_getter_int(chara_class, chara_obj, "get_Month");
+    let half = call_getter_int(chara_class, chara_obj, "get_Half");
+    let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+
+    let mot_s = match mot { 5=>"Best", 4=>"Good", 3=>"Normal", 2=>"Bad", 1=>"Worst", _=>"?" };
+    let scn_s = match sid {
+        1=>"URA", 2=>"TeamRace", 3=>"Live", 4=>"Free", 5=>"Venus",
+        6=>"Arc", 7=>"Sport", 8=>"Cook", 9=>"Mecha", 10=>"Legend",
+        11=>"Pioneer", 12=>"Onsen", 13=>"Breeders", 14=>"Ramen", _=>"Unknown"
+    };
+
+    // --- Training gains ---
+    let mut tr_json = "[]".to_string();
+    let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
+    if !scenario_obj.is_null() {
+        let sc_name = match sid {
+            1=>"WorkSingleModeScenarioURA", 2=>"WorkSingleModeScenarioTeamRace",
+            3=>"WorkSingleModeScenarioLive", 4=>"WorkSingleModeScenarioFree",
+            5=>"WorkSingleModeScenarioVenus", 6=>"WorkSingleModeScenarioArc",
+            7=>"WorkSingleModeScenarioSport", 8=>"WorkSingleModeScenarioCook",
+            9=>"WorkSingleModeScenarioMecha", 10=>"WorkSingleModeScenarioLegend",
+            11=>"WorkSingleModeScenarioPioneer", 12=>"WorkSingleModeScenarioOnsen",
+            13=>"WorkSingleModeScenarioBreeders", 14=>"WorkSingleModeScenarioRamen",
+            _=>""
+        };
+        if !sc_name.is_empty() {
+            let sc_class = find_class_by_short_name(image, sc_name);
+            if !sc_class.is_null() {
+                let ds_obj = call_getter_on_instance(sc_class, scenario_obj, "get_DataSet");
+                if !ds_obj.is_null() {
+                    let ds_name = format!("{}DataSet", sc_name);
+                    let ds_class = find_class_by_short_name(image, &ds_name);
+                    if !ds_class.is_null() {
+                        let cmd_cls_name = match sid {
+                            13 => "ObscuredSingleModeBreedersCommandInfo",
+                            _ => ""
+                        };
+                        if !cmd_cls_name.is_empty() {
+                            let cmd_cls = find_class_by_short_name(image, cmd_cls_name);
+                            if !cmd_cls.is_null() {
+                                let cmd_arr = call_getter_on_instance(ds_class, ds_obj, "get_CommandInfoArray");
+                                if !cmd_arr.is_null() {
+                                    let base = cmd_arr as *const u8;
+                                    let len = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
+                                    let mut trs = Vec::new();
+                                    for i in 0..len {
+                                        let ep = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
+                                        if ep.is_null() { continue; }
+                                        let cid = call_getter_obscured_int(cmd_cls, ep, "get_CommandId");
+                                        let cname = match cid {
+                                            101=>"Speed", 102=>"Stamina", 103=>"Guts",
+                                            105=>"Power", 106=>"Wiz", _=>"Unknown"
+                                        };
+                                        let pa = call_getter_on_instance(cmd_cls, ep, "get_ParamsIncDecInfoArray");
+                                        let mut gains = Vec::new();
+                                        if !pa.is_null() {
+                                            let pb = pa as *const u8;
+                                            let pl = std::ptr::read_unaligned::<usize>(pb.add(0x18) as *const usize);
+                                            for j in 0..pl {
+                                                let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(0x20 + j * 8) as *const *mut c_void);
+                                                if pe.is_null() { continue; }
+                                                let b = pe as *const u8;
+                                                // ★ Breeders: plain Int32 (SingleModeParamsIncDecInfo)
+                                                // TargetType mapping (实测，非枚举定义): 3=Guts, 4=Power
+                                                let tt = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                                                let v = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                                                if v == 0 { continue; }
+                                                let tn = match tt {
+                                                    1=>"Speed", 2=>"Stamina", 3=>"Guts",
+                                                    4=>"Power", 5=>"Wiz", 10=>"HP",
+                                                    20=>"Motivation", 30=>"SkillPt", _=>"Unknown"
+                                                };
+                                                gains.push(format!(r#""{}":{}"#, tn, v));
+                                            }
+                                        }
+                                        trs.push(format!(r#"{{"name":"{}","gains":{{{}}}}}"#, cname, gains.join(",")));
+                                    }
+                                    tr_json = format!("[{}]", trs.join(","));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    format!(
+        r#"{{"version":"3.9.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{}}}"#,
+        mon, half, scn_s, spd, sta, pow, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json
+    )
+}
+
+// ============================================================
 // HTTP Server
 // ============================================================
 
@@ -1351,7 +1482,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.8.7","fix":"3Guts_4Power_per_actual_data","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.9.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1409,6 +1540,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 }
             }
         }
+    } else if path == "/summary" {
+        unsafe { read_summary() }
     } else if path == "/scenario" {
         let result = unsafe { read_scenario_detail() };
         unsafe { log_snapshot("scenario", &result); }
@@ -1458,7 +1591,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.7.9").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.9.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
