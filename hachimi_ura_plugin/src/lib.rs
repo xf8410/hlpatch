@@ -1742,8 +1742,8 @@ fn evaluate_ai(
     max_vital: i32,
     motivation: i32,      // 1-5
     scenario_id: i32,
-    // Per-training data: (command_id, [5 stat gains], skill_pt_gain, vital_cost, failure_rate, is_enable)
-    trainings: &[(i32, [i32; 5], i32, i32, i32, i32)],
+    // Per-training data: (command_id, [5 stat gains], skill_pt_gain, vital_cost, failure_rate, is_enable, shining, heads)
+    trainings: &[(i32, [i32; 5], i32, i32, i32, i32, i32, i32)],
     // Buff effects
     _has_ai_jiao: bool,    // 愛嬌 buff (TODO: implement buff effect)
     _has_renshou_jouzu: bool, // 練習上手 buff (TODO: implement buff effect)
@@ -1796,7 +1796,7 @@ fn evaluate_ai(
     let mut best_action = "Rest".to_string();
 
     // === Evaluate each training ===
-    for &(cmd_id, ref gains, skill_pt, vital_cost, fail_rate, is_enable) in trainings {
+    for &(cmd_id, ref gains, skill_pt, vital_cost, fail_rate, is_enable, shining, heads) in trainings {
         let name = match cmd_id {
             101 => "Speed",
             102 => "Stamina",
@@ -1835,6 +1835,17 @@ fn evaluate_ai(
                   + (1.0 - 0.01 * fail_rate as f64) * value;
         }
 
+        // ★ v3.15.3: Shining (彩圈) bonus — friend/group card event expected value
+        // Each 彩圈 partner gives a training event with extra stats + skill hint
+        if shining > 0 {
+            let shining_bonus = 200.0 * shining as f64;  // ~200 per 彩圈 partner (stats + skill hint + friendship)
+            value += shining_bonus;
+        }
+        // Heads bonus: more partners = faster relationship building
+        if heads > 1 {
+            let heads_bonus = 20.0 * (heads - 1) as f64;  // small bonus for extra partners beyond first
+            value += heads_bonus;
+        }
         train_values.push((name.to_string(), value));
 
         if value > best_value {
@@ -1956,7 +1967,7 @@ unsafe fn read_summary_inner() -> String {
     ura_log(3, "★ read_summary phase2: training data");
     let mut tr_json = "[]".to_string();
     // ★ v3.15.1: collect eval_trainings in same pass (eliminate dangerous double-read)
-    let mut eval_trainings: Vec<(i32, [i32; 5], i32, i32, i32, i32)> = Vec::new();
+    let mut eval_trainings: Vec<(i32, [i32; 5], i32, i32, i32, i32, i32, i32)> = Vec::new();
     let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
     if !home_info_obj.is_null() {
         let hi_class = find_class_by_short_name(image, "WorkSingleModeHomeInfoData");
@@ -2059,7 +2070,7 @@ unsafe fn read_summary_inner() -> String {
 
                         // ★ v3.15.1: collect eval training data in same pass
                         if cmd_id_to_train_idx(cid).is_some() {
-                            eval_trainings.push((cid, stat_gains, skill_pt_gain, vital_cost, failure_rate, is_enable));
+                            eval_trainings.push((cid, stat_gains, skill_pt_gain, vital_cost, failure_rate, is_enable, shining, heads));
                         }
                     }
                     tr_json = format!("[{}]", trs.join(","));
@@ -2290,7 +2301,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.15.2","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}}}"#,
+        r#"{{"version":"3.15.3","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json
     )
 }
@@ -2464,7 +2475,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.15.2","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.15.3","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
