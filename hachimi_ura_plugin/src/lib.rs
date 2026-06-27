@@ -1306,6 +1306,59 @@ unsafe fn find_method_in_all_classes(method_name: &str) -> String {
 // v3.10.0: Player-friendly output — stats + training gains in one response
 // ============================================================
 
+/// Breeders作戦会議buff (游戏内青・緑・桃三色)
+/// GroupType 1=青(フィジカル), 2=緑(テクニック), 3=桃(メンタル)
+fn breeders_buff_desc(group_type: i32, level: i32) -> (&'static str, String) {
+    match group_type {
+        1 => { // 青: 友情ボーナス + サブ能力UP + 体力消費DOWN
+            let desc = match level {
+                0 => "-".to_string(),
+                1 => "友情+10% サブ+15%".to_string(),
+                2 => "友情+20% サブ+25% 体消-40%".to_string(),
+                3 => "友情+25% サブ+30% 体消-70%".to_string(),
+                4 => "友情+35% サブ+35% 体消-100%".to_string(),
+                5 => "友情+40% サブ+40% 体消-100%".to_string(),
+                6 => "友情+50% サブ+45% 体消-100%".to_string(),
+                7 => "友情+55% サブ+50% 体消-100%".to_string(),
+                8 => "友情+65%".to_string(),
+                _ => format!("Lv{}", level),
+            };
+            ("青", desc)
+        }
+        2 => { // 緑: スキルPt効果UP + ヒント発生
+            let desc = match level {
+                0 => "-".to_string(),
+                1 => "Pt+10%".to_string(),
+                2 => "Pt+15%".to_string(),
+                3 => "Pt+20% ヒント1人".to_string(),
+                4 => "Pt+25% ヒント2人".to_string(),
+                5 => "Pt+30% ヒント2人 全ヒント".to_string(),
+                6 => "Pt+35% ヒント2人 全ヒント".to_string(),
+                7 => "Pt+40% ヒント2人 全ヒント".to_string(),
+                8 => "Pt+50% ヒント2人 全ヒント".to_string(),
+                _ => format!("Lv{}", level),
+            };
+            ("緑", desc)
+        }
+        3 => { // 桃: 絆獲得UP + 失敗率DOWN + 獲得上限UP
+            let desc = match level {
+                0 => "-".to_string(),
+                1 => "絆+3 失敗-5%".to_string(),
+                2 => "絆+5 失敗-50% 上限+15".to_string(),
+                3 => "絆+7 失敗-100% 上限+25 Pt上限+40".to_string(),
+                4 => "絆+7 失敗-100% 上限+35 Pt上限+60".to_string(),
+                5 => "絆+7 失敗-100% 上限+40 Pt上限+80".to_string(),
+                6 => "絆+7 失敗-100% 上限+45 Pt上限+100".to_string(),
+                7 => "絆+7 失敗-100% 上限+50 Pt上限+110".to_string(),
+                8 => "絆+7 失敗-100% 上限+60 Pt上限+120".to_string(),
+                _ => format!("Lv{}", level),
+            };
+            ("桃", desc)
+        }
+        _ => ("?", format!("Lv{}", level)),
+    }
+}
+
 unsafe fn read_summary() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
@@ -1418,6 +1471,35 @@ unsafe fn read_summary() -> String {
                                 }
                             }
                         }
+
+                        // ★ EnhanceGroups (Breeders buff data) → human-readable descriptions
+                        // Plugin translates game data into readable text so the app doesn't need to understand game mechanics
+                        let mut buff_json = "[]".to_string();
+                        let enhance_cls_name = match sid {
+                            13 => "ObscuredSingleModeBreedersEnhanceGroup",
+                            _ => ""
+                        };
+                        if !enhance_cls_name.is_empty() {
+                            let enhance_cls = find_class_by_short_name(image, enhance_cls_name);
+                            if !enhance_cls.is_null() {
+                                let enhance_arr = call_getter_on_instance(ds_class, ds_obj, "get_EnhanceGroupArray");
+                                if !enhance_arr.is_null() {
+                                    let eb = enhance_arr as *const u8;
+                                    let el = std::ptr::read_unaligned::<usize>(eb.add(0x18) as *const usize);
+                                    let mut buffs = Vec::new();
+                                    for i in 0..el {
+                                        let ep = std::ptr::read_unaligned::<*mut c_void>(eb.add(0x20 + i * 8) as *const *mut c_void);
+                                        if ep.is_null() { continue; }
+                                        let gt = call_getter_obscured_int(enhance_cls, ep, "get_GroupType");
+                                        let lv = call_getter_obscured_int(enhance_cls, ep, "get_Level");
+                                        // GroupType: 1=Physical(フィジカル), 2=Technique(テクニック), 3=Mental(メンタル)
+                                        let (gtn, desc) = breeders_buff_desc(gt, lv);
+                                        buffs.push(format!(r#"{{"name":"{}","level":{},"desc":"{}"}}"#, gtn, lv, desc));
+                                    }
+                                    buff_json = format!("[{}]", buffs.join(","));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1425,8 +1507,8 @@ unsafe fn read_summary() -> String {
     }
 
     format!(
-        r#"{{"version":"3.10.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{}}}"#,
-        mon, half, scn_s, spd, sta, pow, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json
+        r#"{{"version":"3.10.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"buffs":{}}}"#,
+        mon, half, scn_s, spd, sta, pow, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, buff_json
     )
 }
 
