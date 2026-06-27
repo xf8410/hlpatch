@@ -1509,6 +1509,8 @@ unsafe fn read_summary_inner() -> String {
     let mon = call_getter_int(chara_class, chara_obj, "get_Month");
     let half = call_getter_int(chara_class, chara_obj, "get_Half");
     let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    let chara_effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
+    let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
 
     let mot_s = match mot { 5=>"Best", 4=>"Good", 3=>"Normal", 2=>"Bad", 1=>"Worst", _=>"?" };
     let scn_s = match sid {
@@ -1807,9 +1809,11 @@ unsafe fn read_summary_inner() -> String {
         }
     }
 
+    // ★ state field removed: get_State() doesn't exist on WorkSingleModeCharaData
+    // Health condition is now detected via chara_effect_ids (top-level array)
     format!(
-        r#"{{"version":"3.14.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{},"state":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{}}}"#,
-        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, state, tr_json, sc_json, ev_json, tl_json, buff_json
+        r#"{{"version":"3.14.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}]}}"#,
+        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(",")
     )
 }
 
