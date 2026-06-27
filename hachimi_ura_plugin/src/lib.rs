@@ -1,4 +1,4 @@
-//! URA Plugin v3.13.0
+//! URA Plugin v3.14.0
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
 //! ★ v3.13.0: Add all training runtime fields to /summary via HomeInfoData path (all scenarios)
 //! ★ v3.12.0: Add gui_ui_text_edit_singleline for config input fields (Push Host/Port)
@@ -1461,7 +1461,14 @@ fn breeders_buff_desc(group_type: i32, level: i32) -> (&'static str, String) {
     }
 }
 
-unsafe fn read_summary() -> String {
+/// Safe wrapper: catches panics from read_summary_inner to prevent game crash
+fn read_summary() -> String {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unsafe { read_summary_inner() }
+    })).unwrap_or_else(|_| r#"{"error":"panic_caught","hint":"read_summary panicked, game protected"}"#.to_string())
+}
+
+unsafe fn read_summary_inner() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -1469,6 +1476,7 @@ unsafe fn read_summary() -> String {
     };
 
     // --- Chara stats ---
+    ura_log(3, "★ read_summary phase1: chara stats");
     let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
@@ -1507,6 +1515,7 @@ unsafe fn read_summary() -> String {
     };
 
     // --- Training data via HomeInfoData (ALL scenarios) ---
+    ura_log(3, "★ read_summary phase2: training data");
     let mut tr_json = "[]".to_string();
     let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
     if !home_info_obj.is_null() {
@@ -1600,6 +1609,7 @@ unsafe fn read_summary() -> String {
     }
 
     // --- Support cards (graceful fallback) ---
+    ura_log(3, "★ read_summary phase3: support cards");
     let mut sc_json = "[]".to_string();
     let sc_arr = read_field_value(chara_class, chara_obj, "support_card_array");
     if sc_arr.is_null() {
@@ -1649,6 +1659,7 @@ unsafe fn read_summary() -> String {
     }
 
     // --- Evaluation info (graceful fallback) ---
+    ura_log(3, "★ read_summary phase4: evaluation");
     let mut ev_json = "[]".to_string();
     let ev_arr = read_field_value(chara_class, chara_obj, "evaluation_info_array");
     if ev_arr.is_null() {
@@ -1695,6 +1706,7 @@ unsafe fn read_summary() -> String {
     }
 
     // --- Training levels (graceful fallback) ---
+    ura_log(3, "★ read_summary phase5: training_levels");
     let mut tl_json = "[]".to_string();
     let tl_arr = read_field_value(chara_class, chara_obj, "training_level_info_array");
     if tl_arr.is_null() {
@@ -1739,6 +1751,7 @@ unsafe fn read_summary() -> String {
     }
 
     // --- Buffs (Breeders enhance groups, keep existing logic) ---
+    ura_log(3, "★ read_summary phase6: buffs");
     let mut buff_json = "[]".to_string();
     let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
     if !scenario_obj.is_null() {
@@ -1792,7 +1805,7 @@ unsafe fn read_summary() -> String {
     }
 
     format!(
-        r#"{{"version":"3.13.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{},"state":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{}}}"#,
+        r#"{{"version":"3.14.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{},"state":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, state, tr_json, sc_json, ev_json, tl_json, buff_json
     )
 }
@@ -1847,12 +1860,24 @@ fn push_loop() {
     let interval = std::time::Duration::from_secs(unsafe { get_config() }.push_interval_secs.max(1));
 
     // ★ Initial push: try pushing current data on startup
-    // Wait for game to be ready, then push immediately
-    for _ in 0..30 {
+    // Don't rely solely on GAME_INITIALIZED callback — it may never fire
+    // if the game was already initialized before the plugin loaded.
+    // Instead, try reading data; if it succeeds, the game is ready.
+    for wait_round in 0..60 {
         if GAME_INITIALIZED.load(Ordering::Relaxed) { break; }
+        // Try a probe read — if it doesn't error, game is ready
+        let probe = read_summary();
+        if !probe.contains("\"error\"") {
+            GAME_INITIALIZED.store(true, Ordering::Relaxed);
+            unsafe { ura_log(3, "Push: game detected via probe (no callback)"); }
+            break;
+        }
+        if wait_round % 10 == 0 {
+            unsafe { ura_log(3, &format!("Push: waiting for game... round={}", wait_round)); }
+        }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
-    let init_summary = unsafe { read_summary() };
+    let init_summary = read_summary();
     if !init_summary.contains("\"error\"") {
         unsafe { LAST_PUSH_HASH = simple_hash(&init_summary); }
         push_to_app(&init_summary);
@@ -1861,12 +1886,15 @@ fn push_loop() {
 
     loop {
         std::thread::sleep(interval);
-        if !GAME_INITIALIZED.load(Ordering::Relaxed) {
-            continue;
-        }
-        let summary = unsafe { read_summary() };
+        // Don't gate on GAME_INITIALIZED — just try reading;
+        // if the game isn't ready, read_summary returns error and we skip.
+        let summary = read_summary();
         if summary.contains("\"error\"") {
             continue;
+        }
+        // If we got here, game is definitely ready
+        if !GAME_INITIALIZED.load(Ordering::Relaxed) {
+            GAME_INITIALIZED.store(true, Ordering::Relaxed);
         }
         let hash = simple_hash(&summary);
         let should_push = unsafe {
@@ -1942,7 +1970,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.13.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.14.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -2001,7 +2029,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             }
         }
     } else if path == "/summary" {
-        unsafe { read_summary() }
+        read_summary()
     } else if path == "/scenario" {
         let result = unsafe { read_scenario_detail() };
         unsafe { log_snapshot("scenario", &result); }
@@ -2080,7 +2108,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.13.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.14.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -2285,7 +2313,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.13.0 loaded (scenario data + export)");
+    ura_log(3, "URA plugin v3.14.0 loaded (panic protection + probe init)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr("URA v3.7.8 Loaded!").as_ptr());
