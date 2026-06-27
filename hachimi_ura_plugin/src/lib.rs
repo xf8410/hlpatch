@@ -96,9 +96,9 @@ impl PluginConfig {
                 let v = v.trim().trim_matches('"');
                 match k {
                     "push_host" => { cfg.push_host = v.to_string(); changed = true; }
-                    "push_port" => if let Ok(n: u16) = v.parse() { cfg.push_port = n; changed = true; }
-                    "http_port" => if let Ok(n: u16) = v.parse() { cfg.http_port = n; changed = true; }
-                    "push_interval_secs" => if let Ok(n: u64) = v.parse() { cfg.push_interval_secs = n.max(1); changed = true; }
+                    "push_port" => if let Ok(n) = v.parse::<u16>() { cfg.push_port = n; changed = true; }
+                    "http_port" => if let Ok(n) = v.parse::<u16>() { cfg.http_port = n; changed = true; }
+                    "push_interval_secs" => if let Ok(n) = v.parse::<u64>() { cfg.push_interval_secs = n.max(1); changed = true; }
                     "push_enabled" => { cfg.push_enabled = v == "true"; changed = true; }
                     "http_enabled" => { cfg.http_enabled = v == "true"; changed = true; }
                     _ => {}
