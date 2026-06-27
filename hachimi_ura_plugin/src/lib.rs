@@ -725,18 +725,18 @@ unsafe fn read_scenario_detail() -> String {
                                             let p_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(0x20 + j * 8) as *const *mut c_void);
                                             if p_elem.is_null() { continue; }
                                             // ★ Breeders: always plain Int32 (SingleModeParamsIncDecInfo)
-                                            // TargetType = ParameterType枚举 (dump.cs行570927):
-                                            //   0=None, 1=Speed, 2=Stamina, 3=Power, 4=Guts, 5=Wiz
+                                            // TargetType 实测映射（与dump.cs ParameterType枚举不同！）：
+                                            //   枚举定义3=Power 4=Guts，但target_type字段实际3=Guts 4=Power
+                                            //   验证：Stamina训练(TT3)加Guts，Power训练(TT4)加Power
+                                            //   0=None, 1=Speed, 2=Stamina, 3=Guts, 4=Power, 5=Wiz
                                             //   10=HP, 20=Motivation, 30=SkillPt
-                                            // 注：数据中Stamina训练出现TT3(wiki说加Guts)，
-                                            //     可能CY做了内部转换，但枚举定义3=Power是权威
                                             let bytes = p_elem as *const u8;
                                             let t = std::ptr::read_unaligned::<i32>(bytes.add(0x10) as *const i32);
                                             let v = std::ptr::read_unaligned::<i32>(bytes.add(0x14) as *const i32);
                                             let (tt, val) = (t, v);
                                             let tt_name = match tt {
                                                 0 => "None", 1 => "Speed", 2 => "Stamina",
-                                                3 => "Power", 4 => "Guts", 5 => "Wiz",
+                                                3 => "Guts", 4 => "Power", 5 => "Wiz",
                                                 6 => "Unknown6", 10 => "HP", 20 => "Motivation",
                                                 30 => "SkillPt",
                                                 _ => "Unknown"
@@ -1351,7 +1351,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.8.6","fix":"3Power_4Guts_per_ParameterType_enum","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.8.7","fix":"3Guts_4Power_per_actual_data","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
