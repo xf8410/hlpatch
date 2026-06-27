@@ -1,5 +1,6 @@
-//! URA Plugin v3.15.1
-//! ★ v3.15.1: AI evaluation — score, training recommendation, rest/outgoing evaluation
+//! URA Plugin v3.15.2
+//! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
+//! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
 //! ★ v3.13.0: Add all training runtime fields to /summary via HomeInfoData path (all scenarios)
 //! ★ v3.12.0: Add gui_ui_text_edit_singleline for config input fields (Push Host/Port)
@@ -22,6 +23,7 @@
 use std::ffi::{c_char, c_void, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 #[repr(i32)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -52,6 +54,8 @@ struct Api {
 static mut API: *const Api = ptr::null();
 static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
+// ★ Mutex to prevent concurrent read_summary_inner calls from HTTP + push threads
+static READ_MUTEX: Mutex<()> = Mutex::new(());
 
 // ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
 static mut LAST_PUSH_HASH: u64 = 0;
@@ -308,7 +312,7 @@ unsafe fn read_field_value(class: *mut c_void, obj: *const c_void, field_name: &
     if field_info.is_null() { return ptr::null_mut(); }
     let mut value: *mut c_void = ptr::null_mut();
     match (*API).il2cpp_get_field_value_fn {
-        Some(f) => f(field_info, obj, &mut value as *mut _ as *mut c_void),
+        Some(f) => f(obj, field_info, &mut value as *mut _ as *mut c_void),
         None => return ptr::null_mut(),
     };
     value
@@ -1890,6 +1894,8 @@ fn ai_result_to_json(r: &AiResult) -> String {
 }
 
 fn read_summary() -> String {
+    // ★ v3.15.2: Mutex lock prevents concurrent il2cpp reads from HTTP + push threads
+    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unsafe { read_summary_inner() }
     })).unwrap_or_else(|_| r#"{"error":"panic_caught","hint":"read_summary panicked, game protected"}"#.to_string())
@@ -2284,7 +2290,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.15.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}}}"#,
+        r#"{{"version":"3.15.2","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json
     )
 }
@@ -2458,7 +2464,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.15.1","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.15.2","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -2801,10 +2807,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.15.1 loaded (AI eval + single-pass training read)");
+    ura_log(3, "URA plugin v3.15.2 loaded (AI eval + single-pass training read)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.15.1 Loaded!").as_ptr());
+        f(to_cstr("URA v3.15.2 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
