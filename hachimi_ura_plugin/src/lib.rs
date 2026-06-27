@@ -1,1506 +1,393 @@
-//! URA Plugin v3.14.2
-//! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
-//! ★ v3.13.0: Add all training runtime fields to /summary via HomeInfoData path (all scenarios)
-//! ★ v3.12.0: Add gui_ui_text_edit_singleline for config input fields (Push Host/Port)
-//! ★ v3.8.7: TargetType 3=Guts,4=Power (实测); CommandId→name mapping
-//! ★ v3.8.1: Fix crash — safe class name detection via il2cpp_class_get_name
-//! ★ v3.7.8: Fix crash from null namespace ptr + expand ParamsIncDecInfoArray (TargetType+Value)
-//! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
-//! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
-//! which return plain Int32 after decryption
-//!
-//! Data path: WorkDataManager (Singleton) -> get_SingleMode() -> WorkSingleModeData
-//!            WorkSingleModeData -> get_Character() -> WorkSingleModeCharaData
-//!            WorkSingleModeCharaData -> get_Speed(), get_Stamina(), get_Hp(), etc.
-//!
-//! Motivation enum: 1=Worst, 2=Bad, 3=Normal, 4=Good, 5=Best
-//! ObscuredInt getters: get_SkillPoint() returns ObscuredInt (boxed) - needs special handling
-
-#![allow(dead_code)]
-
-use std::ffi::{c_char, c_void, CString};
-use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-#[repr(i32)]
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum InitResult { Error = 0, Ok = 1 }
-
-struct Api {
-    log_fn: Option<unsafe extern "C" fn(i32, *const c_char, *const c_char)>,
-    gui_show_notification_fn: Option<unsafe extern "C" fn(*const c_char) -> bool>,
-    gui_register_menu_item_fn: Option<unsafe extern "C" fn(*const c_char, Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool>,
-    gui_register_menu_section_fn: Option<unsafe extern "C" fn(Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool>,
-    hachimi_register_on_game_initialized_fn: Option<unsafe extern "C" fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool>,
-    gui_ui_heading_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> bool>,
-    gui_ui_label_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> bool>,
-    gui_ui_colored_label_fn: Option<unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool>,
-    gui_ui_separator_fn: Option<unsafe extern "C" fn(*mut c_void) -> bool>,
-    gui_ui_text_edit_singleline_fn: Option<unsafe extern "C" fn(*mut c_void, *mut c_char, i32) -> bool>,
-    il2cpp_get_assembly_image_fn: Option<unsafe extern "C" fn(*const c_char) -> *const c_void>,
-    il2cpp_get_class_fn: Option<unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) -> *mut c_void>,
-    il2cpp_get_field_from_name_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void>,
-    il2cpp_get_field_value_fn: Option<unsafe extern "C" fn(*const c_void, *const c_void, *mut c_void)>,
-    il2cpp_get_static_field_value_fn: Option<unsafe extern "C" fn(*const c_void, *mut c_void)>,
-    il2cpp_resolve_symbol_fn: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
-    il2cpp_get_singleton_like_instance_fn: Option<unsafe extern "C" fn(*mut c_void) -> *const c_void>,
-    il2cpp_string_chars_fn: Option<unsafe extern "C" fn(*const c_void) -> *mut u16>,
-    il2cpp_string_length_fn: Option<unsafe extern "C" fn(*const c_void) -> i32>,
-}
-
-static mut API: *const Api = ptr::null();
-static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
-
-// ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
-static mut LAST_PUSH_HASH: u64 = 0;
-static PUSH_INTERVAL_SECS: u64 = 1;
-
-// ★ Config (v3.11.0): runtime config updated via POST /config from App
-// No file editing needed — App settings page sends config to plugin HTTP endpoint
-#[derive(Clone)]
-struct PluginConfig {
-    push_host: String,      // default: "127.0.0.1"
-    push_port: u16,         // default: 18766
-    http_port: u16,         // default: 18765
-    push_interval_secs: u64, // default: 1
-    push_enabled: bool,     // default: true
-    http_enabled: bool,     // default: true
-}
-
-impl PluginConfig {
-    fn defaults() -> Self {
-        Self {
-            push_host: "127.0.0.1".to_string(),
-            push_port: 18766,
-            http_port: 18765,
-            push_interval_secs: 1,
-            push_enabled: true,
-            http_enabled: true,
-        }
-    }
-
-    fn push_addr(&self) -> String {
-        format!("{}:{}", self.push_host, self.push_port)
-    }
-
-    // Parse JSON config from POST /config body (simple manual parse, no serde)
-    fn from_json(data: &str) -> Option<Self> {
-        let mut cfg = Self::defaults();
-        let mut changed = false;
-        // Extract key-value pairs from JSON
-        for line in data.lines() {
-            let l = line.trim().trim_end_matches(',');
-            if l.is_empty() || l == "{" || l == "}" { continue; }
-            if let Some((k, v)) = l.split_once(':') {
-                let k = k.trim().trim_matches('"');
-                let v = v.trim().trim_matches('"');
-                match k {
-                    "push_host" => { cfg.push_host = v.to_string(); changed = true; }
-                    "push_port" => if let Ok(n) = v.parse::<u16>() { cfg.push_port = n; changed = true; }
-                    "http_port" => if let Ok(n) = v.parse::<u16>() { cfg.http_port = n; changed = true; }
-                    "push_interval_secs" => if let Ok(n) = v.parse::<u64>() { cfg.push_interval_secs = n.max(1); changed = true; }
-                    "push_enabled" => { cfg.push_enabled = v == "true"; changed = true; }
-                    "http_enabled" => { cfg.http_enabled = v == "true"; changed = true; }
-                    _ => {}
-                }
-            }
-        }
-        if changed { Some(cfg) } else { None }
-    }
-
-    fn to_json(&self) -> String {
-        format!(
-            r#"{{"push_host":"{}","push_port":{},"http_port":{},"push_interval_secs":{},"push_enabled":{},"http_enabled":{}}}"#,
-            self.push_host, self.push_port, self.http_port,
-            self.push_interval_secs, self.push_enabled, self.http_enabled
-        )
-    }
-}
-
-static mut PLUGIN_CONFIG: Option<PluginConfig> = None;
-
-// ★ Text edit buffers for GUI config (v3.12.0): persist across frames for egui immediate mode
-static mut GUI_HOST_BUF: [u8; 64] = [0u8; 64];  // push_host input buffer
-static mut GUI_HOST_BUF_LEN: i32 = 0;
-static mut GUI_PORT_BUF: [u8; 8] = [0u8; 8];    // push_port input buffer
-static mut GUI_PORT_BUF_LEN: i32 = 0;
-
-unsafe fn get_config() -> &'static PluginConfig {
-    if PLUGIN_CONFIG.is_none() {
-        PLUGIN_CONFIG = Some(PluginConfig::defaults());
-    }
-    PLUGIN_CONFIG.as_ref().unwrap()
-}
-
-unsafe fn update_config(new_cfg: PluginConfig) {
-    PLUGIN_CONFIG = Some(new_cfg);
-}
-
-// ★ Training log (v3.7.9): auto-record snapshots from /data and /scenario
-const MAX_LOG_ENTRIES: usize = 30;
-static mut TRAINING_LOG: Vec<String> = Vec::new();
-
-unsafe fn log_snapshot(source: &str, data: &str) {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let entry = format!(r#"{{"ts":{},"src":"{}","data":{}}}"#, ts, source, data);
-    if TRAINING_LOG.len() >= MAX_LOG_ENTRIES {
-        TRAINING_LOG.remove(0);
-    }
-    TRAINING_LOG.push(entry);
-}
-
-unsafe fn get_training_log() -> String {
-    if TRAINING_LOG.is_empty() {
-        return r#"{"entries":0,"log":[]}"#.to_string();
-    }
-    format!(r#"{{"entries":{},"log":[{}]}}"#, TRAINING_LOG.len(), TRAINING_LOG.join(","))
-}
-
-#[derive(Copy, Clone)]
-struct CharaCache {
-    speed: i32, stamina: i32, power: i32, guts: i32, wiz: i32,
-    vital: i32, max_vital: i32, motivation: i32, turn: i32,
-    skill_point: i32, scenario_id: i32, fan_count: i32,
-    month: i32, half: i32,
-    playing_state: i32, is_playing: bool,
-    valid: bool,
-}
-
-static mut CHARA: CharaCache = CharaCache {
-    speed: 0, stamina: 0, power: 0, wiz: 0, guts: 0,
-    vital: 0, max_vital: 0, motivation: 0, turn: 0,
-    skill_point: 0, scenario_id: 0, fan_count: 0,
-    month: 0, half: 0,
-    playing_state: 0, is_playing: false,
-    valid: false,
-};
-
-fn to_cstr(s: &str) -> CString {
-    CString::new(s).unwrap_or_else(|_| CString::new("<err>").unwrap())
-}
-
-unsafe fn ura_log(level: i32, msg: &str) {
-    if API.is_null() { return; }
-    if let Some(log_fn) = (*API).log_fn {
-        let tag = to_cstr("URA");
-        let text = to_cstr(msg);
-        log_fn(level, tag.as_ptr(), text.as_ptr());
-    }
-}
-
-unsafe fn ura_notify(msg: &str) {
-    if API.is_null() { return; }
-    if let Some(notify_fn) = (*API).gui_show_notification_fn {
-        let text = to_cstr(msg);
-        notify_fn(text.as_ptr());
-    }
-}
-
 // ============================================================
-// IL2CPP Helpers
+// ★ AI Evaluation (v3.15.0) — Handwritten evaluation logic
+// Ported from UmaAi HandwrittenLogic.cpp + GameConstants.cpp
+// Provides: current score, training recommendation, rest/outgoing evaluation
 // ============================================================
 
-unsafe fn get_image() -> *const c_void {
-    if API.is_null() { return ptr::null(); }
-    match (*API).il2cpp_get_assembly_image_fn {
-        Some(fn_ptr) => {
-            let name = to_cstr("umamusume.dll");
-            let img = fn_ptr(name.as_ptr());
-            if img.is_null() {
-                ura_log(1, "get_image: umamusume.dll image = null");
-            }
-            img
-        }
-        None => { ura_log(1, "get_image: no get_assembly_image_fn"); ptr::null() }
+/// FiveStatusFinalScore lookup table (2801 values, index 0-2800)
+/// Maps total revised stats → evaluation score
+/// Source: hzyhhzy/UmaAi GameConstants.cpp
+const FIVE_STATUS_FINAL_SCORE: [i32; 2801] = [
+0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,
+    10,11,11,12,12,13,13,14,14,15,15,16,16,17,17,18,18,19,19,20,
+    20,21,21,22,22,23,23,24,24,25,25,26,27,28,29,29,30,31,32,33,
+    33,34,35,36,37,37,38,39,40,41,41,42,43,44,45,45,46,47,48,49,
+    49,50,51,52,53,53,54,55,56,57,57,58,59,60,61,61,62,63,64,65,
+    66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,
+    86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,
+    106,107,108,109,110,111,112,113,114,115,116,117,118,120,121,122,124,125,126,128,
+    129,130,131,133,134,135,137,138,139,141,142,143,144,146,147,148,150,151,152,154,
+    155,156,157,159,160,161,163,164,165,167,168,169,170,172,173,174,176,177,178,180,
+    181,183,184,186,188,189,191,192,194,196,197,199,200,202,204,205,207,208,210,212,
+    213,215,216,218,220,221,223,224,226,228,229,231,232,234,236,237,239,240,242,244,
+    245,247,248,250,252,253,255,256,258,260,261,263,265,267,269,270,272,274,276,278,
+    279,281,283,285,287,288,290,292,294,296,297,299,301,303,305,306,308,310,312,314,
+    315,317,319,321,323,324,326,328,330,332,333,335,337,339,341,342,344,346,348,350,
+    352,354,356,358,360,362,364,366,368,371,373,375,377,379,381,383,385,387,389,392,
+    394,396,398,400,402,404,406,408,410,413,415,417,419,421,423,425,427,429,431,434,
+    436,438,440,442,444,446,448,450,452,455,457,459,462,464,467,469,471,474,476,479,
+    481,483,486,488,491,493,495,498,500,503,505,507,510,512,515,517,519,522,524,527,
+    529,531,534,536,539,541,543,546,548,551,553,555,558,560,563,565,567,570,572,575,
+    577,580,582,585,588,590,593,595,598,601,603,606,608,611,614,616,619,621,624,627,
+    629,632,634,637,640,642,645,647,650,653,655,658,660,663,666,668,671,673,676,679,
+    681,684,686,689,692,694,697,699,702,705,707,710,713,716,719,721,724,727,730,733,
+    735,738,741,744,747,749,752,755,758,761,763,766,769,772,775,777,780,783,786,789,
+    791,794,797,800,803,805,808,811,814,817,819,822,825,828,831,833,836,839,842,845,
+    847,850,853,856,859,862,865,868,871,874,876,879,882,885,888,891,894,897,900,903,
+    905,908,911,914,917,920,923,926,929,932,934,937,940,943,946,949,952,955,958,961,
+    963,966,969,972,975,978,981,984,987,990,993,996,999,1002,1005,1008,1011,1014,1017,1020,
+    1023,1026,1029,1032,1035,1038,1041,1044,1047,1050,1053,1056,1059,1062,1065,1068,1071,1074,1077,1080,
+    1083,1086,1089,1092,1095,1098,1101,1104,1107,1110,1113,1116,1119,1122,1125,1128,1131,1134,1137,1140,
+    1143,1146,1149,1152,1155,1158,1161,1164,1167,1171,1174,1177,1180,1183,1186,1189,1192,1195,1198,1202,
+    1205,1208,1211,1214,1217,1220,1223,1226,1229,1233,1236,1239,1242,1245,1248,1251,1254,1257,1260,1264,
+    1267,1270,1273,1276,1279,1282,1285,1288,1291,1295,1298,1301,1304,1308,1311,1314,1318,1321,1324,1328,
+    1331,1334,1337,1341,1344,1347,1351,1354,1357,1361,1364,1367,1370,1374,1377,1380,1384,1387,1390,1394,
+    1397,1400,1403,1407,1410,1413,1417,1420,1423,1427,1430,1433,1436,1440,1443,1446,1450,1453,1456,1460,
+    1463,1466,1470,1473,1477,1480,1483,1487,1490,1494,1497,1500,1504,1507,1511,1514,1517,1521,1524,1528,
+    1531,1534,1538,1541,1545,1548,1551,1555,1558,1562,1565,1568,1572,1575,1579,1582,1585,1589,1592,1596,
+    1599,1602,1606,1609,1613,1616,1619,1623,1626,1630,1633,1637,1640,1644,1647,1651,1654,1658,1661,1665,
+    1668,1672,1675,1679,1682,1686,1689,1693,1696,1700,1703,1707,1710,1714,1717,1721,1724,1728,1731,1735,
+    1738,1742,1745,1749,1752,1756,1759,1763,1766,1770,1773,1777,1780,1784,1787,1791,1794,1798,1801,1805,
+    1808,1812,1816,1820,1824,1828,1832,1836,1840,1844,1847,1851,1855,1859,1863,1867,1871,1875,1879,1883,
+    1886,1890,1894,1898,1902,1906,1910,1914,1918,1922,1925,1929,1933,1937,1941,1945,1949,1953,1957,1961,
+    1964,1968,1972,1976,1980,1984,1988,1992,1996,2000,2004,2008,2012,2016,2020,2024,2028,2032,2036,2041,
+    2045,2049,2053,2057,2061,2065,2069,2073,2077,2082,2086,2090,2094,2098,2102,2106,2110,2114,2118,2123,
+    2127,2131,2135,2139,2143,2147,2151,2155,2159,2164,2168,2172,2176,2180,2184,2188,2192,2196,2200,2205,
+    2209,2213,2217,2221,2226,2230,2234,2238,2242,2247,2251,2255,2259,2263,2268,2272,2276,2280,2284,2289,
+    2293,2297,2301,2305,2310,2314,2318,2322,2326,2331,2335,2339,2343,2347,2352,2356,2360,2364,2368,2373,
+    2377,2381,2385,2389,2394,2398,2402,2406,2410,2415,2419,2423,2427,2432,2436,2440,2445,2449,2453,2458,
+    2462,2466,2470,2475,2479,2483,2488,2492,2496,2501,2505,2509,2513,2518,2522,2526,2531,2535,2539,2544,
+    2548,2552,2556,2561,2565,2569,2574,2578,2582,2587,2591,2595,2599,2604,2608,2612,2617,2621,2625,2630,
+    2635,2640,2645,2650,2656,2661,2666,2671,2676,2682,2687,2692,2697,2702,2708,2713,2718,2723,2728,2734,
+    2739,2744,2749,2754,2760,2765,2770,2775,2780,2786,2791,2796,2801,2806,2812,2817,2822,2827,2832,2838,
+    2843,2848,2853,2858,2864,2869,2874,2879,2884,2890,2895,2901,2906,2912,2917,2923,2928,2934,2939,2945,
+    2950,2956,2961,2967,2972,2978,2983,2989,2994,3000,3005,3011,3016,3022,3027,3033,3038,3044,3049,3055,
+    3060,3066,3071,3077,3082,3088,3093,3099,3104,3110,3115,3121,3126,3132,3137,3143,3148,3154,3159,3165,
+    3171,3178,3184,3191,3198,3204,3211,3217,3224,3231,3237,3244,3250,3257,3264,3270,3277,3283,3290,3297,
+    3303,3310,3316,3323,3330,3336,3343,3349,3356,3363,3369,3376,3382,3389,3396,3402,3409,3415,3422,3429,
+    3435,3442,3448,3455,3462,3468,3475,3481,3488,3495,3501,3508,3515,3522,3529,3535,3542,3549,3556,3563,
+    3569,3576,3583,3590,3597,3603,3610,3617,3624,3631,3637,3644,3651,3658,3665,3671,3678,3685,3692,3699,
+    3705,3712,3719,3726,3733,3739,3746,3753,3760,3767,3773,3780,3787,3794,3801,3807,3814,3821,3828,3835,
+    3841,3841,3849,3849,3857,3857,3865,3865,3873,3873,3881,3881,3889,3889,3897,3897,3905,3905,3912,3912,
+    3920,3920,3928,3928,3936,3936,3944,3944,3952,3952,3960,3960,3968,3968,3976,3976,3984,3984,3992,3992,
+    4001,4001,4009,4009,4017,4017,4025,4025,4033,4033,4041,4041,4049,4049,4057,4057,4065,4065,4073,4073,
+    4082,4082,4090,4090,4098,4098,4107,4107,4115,4115,4123,4123,4132,4132,4140,4140,4148,4148,4156,4156,
+    4165,4165,4173,4173,4182,4182,4190,4190,4198,4198,4207,4207,4215,4215,4224,4224,4232,4232,4240,4240,
+    4249,4249,4257,4257,4266,4266,4274,4274,4283,4283,4291,4291,4300,4300,4308,4308,4317,4317,4325,4325,
+    4334,4334,4343,4343,4351,4351,4360,4360,4368,4368,4377,4377,4386,4386,4394,4394,4403,4403,4411,4411,
+    4420,4420,4429,4429,4438,4438,4447,4447,4455,4455,4464,4464,4473,4473,4482,4482,4491,4491,4499,4499,
+    4508,4508,4517,4517,4526,4526,4535,4535,4544,4544,4553,4553,4562,4562,4571,4571,4580,4580,4588,4588,
+    4597,4597,4606,4606,4615,4615,4624,4624,4633,4633,4642,4642,4651,4651,4660,4660,4669,4669,4678,4678,
+    4688,4688,4697,4697,4706,4706,4715,4715,4724,4724,4734,4734,4743,4743,4752,4752,4761,4761,4770,4770,
+    4780,4780,4789,4789,4798,4798,4808,4808,4817,4817,4826,4826,4836,4836,4845,4845,4854,4854,4863,4863,
+    4873,4873,4882,4882,4892,4892,4901,4901,4910,4910,4920,4920,4929,4929,4939,4939,4948,4948,4957,4957,
+    4967,4967,4977,4977,4986,4986,4996,4996,5005,5005,5015,5015,5025,5025,5034,5034,5044,5044,5053,5053,
+    5063,5063,5073,5073,5083,5083,5092,5092,5102,5102,5112,5112,5121,5121,5131,5131,5141,5141,5150,5150,
+    5160,5160,5170,5170,5180,5180,5190,5190,5199,5199,5209,5209,5219,5219,5229,5229,5239,5239,5248,5248,
+    5258,5258,5268,5268,5278,5278,5288,5288,5298,5298,5308,5308,5318,5318,5328,5328,5338,5338,5348,5348,
+    5359,5359,5369,5369,5379,5379,5389,5389,5399,5399,5409,5409,5419,5419,5429,5429,5439,5439,5449,5449,
+    5460,5460,5470,5470,5480,5480,5490,5490,5500,5500,5511,5511,5521,5521,5531,5531,5541,5541,5551,5551,
+    5562,5562,5572,5572,5582,5582,5593,5593,5603,5603,5613,5613,5624,5624,5634,5634,5644,5644,5654,5654,
+    5665,5665,5675,5675,5686,5686,5696,5696,5707,5707,5717,5717,5728,5728,5738,5738,5749,5749,5759,5759,
+    5770,5770,5781,5781,5791,5791,5802,5802,5812,5812,5823,5823,5834,5834,5844,5844,5855,5855,5865,5865,
+    5876,5876,5887,5887,5898,5898,5908,5908,5919,5919,5930,5930,5940,5940,5951,5951,5962,5962,5972,5972,
+    5983,5983,5994,5994,6005,6005,6016,6016,6027,6027,6038,6038,6049,6049,6060,6060,6071,6071,6081,6081,
+    6092,6092,6103,6103,6114,6114,6125,6125,6136,6136,6147,6147,6158,6158,6169,6169,6180,6180,6191,6191,
+    6203,6203,6214,6214,6225,6225,6236,6236,6247,6247,6258,6258,6269,6269,6280,6280,6291,6291,6302,6302,
+    6314,6314,6325,6325,6336,6336,6348,6348,6359,6359,6370,6370,6382,6382,6393,6393,6404,6404,6415,6415,
+    6427,6427,6438,6438,6450,6450,6461,6461,6472,6472,6484,6484,6495,6495,6507,6507,6518,6518,6529,6529,
+    6541,6541,6552,6552,6564,6564,6575,6575,6587,6587,6598,6598,6610,6610,6621,6621,6633,6633,6644,6644,
+    6656,6656,6668,6668,6680,6680,6691,6691,6703,6703,6715,6715,6726,6726,6738,6738,6750,6750,6761,6761,
+    6773,6773,6785,6785,6797,6797,6809,6809,6820,6820,6832,6832,6844,6844,6856,6856,6868,6868,6879,6879,
+    6891,6891,6903,6903,6915,6915,6927,6927,6939,6939,6951,6951,6963,6963,6975,6975,6987,6987,6998,6998,
+    7011,7011,7023,7023,7035,7035,7047,7047,7059,7059,7071,7071,7083,7083,7095,7095,7107,7107,7119,7119,
+    7132,7132,7144,7144,7156,7156,7168,7168,7180,7180,7193,7193,7205,7205,7217,7217,7229,7229,7241,7241,
+    7254,7254,7266,7266,7278,7278,7291,7291,7303,7303,7315,7315,7328,7328,7340,7340,7352,7352,7364,7364,
+    7377,7377,7389,7389,7402,7402,7414,7414,7426,7426,7439,7439,7451,7451,7464,7464,7476,7476,7488,7488,
+    7501,7501,7514,7514,7526,7526,7539,7539,7551,7551,7564,7564,7577,7577,7589,7589,7602,7602,7614,7614,
+    7627,7627,7640,7640,7653,7653,7665,7665,7678,7678,7691,7691,7703,7703,7716,7716,7729,7729,7741,7741,
+    7754,7754,7767,7767,7780,7780,7793,7793,7805,7805,7818,7818,7831,7831,7844,7844,7857,7857,7869,7869,
+    7882,7882,7895,7895,7908,7908,7921,7921,7934,7934,7947,7947,7960,7960,7973,7973,7986,7986,7999,7999,
+    8013,8013,8026,8026,8039,8039,8052,8052,8065,8065,8078,8078,8091,8091,8104,8104,8117,8117,8130,8130,
+    8144,8144,8157,8157,8170,8170,8183,8183,8196,8196,8210,8210,8223,8223,8236,8236,8249,8249,8262,8262,
+    8276,8276,8289,8289,8303,8303,8316,8316,8329,8329,8343,8343,8356,8356,8370,8370,8383,8383,8396,8396,
+    8410,8410,8423,8423,8437,8437,8450,8450,8464,8464,8477,8477,8491,8491,8504,8504,8518,8518,8531,8531,
+    8545,8545,8559,8559,8572,8572,8586,8586,8599,8599,8613,8613,8627,8627,8640,8640,8654,8654,8667,8667,
+    8681,8681,8695,8695,8709,8709,8723,8723,8736,8736,8750,8750,8764,8764,8778,8778,8792,8792,8805,8805,
+    8819,8819,8833,8833,8847,8847,8861,8861,8875,8875,8889,8889,8903,8903,8917,8917,8931,8931,8944,8944,
+    8958,8958,8972,8972,8986,8986,9000,9000,9014,9014,9028,9028,9042,9042,9056,9056,9070,9070,9084,9084,
+    9099,9099,9113,9113,9127,9127,9141,9141,9155,9155,9169,9169,9183,9183,9197,9197,9211,9211,9225,9225,
+    9240,9240,9254,9254,9268,9268,9283,9283,9297,9297,9311,9311,9326,9326,9340,9340,9354,9354,9368,9368,
+    9383,9383,9397,9397,9412,9412,9426,9426,9440,9440,9455,9455,9469,9469,9484,9484,9498,9498,9512,9512,
+    9527,9527,9541,9541,9556,9556,9570,9570,9585,9585,9599,9599,9614,9614,9628,9628,9643,9643,9657,9657,
+    9672,9672,9687,9687,9702,9702,9716,9716,9731,9731,9746,9746,9760,9760,9775,9775,9790,9790,9804,9804,
+    9819,9819,9834,9834,9849,9849,9864,9864,9878,9878,9893,9893,9908,9908,9923,9923,9938,9938,9952,9952,
+    9967,9967,9982,9982,9997,9997,10012,10012,10027,10027,10042,10042,10057,10057,10072,10072,10087,10087,10101,10101,
+    10117,10117,10132,10132,10147,10147,10162,10162,10177,10177,10192,10192,10207,10207,10222,10222,10237,10237,10252,10252,
+    10268,10268,10283,10283,10298,10298,10313,10313,10328,10328,10344,10344,10359,10359,10374,10374,10389,10389,10404,10404,
+    10420,10420,10435,10435,10450,10450,10466,10466,10481,10481,10496,10496,10512,10512,10527,10527,10542,10542,10557,10557,
+    10573,10573,10588,10588,10604,10604,10619,10619,10635,10635,10650,10650,10666,10666,10681,10681,10697,10697,10712,10712,
+    10728,10728,10744,10744,10759,10759,10775,10775,10790,10790,10806,10806,10822,10822,10837,10837,10853,10853,10868,10868,
+    10884,10884,10900,10900,10916,10916,10931,10931,10947,10947,10963,10963,10978,10978,10994,10994,11010,11010,11025,11025,
+    11041,11041,11057,11057,11073,11073,11089,11089,11105,11105,11121,11121,11137,11137,11153,11153,11169,11169,11184,11184,
+    11200,11200,11216,11216,11232,11232,11248,11248,11264,11264,11280,11280,11296,11296,11312,11312,11328,11328,11344,11344,
+    11361,11361,11377,11377,11393,11393,11409,11409,11425,11425,11441,11441,11457,11457,11473,11473,11489,11489,11505,11505,
+    11522,11522,11538,11538,11554,11554,11570,11570,11586,11586,11603,11603,11619,11619,11635,11635,11651,11651,11667,11667,
+    11684,11684,11700,11700,11717,11717,11733,11733,11749,11749,11766,11766,11782,11782,11799,11799,11815,11815,11831,11831,
+    11848,11848,11864,11864,11881,11881,11897,11897,11914,11914,11930,11930,11947,11947,11963,11963,11980,11980,11996,11996,
+    12013,12013,12030,12030,12046,12046,12063,12063,12079,12079,12096,12096,12113,12113,12129,12129,12146,12146,12162,12162,
+    12179,12179,12196,12196,12213,12213,12230,12230,12246,12246,12263,12263,12280,12280,12297,12297,12314,12314,12330,12330,
+    12347,12347,12364,12364,12381,12381,12398,12398,12415,12415,12432,12432,12449,12449,12466,12466,12483,12483,12499,12499,
+    12516,12516,12533,12533,12550,12550,12567,12567,12584,12584,12601,12601,12618,12618,12635,12635,12652,12652,12669,12669,
+    12687,12687,12704,12704,12721,12721,12738,12738,12755,12755,12773,12773,12790,12790,12807,12807,12824,12824,12841,12841,
+    12859,12859,12876,12876,12893,12893,12911,12911,12928,12928,12945,12945,12963,12963,12980,12980,12997,12997,13014,13014,
+    13032,13032,13049,13049,13067,13067,13084,13084,13101,13101,13119,13119,13136,13136,13154,13154,13171,13171,13188,13188,
+    13206,13206,13224,13224,13241,13241,13259,13259,13276,13276,13294,13294,13312,13312,13329,13329,13347,13347,13364,13364,
+    13382,13382,13400,13400,13418,13418,13435,13435,13453,13453,13471,13471,13488,13488,13506,13506,13524,13524,13541,13541,
+    13559,13559,13577,13577,13595,13595,13613,13613,13630,13630,13648,13648,13666,13666,13684,13684,13702,13702,13719,13719,
+    13737,13737,13755,13755,13773,13773,13791,13791,13809,13809,13827,13827,13845,13845,13863,13863,13881,13881,13898,13898,
+    13917,13917,13935,13935,13953,13953,13971,13971,13989,13989,14007,14007,14025,14025,14043,14043,14061,14061,14079,14079,
+    14098,14098,14116,14116,14134,14134,14152,14152,14170,14170,14189,14189,14207,14207,14225,14225,14243,14243,14261,14261,
+    14280
+];
+
+/// Basic five status upper limit (default, no chara-specific adjustments)
+/// [Speed, Stamina, Power, Guts, Wisdom]
+const BASIC_FIVE_STATUS_LIMIT: [i32; 5] = [2300, 2200, 1800, 1400, 1400];
+
+/// ReviseOver1200: stats above 1200 have diminishing returns
+/// x > 1200 → 2x - 1200, otherwise x
+fn revise_over_1200(x: i32) -> i32 {
+    if x > 1200 { x * 2 - 1200 } else { x }
+}
+
+/// Compute current evaluation score from five stats
+fn compute_score(speed: i32, stamina: i32, power: i32, guts: i32, wiz: i32) -> i32 {
+    let total = revise_over_1200(speed) + revise_over_1200(stamina)
+              + revise_over_1200(power) + revise_over_1200(guts)
+              + revise_over_1200(wiz);
+    if total < 0 { return 0; }
+    let idx = total as usize;
+    if idx >= FIVE_STATUS_FINAL_SCORE.len() { return FIVE_STATUS_FINAL_SCORE[FIVE_STATUS_FINAL_SCORE.len() - 1]; }
+    FIVE_STATUS_FINAL_SCORE[idx]
+}
+
+/// Soft constraint function for stat overflow control
+/// When stat gain would exceed remaining space, reduce its effective value
+fn status_soft_function(x: f64, reserve: f64) -> f64 {
+    if x >= 0.0 { return 0.0; }
+    if x > -reserve { return -x * x / (2.0 * reserve); }
+    x + 0.5 * reserve
+}
+
+/// Vital evaluation: low vital is very valuable, high vital less so
+/// ≤50: 2.0x, 50-70: 1.5x, 70+: 1.0x
+fn vital_evaluation(vital: i32, max_vital: i32) -> f64 {
+    let v = if vital > max_vital { max_vital } else { vital };
+    if v <= 50 {
+        2.0 * v as f64
+    } else if v <= 70 {
+        1.5 * (v - 50) as f64 + 100.0  // 2.0 * 50 = 100
+    } else {
+        1.0 * (v - 70) as f64 + 130.0   // 100 + 1.5*20 = 130
     }
 }
 
-unsafe fn find_class(image: *const c_void, ns: *const c_char, name: *const c_char) -> *mut c_void {
-    if image.is_null() || API.is_null() { return ptr::null_mut(); }
-    match (*API).il2cpp_get_class_fn {
-        Some(fn_ptr) => fn_ptr(image, ns, name),
-        None => ptr::null_mut(),
+/// Calculate max vital equivalent for vital evaluation
+/// Late game: less vital needed (fewer turns remain)
+fn calculate_max_vital_eq(turn: i32, max_vital: i32) -> i32 {
+    if turn >= 76 { return 0; }
+    if turn > 71 { return 10; }
+    if turn == 71 { return 30; }
+    // Assume max 6 non-race turns before URA
+    let non_race_turns = std::cmp::min(6, 71 - turn);
+    let eq = 30 + 15 * non_race_turns;
+    if eq > max_vital { max_vital } else { eq }
+}
+
+/// CommandId → training index (0=Speed, 1=Stamina, 2=Power, 3=Guts, 4=Wisdom)
+fn cmd_id_to_train_idx(cmd_id: i32) -> Option<usize> {
+    match cmd_id {
+        101 => Some(0), // Speed
+        102 => Some(1), // Stamina
+        105 => Some(2), // Power
+        103 => Some(3), // Guts
+        106 => Some(4), // Wisdom
+        _ => None,
     }
 }
 
-unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
-    let name_c = to_cstr(class_name);
-    // Try known namespaces first (fast path)
-    let ns_gallop = to_cstr("Gallop");
-    let ns_empty = to_cstr("");
-    for ns in [ns_gallop.as_ptr(), ns_empty.as_ptr()] {
-        let cls = find_class(image, ns, name_c.as_ptr());
-        if !cls.is_null() { return cls; }
-    }
-    // Fallback: iterate all classes to find by name (slow but handles any namespace)
-    find_class_by_iteration(image, class_name)
+/// AI evaluation result
+struct AiResult {
+    score: i32,           // Current evaluation score
+    total_stats: i32,     // Total revised stats
+    best_action: String,  // Recommended action name
+    best_value: f64,      // Best action value
+    train_values: Vec<(String, f64)>,  // Per-training values
+    rest_value: f64,      // Rest value
+    outgoing_value: f64,  // Outgoing value
 }
 
-/// Slow fallback: iterate all classes in the assembly to find one by name
-unsafe fn find_class_by_iteration(image: *const c_void, class_name: &str) -> *mut c_void {
-    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
-    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
-    if get_count_fn.is_null() || get_class_fn.is_null() { return ptr::null_mut(); }
-
-    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
-    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
-    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
-
-    let count = get_count(image);
-    for i in 0..count {
-        let cls = get_class(image, i);
-        if cls.is_null() { continue; }
-        if !get_name_fn.is_null() {
-            let get_name: FnClassGetName = std::mem::transmute(get_name_fn);
-            let name_ptr = get_name(cls);
-            if !name_ptr.is_null() {
-                let len = (0usize..).find(|&j| *name_ptr.add(j) == 0).unwrap_or(0);
-                let bytes = std::slice::from_raw_parts(name_ptr as *const u8, len);
-                if bytes == class_name.as_bytes() {
-                    return cls;
-                }
-            }
-        }
-    }
-    ptr::null_mut()
-}
-
-unsafe fn get_singleton(class: *mut c_void) -> *const c_void {
-    if class.is_null() || API.is_null() { return ptr::null(); }
-    match (*API).il2cpp_get_singleton_like_instance_fn {
-        Some(fn_ptr) => fn_ptr(class),
-        None => ptr::null(),
-    }
-}
-
-unsafe fn read_field_ptr(obj: *const c_void, class: *mut c_void, field_name: &str) -> *const c_void {
-    if obj.is_null() || class.is_null() || API.is_null() { return ptr::null(); }
-    let field = match (*API).il2cpp_get_field_from_name_fn {
-        Some(fn_ptr) => {
-            let name_c = to_cstr(field_name);
-            fn_ptr(class, name_c.as_ptr())
-        }
-        None => return ptr::null(),
-    };
-    if field.is_null() { return ptr::null(); }
-    let mut value: *const c_void = ptr::null();
-    match (*API).il2cpp_get_field_value_fn {
-        Some(fn_ptr) => fn_ptr(obj as *mut c_void, field, &mut value as *mut *const c_void as *mut c_void),
-        None => return ptr::null(),
-    }
-    value
-}
-
-
-// ★ Read a field value from an object by class + field name (returns *mut c_void)
-// Used for reading public fields (not getter properties) like CommandInfoArray
-unsafe fn read_field_value(class: *mut c_void, obj: *const c_void, field_name: &str) -> *mut c_void {
-    if class.is_null() || obj.is_null() || API.is_null() { return ptr::null_mut(); }
-    let field_info = match (*API).il2cpp_get_field_from_name_fn {
-        Some(f) => f(class, to_cstr(field_name).as_ptr()),
-        None => return ptr::null_mut(),
-    };
-    if field_info.is_null() { return ptr::null_mut(); }
-    let mut value: *mut c_void = ptr::null_mut();
-    match (*API).il2cpp_get_field_value_fn {
-        Some(f) => f(field_info, obj, &mut value as *mut _ as *mut c_void),
-        None => return ptr::null_mut(),
-    };
-    value
-}
-
-// ============================================================
-// IL2CPP Runtime API types
-// ============================================================
-
-type FnClassGetFields = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *mut Il2CppFieldInfo;
-type FnClassGetParent = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
-type FnClassGetName = unsafe extern "C" fn(*mut c_void) -> *const c_char;
-type FnClassGetMethodFromName = unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *const c_void;
-type FnRuntimeInvoke = unsafe extern "C" fn(*const c_void, *mut c_void, *mut *mut c_void, *mut *mut c_void) -> *mut c_void;
-type FnClassGetMethods = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void;
-type FnMethodGetName = unsafe extern "C" fn(*const c_void) -> *const c_char;
-type FnImageGetClassCount = unsafe extern "C" fn(*const c_void) -> u32;
-type FnImageGetClass = unsafe extern "C" fn(*const c_void, u32) -> *mut c_void;
-
-#[repr(C)]
-struct Il2CppFieldInfo {
-    name: *const c_char,
-    _ty: *const c_void,
-    parent: *mut c_void,
-    offset: i32,
-    _token: u32,
-}
-
-unsafe fn resolve_il2cpp_symbol(name: &str) -> *mut c_void {
-    if API.is_null() { return ptr::null_mut(); }
-    match (*API).il2cpp_resolve_symbol_fn {
-        Some(resolve) => {
-            let cname = to_cstr(name);
-            resolve(cname.as_ptr()) as *mut c_void
-        }
-        None => ptr::null_mut(),
-    }
-}
-
-// ============================================================
-// Call getter method via il2cpp_runtime_invoke
-// ============================================================
-
-unsafe fn call_getter_on_instance(
-    class: *mut c_void,
-    instance: *const c_void,
-    method_name: &str,
-) -> *mut c_void {
-    if class.is_null() || instance.is_null() {
-        return ptr::null_mut();
-    }
-
-    let get_method_fn: Option<FnClassGetMethodFromName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
-    };
-    let invoke_fn: Option<FnRuntimeInvoke> = {
-        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p)) }
+/// Run handwritten AI evaluation for current game state
+/// Input: all data from read_summary_inner
+fn evaluate_ai(
+    turn: i32,
+    stats: [i32; 5],     // [speed, stamina, power, guts, wiz]
+    vital: i32,
+    max_vital: i32,
+    motivation: i32,      // 1-5
+    scenario_id: i32,
+    // Per-training data: (command_id, [5 stat gains], skill_pt_gain, vital_cost, failure_rate, is_enable)
+    trainings: &[(i32, [i32; 5], i32, i32, i32, i32)],
+    // Buff effects
+    has_ai_jiao: bool,    // 愛嬌 buff
+    has_renshou_jouzu: bool, // 練習上手 buff
+) -> AiResult {
+    // Total turns per scenario
+    let total_turn: i32 = match scenario_id {
+        1 => 78,  // URA
+        _ => 72,
     };
 
-    if get_method_fn.is_none() || invoke_fn.is_none() {
-        return ptr::null_mut();
+    let remain_turn = total_turn - turn - 1;
+    let remain_turn = if remain_turn < 0 { 0 } else { remain_turn };
+
+    // === Current Score ===
+    let score = compute_score(stats[0], stats[1], stats[2], stats[3], stats[4]);
+    let total_stats = revise_over_1200(stats[0]) + revise_over_1200(stats[1])
+                    + revise_over_1200(stats[2]) + revise_over_1200(stats[3])
+                    + revise_over_1200(stats[4]);
+
+    // === Evaluation Parameters ===
+    let status_weights = [6.0, 6.0, 6.0, 6.0, 6.0];
+    let small_fail_value = -150.0;
+    let big_fail_value = -500.0;
+    let pt_score_rate = 2.0;
+
+    // Vital factor: increases from 3.5 to 7.0 as game progresses
+    let vital_factor = 3.5 + (turn as f64 / total_turn as f64) * 3.5;
+
+    // Reserve for soft constraint: controls stat overflow penalty
+    let reserve = 40.0 * remain_turn as f64 * (1.0 - remain_turn as f64 / (total_turn as f64 * 2.0));
+    let reserve = if reserve > 0.1 { reserve } else { 0.1 }; // avoid div by zero
+
+    // URA final bonus (events that add stats after training)
+    let mut final_bonus = 45 + 30; // URA3 + final event
+    if remain_turn >= 1 { final_bonus += 20; } // URA2
+    if remain_turn >= 2 { final_bonus += 20; } // URA1
+
+    // Remaining space per stat
+    let mut remain = [0.0f64; 5];
+    for i in 0..5 {
+        remain[i] = (BASIC_FIVE_STATUS_LIMIT[i] - stats[i] - final_bonus) as f64;
     }
 
-    let method_name_c = to_cstr(method_name);
-    let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
-    if method_info.is_null() {
-        ura_log(4, &format!("call_getter: '{}' not found", method_name));
-        return ptr::null_mut();
-    }
+    // Vital evaluation baseline
+    let max_vital_eq = calculate_max_vital_eq(turn, max_vital);
+    let vital_before = vital_evaluation(std::cmp::min(vital, max_vital_eq), max_vital);
 
-    let mut exc: *mut c_void = ptr::null_mut();
-    let result = invoke_fn.unwrap()(
-        method_info,
-        instance as *mut c_void,
-        ptr::null_mut(),
-        &mut exc,
-    );
+    let mut train_values = Vec::new();
+    let mut best_value = std::f64::NEG_INFINITY;
+    let mut best_action = "Rest".to_string();
 
-    if !exc.is_null() {
-        ura_log(1, &format!("call_getter: '{}' threw exception", method_name));
-        return ptr::null_mut();
-    }
+    // === Evaluate each training ===
+    for &(cmd_id, ref gains, skill_pt, vital_cost, fail_rate, is_enable) in trainings {
+        let name = match cmd_id {
+            101 => "Speed",
+            102 => "Stamina",
+            103 => "Guts",
+            105 => "Power",
+            106 => "Wisdom",
+            _ => "Unknown",
+        };
 
-    result
-}
-
-/// Call getter that returns a reference type (class instance)
-/// Result is a direct Il2CppObject pointer
-unsafe fn call_getter_ref(
-    class: *mut c_void,
-    instance: *const c_void,
-    method_name: &str,
-) -> *mut c_void {
-    call_getter_on_instance(class, instance, method_name)
-}
-
-/// Call getter that returns i32 (value type - gets boxed by il2cpp_runtime_invoke)
-/// The boxed value is at result_ptr + 16 (after Il2CppObject header on 64-bit)
-unsafe fn call_getter_int(
-    class: *mut c_void,
-    instance: *const c_void,
-    method_name: &str,
-) -> i32 {
-    if class.is_null() || instance.is_null() { return -1; }
-
-    let result = call_getter_on_instance(class, instance, method_name);
-    if result.is_null() { return -1; }
-
-    // Value type (int/enum) is boxed: real value at offset +16
-    let val_ptr = result as *const u8;
-    let int_val = std::ptr::read_unaligned::<i32>(val_ptr.add(16) as *const i32);
-    int_val
-}
-
-/// Call getter that returns bool (value type - gets boxed)
-unsafe fn call_getter_bool(
-    class: *mut c_void,
-    instance: *const c_void,
-    method_name: &str,
-) -> bool {
-    call_getter_int(class, instance, method_name) != 0
-}
-
-/// ★ ObscuredInt getter: The C# property returns ObscuredInt struct,
-/// but il2cpp_runtime_invoke boxes it. We need to call the implicit
-/// conversion operator to get a plain int.
-/// ObscuredInt has an implicit operator that converts to int.
-/// Alternative: ObscuredInt struct has fields we can read directly.
-/// ObscuredInt layout (from dump.cs struct, 0x20 bytes on 64-bit):
-///   offset 0x10: int currentValue (the decrypted value if no crypto)
-///   offset 0x14: int fakeValue
-///   offset 0x18: int fakeValueActive  
-///   offset 0x1C: byte cryptoKey
-/// Actually, the getter method get_SkillPoint() returns ObscuredInt,
-/// but the C# property SkillPoint has type ObscuredInt.
-/// When il2cpp_runtime_invoke calls it, the result is boxed ObscuredInt.
-/// We need to read the ObscuredInt struct fields from the boxed result.
-///
-/// From dump.cs line 1166804:
-/// public struct ObscuredInt : IFormattable, IEquatable`1, IComparable`1
-/// It has: implicit operator int, explicit operator int
-/// The boxed result will have the ObscuredInt data starting at offset 0x10
-///
-/// Looking at ObscuredInt implementation (Anti-Cheat Toolkit):
-/// struct ObscuredInt {
-///     int currentValue;   // offset 0x10 in boxed form (after header)
-///     int fakeValue;      // offset 0x14
-///     int fakeValueActive; // offset 0x18
-///     byte cryptoKey;     // offset 0x1C
-/// }
-/// currentValue = encrypted_value ^ cryptoKey
-/// Decrypted = currentValue ^ cryptoKey
-///
-/// BUT: When we call get_SkillPoint() via il2cpp_runtime_invoke,
-/// the return type is ObscuredInt (value type), so it gets boxed.
-/// We read the boxed ObscuredInt fields and decrypt manually.
-///
-/// HOWEVER: There's a simpler approach! The C# property wrapper
-/// actually calls the internal get method which returns ObscuredInt.
-/// We can try calling the implicit conversion operator instead.
-///
-/// Simplest approach: Read ObscuredInt fields from boxed result and decrypt.
-unsafe fn call_getter_obscured_int(
-    class: *mut c_void,
-    instance: *const c_void,
-    method_name: &str,
-) -> i32 {
-    if class.is_null() || instance.is_null() { return -1; }
-
-    let result = call_getter_on_instance(class, instance, method_name);
-    if result.is_null() { return -1; }
-
-    // Boxed ObscuredInt struct layout (from dump.cs Anti-Cheat Toolkit):
-    // offset 0x10: currentCryptoKey (Int32) — the decryption key
-    // offset 0x14: hiddenValue (Int32) — the encrypted value
-    // offset 0x18: inited (Boolean)
-    // offset 0x1C: fakeValue (Int32)
-    // offset 0x20: fakeValueActive (Boolean)
-    let base = result as *const u8;
-
-    let current_crypto_key = std::ptr::read_unaligned::<i32>(base.add(0x10) as *const i32);
-    let hidden_value = std::ptr::read_unaligned::<i32>(base.add(0x14) as *const i32);
-
-    // Decrypt: hiddenValue ^ currentCryptoKey
-    let decrypted = hidden_value ^ current_crypto_key;
-
-    ura_log(4, &format!("ObscuredInt {}: hidden={} key={} decrypted={}", 
-        method_name, hidden_value, current_crypto_key, decrypted));
-
-    decrypted
-}
-
-// ============================================================
-// ★ Read ObscuredInt[] array (for charaEffectIdArray etc)
-// ============================================================
-
-unsafe fn read_obscured_int_array(
-    class: *mut c_void,
-    instance: *const c_void,
-    method_name: &str,
-) -> Vec<i32> {
-    let mut result = Vec::new();
-    if class.is_null() || instance.is_null() { return result; }
-
-    let arr_obj = call_getter_on_instance(class, instance, method_name);
-    if arr_obj.is_null() { return result; }
-
-    // IL2CPP array layout (64-bit):
-    // +0x00: Il2CppObject header (16 bytes)
-    // +0x10: bounds ptr (8 bytes, null for 1D)
-    // +0x18: max_length (8 bytes on 64-bit)
-    // +0x20: data start
-    let base = arr_obj as *const u8;
-    let length = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
-    if length == 0 || length > 1000 { return result; } // sanity check
-
-    // ObscuredInt struct (unboxed) layout:
-    // offset 0x00: currentCryptoKey (Int32)
-    // offset 0x04: hiddenValue (Int32)
-    // offset 0x08: inited (Boolean, padded to 4)
-    // offset 0x0C: fakeValue (Int32)
-    // offset 0x10: fakeValueActive (Boolean, padded to 4)
-    // struct size = 0x14 (20 bytes), aligned to 4
-    let struct_size: usize = 0x14;
-    let data_start = base.add(0x20);
-
-    for i in 0..length {
-        let elem_base = data_start.add(i * struct_size);
-        let crypto_key = std::ptr::read_unaligned::<i32>(elem_base as *const i32);
-        let hidden_val = std::ptr::read_unaligned::<i32>(elem_base.add(4) as *const i32);
-        let decrypted = hidden_val ^ crypto_key;
-        result.push(decrypted);
-    }
-
-    ura_log(4, &format!("{}: read {} elements", method_name, result.len()));
-    result
-}
-
-// ============================================================
-// ★ Read reference-type array elements with getter calls
-// For expanding EnhanceGroupArray, CommandInfoArray, etc.
-// ============================================================
-
-unsafe fn read_array_element_details(
-    array_obj: *mut c_void,
-    element_class: *mut c_void,
-    obscured_getters: &[&str],
-    plain_getters: &[&str],
-) -> Vec<String> {
-    let mut results = Vec::new();
-    if array_obj.is_null() || element_class.is_null() { return results; }
-
-    let base = array_obj as *const u8;
-    let length = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
-    if length == 0 || length > 100 { return results; }
-
-    for i in 0..length {
-        let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
-        if elem_ptr.is_null() {
-            results.push(r#"{"_null":true}"#.to_string());
+        if is_enable == 0 || name == "Unknown" {
+            train_values.push((name.to_string(), std::f64::NEG_INFINITY));
             continue;
         }
 
-        let mut fields = Vec::new();
-        for getter in obscured_getters {
-            let val = call_getter_obscured_int(element_class, elem_ptr, getter);
-            let key = getter.strip_prefix("get_").unwrap_or(*getter);
-            fields.push(format!(r#""{}":{}"#, key, val));
+        // Status gain evaluation with soft constraints
+        let mut value = 0.0;
+        for sta in 0..5 {
+            let s0 = status_soft_function(-remain[sta], reserve);
+            let s1 = status_soft_function(gains[sta] as f64 - remain[sta], reserve);
+            value += status_weights[sta] * (s1 - s0);
         }
-        for getter in plain_getters {
-            let val = call_getter_int(element_class, elem_ptr, getter);
-            let key = getter.strip_prefix("get_").unwrap_or(*getter);
-            fields.push(format!(r#""{}":{}"#, key, val));
+
+        // Skill point value
+        value += pt_score_rate * skill_pt as f64;
+
+        // Vital change effect
+        let vital_after = std::cmp::min(max_vital_eq, vital + vital_cost);
+        value += vital_factor * (vital_evaluation(vital_after, max_vital) - vital_before);
+
+        // Failure penalty
+        if fail_rate > 0 {
+            let big_fail_prob = if fail_rate < 20 { 0.0 } else { fail_rate as f64 };
+            let fail_value_avg = 0.01 * big_fail_prob * big_fail_value
+                               + (1.0 - 0.01 * big_fail_prob) * small_fail_value;
+            value = 0.01 * fail_rate as f64 * fail_value_avg
+                  + (1.0 - 0.01 * fail_rate as f64) * value;
         }
-        results.push(format!(r#"{{{}}}"#, fields.join(",")));
+
+        train_values.push((name.to_string(), value));
+
+        if value > best_value {
+            best_value = value;
+            best_action = name.to_string();
+        }
     }
 
-    ura_log(4, &format!("read_array_elements: {} elements, {} getters", length, obscured_getters.len() + plain_getters.len()));
-    results
+    // === Evaluate Rest ===
+    let rest_vital_gain = 50;
+    let vital_after_rest = std::cmp::min(max_vital_eq, vital + rest_vital_gain);
+    let rest_value = vital_factor * (vital_evaluation(vital_after_rest, max_vital) - vital_before);
+
+    if rest_value > best_value {
+        best_value = rest_value;
+        best_action = "Rest".to_string();
+    }
+
+    // === Evaluate Outgoing (if motivation < 5,外出 is better than rest) ===
+    let outgoing_bonus = if motivation < 5 { 200.0 } else { 0.0 };
+    let outgoing_vital_gain = 50;
+    let vital_after_outgoing = std::cmp::min(max_vital_eq, vital + outgoing_vital_gain);
+    let outgoing_value = vital_factor * (vital_evaluation(vital_after_outgoing, max_vital) - vital_before)
+                        + outgoing_bonus;
+
+    if outgoing_value > best_value {
+        best_value = outgoing_value;
+        best_action = "Outgoing".to_string();
+    }
+
+    AiResult {
+        score,
+        total_stats,
+        best_action,
+        best_value,
+        train_values,
+        rest_value,
+        outgoing_value,
+    }
 }
 
-// ============================================================
-// ★ Try to get scenario-specific object from chara
-// Based on scenario_id, try multiple possible getter names
-// ============================================================
-
-unsafe fn try_get_scenario_obj(
-    chara_class: *mut c_void,
-    chara_obj: *const c_void,
-    scenario_id: i32,
-) -> *mut c_void {
-    if chara_class.is_null() || chara_obj.is_null() { return ptr::null_mut(); }
-
-    // Map scenario_id to possible getter names
-    // From dump.cs, most scenarios use get_ScenarioXxx(), but URA uses get_WorkScenarioURA()
-    let getter_names: &[&str] = match scenario_id {
-        1 => &["get_WorkScenarioURA", "get_ScenarioURA", "get_Ura"],
-        2 => &["get_TeamRace", "get_ScenarioTeamRace"],
-        3 => &["get_ScenarioLive", "get_Live"],
-        4 => &["get_WorkScenarioFree", "get_ScenarioFree", "get_Free"],
-        5 => &["get_ScenarioVenus", "get_Venus"],
-        6 => &["get_ScenarioArc", "get_Arc"],
-        7 => &["get_ScenarioSport", "get_Sport"],
-        8 => &["get_ScenarioCook", "get_Cook"],
-        9 => &["get_ScenarioMecha", "get_Mecha"],
-        10 => &["get_ScenarioLegend", "get_Legend"],
-        11 => &["get_ScenarioPioneer", "get_Pioneer"],
-        12 => &["get_ScenarioOnsen", "get_Onsen"],
-        13 => &["get_ScenarioBreeders", "get_WorkScenarioBreeders", "get_Breeders"], // ★ 育马者杯
-        14 => &["get_ScenarioRamen", "get_WorkScenarioRamen", "get_Ramen"],          // ★ 拉面杯
-        _ => &[],
-    };
-
-    for name in getter_names {
-        let result = call_getter_ref(chara_class, chara_obj, name);
-        if !result.is_null() {
-            ura_log(3, &format!("★ Scenario {} getter '{}' found at {:p}", scenario_id, name, result));
-            return result;
-        }
-    }
-
-    ura_log(3, &format!("Scenario {} getter: all attempts failed", scenario_id));
-    ptr::null_mut()
-}
-
-// ============================================================
-// ★ Read scenario detail data (/scenario endpoint)
-// ============================================================
-
-unsafe fn read_scenario_detail() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
-    if wdm_class.is_null() { return r#"{"error":"no_wdm_class"}"#.to_string(); }
-
-    let wdm_instance = get_singleton(wdm_class);
-    if wdm_instance.is_null() { return r#"{"error":"no_wdm_singleton"}"#.to_string(); }
-
-    let sm_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
-    let sm_data_obj = call_getter_ref(wdm_class, wdm_instance, "get_SingleMode");
-    if sm_data_obj.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
-
-    let chara_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
-    let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
-    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
-
-    let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
-    let scenario_obj = try_get_scenario_obj(chara_data_class, chara_obj, scenario_id);
-
-    if scenario_obj.is_null() {
-        return format!(r#"{{"scenario_id":{},"error":"scenario_obj_null","hint":"getter_name_not_found"}}"#, scenario_id);
-    }
-
-    // Try to get DataSet from the scenario object
-    // First find the scenario class
-    let scenario_class_name = match scenario_id {
-        1 => "WorkSingleModeScenarioURA",
-        2 => "WorkSingleModeScenarioTeamRace",
-        3 => "WorkSingleModeScenarioLive",
-        4 => "WorkSingleModeScenarioFree",
-        5 => "WorkSingleModeScenarioVenus",
-        6 => "WorkSingleModeScenarioArc",
-        7 => "WorkSingleModeScenarioSport",
-        8 => "WorkSingleModeScenarioCook",
-        9 => "WorkSingleModeScenarioMecha",
-        10 => "WorkSingleModeScenarioLegend",
-        11 => "WorkSingleModeScenarioPioneer",
-        12 => "WorkSingleModeScenarioOnsen",
-        13 => "WorkSingleModeScenarioBreeders",
-        14 => "WorkSingleModeScenarioRamen",
-        _ => "Unknown",
-    };
-
-    let scenario_class = find_class_by_short_name(image, scenario_class_name);
-
-    let mut result_parts = vec![
-        format!(r#""scenario_id":{}"#, scenario_id),
-        format!(r#""scenario_class":"{}""#, scenario_class_name),
-        format!(r#""scenario_obj":"{:p}""#, scenario_obj),
-    ];
-
-    // Try get_DataSet()
-    if !scenario_class.is_null() {
-        let dataset_obj = call_getter_ref(scenario_class, scenario_obj, "get_DataSet");
-        if !dataset_obj.is_null() {
-            result_parts.push(format!(r#""dataset_obj":"{:p}""#, dataset_obj));
-
-            // Determine DataSet class name for all known scenarios
-            let dataset_class_name = match scenario_id {
-                1 => "WorkSingleModeScenarioURADataSet",
-                2 => "WorkSingleModeScenarioTeamRaceDataSet",
-                3 => "WorkSingleModeScenarioLiveDataSet",
-                4 => "WorkSingleModeScenarioFreeDataSet",
-                5 => "WorkSingleModeScenarioVenusDataSet",
-                6 => "WorkSingleModeScenarioArcDataSet",
-                7 => "WorkSingleModeScenarioSportDataSet",
-                8 => "WorkSingleModeScenarioCookDataSet",
-                9 => "WorkSingleModeScenarioMechaDataSet",
-                10 => "WorkSingleModeScenarioLegendDataSet",
-                11 => "WorkSingleModeScenarioPioneerDataSet",
-                12 => "WorkSingleModeScenarioOnsenDataSet",
-                13 => "WorkSingleModeScenarioBreedersDataSet",
-                14 => "WorkSingleModeScenarioRamenDataSet",
-                _ => "UnknownDataSet",
-            };
-            let dataset_class = find_class_by_short_name(image, dataset_class_name);
-            if !dataset_class.is_null() {
-                result_parts.push(format!(r#""dataset_class":"{}""#, dataset_class_name));
-
-                // ★ Read int-type DataSet getters (CY uses ObscuredInt for everything)
-                let int_getters = [
-                    "get_TeamRank", "get_HavingEnhancePoint", "get_PredictEnhancePoint",
-                    "get_BcRaceTrackId", "get_DeckId", "get_TeamSpLevelLimit",
-                    "get_TeamUnionProgress",
-                ];
-                let mut ds_ints = Vec::new();
-                for getter in &int_getters {
-                    // DataSet getters return ObscuredInt - must use obscured_int decoder
-                    let val = call_getter_obscured_int(dataset_class, dataset_obj, getter);
-                    if val >= 0 {
-                        ds_ints.push(format!(r#""{}":{}"#, getter, val));
-                    }
-                }
-                if !ds_ints.is_empty() {
-                    result_parts.push(format!(r#""dataset_values":{{{}}}"#, ds_ints.join(",")));
-                }
-
-                // ★ Read array-type DataSet getters (report length + element pointers)
-                let array_getters = [
-                    "get_EnhanceGroupArray", "get_CommandInfoArray",
-                    "get_TeamMemberInfoArray", "get_TeamReviewResultArray",
-                    "get_BcRaceResultArray", "get_CommandGainExpArray",
-                ];
-                let mut ds_arrays = Vec::new();
-                for getter in &array_getters {
-                    let arr_obj = call_getter_on_instance(dataset_class, dataset_obj, getter);
-                    if !arr_obj.is_null() {
-                        let base = arr_obj as *const u8;
-                        let length = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
-                        ds_arrays.push(format!(r#""{}":{{"len":{},"ptr":"{:p}"}}"#, getter, length, arr_obj));
-                    }
-                }
-                if !ds_arrays.is_empty() {
-                    result_parts.push(format!(r#""dataset_arrays":{{{}}}"#, ds_arrays.join(",")));
-                }
-
-                // ★ Expand EnhanceGroupArray elements (Breeders buff data)
-                // Element class: ObscuredSingleModeBreedersEnhanceGroup
-                // Getters: get_GroupType (ObscuredInt), get_Level (ObscuredInt)
-                if scenario_id == 13 {
-                    let enhance_elem_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersEnhanceGroup");
-                    if !enhance_elem_class.is_null() {
-                        let enhance_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_EnhanceGroupArray");
-                        if !enhance_arr.is_null() {
-                            let elements = read_array_element_details(
-                                enhance_arr, enhance_elem_class,
-                                &["get_GroupType", "get_Level"],
-                                &[],
-                            );
-                            result_parts.push(format!(r#""enhance_groups":[{}]"#, elements.join(",")));
-                        }
-                    }
-                }
-
-                // ★ Expand CommandInfoArray elements (Breeders training commands)
-                // Element class: ObscuredSingleModeBreedersCommandInfo
-                // Getters: CommandType(ObscuredInt), CommandId(ObscuredInt),
-                //          RankUpPredict(ObscuredInt), ParamsIncDecInfoArray, TeamMemberInfoArray
-                // ★★ v3.8.0 FIX: ParamsIncDecInfoArray uses SingleModeParamsIncDecInfo (plain Int32),
-                //    NOT SingleModeParamsIncDecInfoData (ObscuredInt). The Onsen scenario confirms
-                //    Obscured wrappers use plain DTOs, not ObscuredInt-wrapped Data classes.
-                if scenario_id == 13 {
-                    let cmd_elem_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersCommandInfo");
-                    if !cmd_elem_class.is_null() {
-                        let cmd_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandInfoArray");
-                        if !cmd_arr.is_null() {
-                            let elements = read_array_element_details(
-                                cmd_arr, cmd_elem_class,
-                                &["get_CommandType", "get_CommandId", "get_RankUpPredict"],
-                                &[],
-                            );
-                            // ★ Breeders uses SingleModeParamsIncDecInfo (plain Int32 at 0x10, 0x14)
-                            //    Confirmed via Onsen scenario's ObscuredSingleModeOnsenCommandInfo
-                            //    which uses SingleModeParamsIncDecInfo[] (not Data variant)
-                            //    NO auto-detection needed — hardcode to avoid class lookup crashes
-
-                            let base = cmd_arr as *const u8;
-                            let cmd_len = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
-                            let mut cmd_details = Vec::new();
-                            for i in 0..cmd_len {
-                                let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
-                                let mut detail = if i < elements.len() { elements[i].clone() } else { "{}".to_string() };
-                                // ★ Add CommandId→training name mapping
-                                {
-                                    let cmd_id_val = if detail.contains("\"CommandId\":") {
-                                        detail.split("\"CommandId\":").nth(1)
-                                            .and_then(|s| s.split(',').next())
-                                            .and_then(|s| s.trim().parse::<i32>().ok())
-                                            .unwrap_or(-1)
-                                    } else { -1 };
-                                    let cmd_name = match cmd_id_val {
-                                        101 => "Speed", 102 => "Stamina", 103 => "Guts",
-                                        105 => "Power", 106 => "Wiz",
-                                        _ => "Unknown"
-                                    };
-                                    if detail.ends_with('}') { detail.pop(); }
-                                    detail.push_str(&format!(",\"CommandName\":\"{}\"}}", cmd_name));
-                                }
-                                if !elem_ptr.is_null() {
-                                    let params_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_ParamsIncDecInfoArray");
-                                    let mut params_items = Vec::new();
-                                    if !params_arr.is_null() {
-                                        let p_base = params_arr as *const u8;
-                                        let p_len = std::ptr::read_unaligned::<usize>(p_base.add(0x18) as *const usize);
-                                        for j in 0..p_len {
-                                            let p_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(0x20 + j * 8) as *const *mut c_void);
-                                            if p_elem.is_null() { continue; }
-                                            // ★ Breeders: always plain Int32 (SingleModeParamsIncDecInfo)
-                                            // TargetType 实测映射（与dump.cs ParameterType枚举不同！）：
-                                            //   枚举定义3=Power 4=Guts，但target_type字段实际3=Guts 4=Power
-                                            //   验证：Stamina训练(TT3)加Guts，Power训练(TT4)加Power
-                                            //   0=None, 1=Speed, 2=Stamina, 3=Guts, 4=Power, 5=Wiz
-                                            //   10=HP, 20=Motivation, 30=SkillPt
-                                            let bytes = p_elem as *const u8;
-                                            let t = std::ptr::read_unaligned::<i32>(bytes.add(0x10) as *const i32);
-                                            let v = std::ptr::read_unaligned::<i32>(bytes.add(0x14) as *const i32);
-                                            let (tt, val) = (t, v);
-                                            let tt_name = match tt {
-                                                0 => "None", 1 => "Speed", 2 => "Stamina",
-                                                3 => "Guts", 4 => "Power", 5 => "Wiz",
-                                                6 => "Unknown6", 10 => "HP", 20 => "Motivation",
-                                                30 => "SkillPt",
-                                                _ => "Unknown"
-                                            };
-                                            params_items.push(format!(r#"{{"TargetType":{},"TargetTypeName":"{}","Value":{}}}"#, tt, tt_name, val));
-                                        }
-                                    }
-                                    // Read TeamMemberInfoArray length
-                                    let member_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_TeamMemberInfoArray");
-                                    let member_len = if !member_arr.is_null() {
-                                        let mbase = member_arr as *const u8;
-                                        std::ptr::read_unaligned::<usize>(mbase.add(0x18) as *const usize)
-                                    } else { 0 };
-                                    // Trim trailing } and add new fields
-                                    if detail.ends_with('}') { detail.pop(); }
-                                    detail.push_str(&format!(",\"params_inc_dec\":[{}],\"team_member_len\":{}}}",
-                                        params_items.join(","), member_len));
-                                }
-                                cmd_details.push(detail);
-                            }
-                            result_parts.push(format!(r#""command_info":[{}]"#, cmd_details.join(",")));
-                        }
-                    }
-                }
-
-                // ★ Read object-type DataSet getters
-                let obj_getters = [
-                    "get_TeamSpTrainingInfo", "get_NotUpParameterInfo",
-                    "get_ScenarioDressSetting", "get_TeamUnionEvent",
-                ];
-                let mut ds_objs = Vec::new();
-                for getter in &obj_getters {
-                    let obj = call_getter_on_instance(dataset_class, dataset_obj, getter);
-                    if !obj.is_null() {
-                        ds_objs.push(format!(r#""{}":"{:p}""#, getter, obj));
-                    }
-                }
-                if !ds_objs.is_empty() {
-                    result_parts.push(format!(r#""dataset_objects":{{{}}}"#, ds_objs.join(",")));
-                }
-            }
-        } else {
-            result_parts.push(r#""dataset_obj":"null""#.to_string());
-        }
-    }
-
-    format!(r#"{{{}}}"#, result_parts.join(","))
-}
-
-// ============================================================
-// ★ Enumerate ALL classes in assembly (runtime dump)
-// ============================================================
-
-unsafe fn enumerate_all_classes(search: &str) -> String {
-    let image = get_image();
-    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
-
-    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
-    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
-
-    if get_count_fn.is_null() || get_class_fn.is_null() {
-        return r#"{"error":"class_enum_api_not_found"}"#.to_string();
-    }
-
-    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
-    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
-
-    let total = get_count(image);
-    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
-    let get_namespace_fn = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
-
-    let mut results = Vec::new();
-    let search_lower = search.to_lowercase();
-
-    for i in 0..total {
-        let cls = get_class(image, i);
-        if cls.is_null() { continue; }
-
-        let name = if !get_name_fn.is_null() {
-            let name_fn: FnClassGetName = std::mem::transmute(get_name_fn);
-            let cstr = name_fn(cls);
-            if cstr.is_null() { continue; }
-            std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned()
-        } else {
-            format!("class_{}", i)
-        };
-
-        let namespace = if !get_namespace_fn.is_null() {
-            let ns_fn: FnClassGetName = std::mem::transmute(get_namespace_fn);
-            let cstr = ns_fn(cls);
-            if cstr.is_null() { String::new() } else { std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned() }
-        } else {
-            String::new()
-        };
-
-        // Filter by search term if provided
-        if !search.is_empty() {
-            let full = format!("{}.{}", namespace, name).to_lowercase();
-            if !full.contains(&search_lower) { continue; }
-        }
-
-        results.push(format!(r#"{{"ns":"{}","name":"{}"}}"#, namespace, name));
-    }
-
-    format!(r#"{{"total_classes":{},"matched":{},"search":"{}","classes":[{}]}}"#,
-        total, results.len(), search, results.join(","))
-}
-
-// ============================================================
-// All known classes for scanning
-// ============================================================
-
-const KNOWN_CLASSES: &[(&str, &str)] = &[
-    ("Gallop", "WorkDataManager"),
-    ("Gallop", "WorkSingleModeData"),
-    ("Gallop", "WorkSingleModeCharaData"),
-    ("Gallop", "WorkSingleModeHomeInfo"),
-    ("Gallop", "WorkSingleModeScenarioBreeders"),
-    ("Gallop", "WorkSingleModeScenarioLegend"),
-    ("Gallop", "WorkSingleModeScenarioMecha"),
-    ("Gallop", "WorkSingleModeScenarioOnsen"),
-    ("Gallop", "WorkSingleModeScenarioPioneer"),
-    ("Gallop", "WorkSingleModeScenarioRamen"),
-    ("Gallop", "GameSystem"),
-    ("Gallop", "HomeScene"),
-    ("Gallop", "SingleModeScene"),
-    ("Gallop", "RaceScene"),
-    ("Gallop", "SingleModeSceneController"),
-];
-
-// ============================================================
-// Scan Classes
-// ============================================================
-
-unsafe fn scan_il2cpp_classes() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let mut found_list: Vec<String> = Vec::new();
-    let mut singleton_list: Vec<String> = Vec::new();
-
-    for (ns, cls) in KNOWN_CLASSES {
-        let ns_c = to_cstr(ns);
-        let cls_c = to_cstr(cls);
-        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
-        if !class.is_null() {
-            let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
-            if !found_list.contains(&full_name) {
-                found_list.push(full_name.clone());
-            }
-            let inst = get_singleton(class);
-            if !inst.is_null() {
-                singleton_list.push(full_name);
-            }
-        }
-    }
-
+/// Format AI result as compact JSON for /summary output
+fn ai_result_to_json(r: &AiResult) -> String {
+    let tv: Vec<String> = r.train_values.iter()
+        .map(|(n, v)| format!(r#""{}":{}"#, n, (v * 10.0).round() / 10.0))
+        .collect();
     format!(
-        r#"{{"found_classes":["{}"],"singletons":["{}"],"total":{}}}"#,
-        found_list.join("\",\""), singleton_list.join("\",\""), found_list.len()
+        r#"{{"score":{},"total_stats":{},"best":"{}","best_v":{},"train":{{{}}},"rest":{},"outgoing":{}}}"#,
+        r.score,
+        r.total_stats,
+        r.best_action,
+        (r.best_value * 10.0).round() / 10.0,
+        tv.join(","),
+        (r.rest_value * 10.0).round() / 10.0,
+        (r.outgoing_value * 10.0).round() / 10.0,
     )
 }
 
-// ============================================================
-// /singletons endpoint
-// ============================================================
-
-unsafe fn find_all_singletons() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let mut results: Vec<String> = Vec::new();
-
-    for (ns, cls) in KNOWN_CLASSES {
-        let ns_c = to_cstr(ns);
-        let cls_c = to_cstr(cls);
-        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
-        if !class.is_null() {
-            let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
-            let inst = get_singleton(class);
-            let has_singleton = !inst.is_null();
-            results.push(format!(r#"{{"class":"{}","singleton":{},"instance":"{:p}"}}"#,
-                full_name, has_singleton, inst));
-        }
-    }
-
-    format!(r#"{{"total":{},"classes":[{}]}}"#, results.len(), results.join(","))
-}
-
-// ============================================================
-// ★ Read Training Data v3.7.8 — All via getter methods
-// ============================================================
-
-unsafe fn read_training_data() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    ura_log(3, "Reading training data v3.7.8...");
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
-    let sm_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
-    let chara_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
-
-    ura_log(3, &format!("Classes: WDM={} SMD={} Chara={}",
-        if wdm_class.is_null() { "null" } else { "ok" },
-        if sm_data_class.is_null() { "null" } else { "ok" },
-        if chara_data_class.is_null() { "null" } else { "ok" },
-    ));
-
-    // ===== Step 1: Get WorkDataManager singleton =====
-    if wdm_class.is_null() {
-        return r#"{"error":"WorkDataManager_class_not_found"}"#.to_string();
-    }
-    let wdm_instance = get_singleton(wdm_class);
-    if wdm_instance.is_null() {
-        return r#"{"error":"WorkDataManager_no_singleton","hint":"start_a_training_run"}"#.to_string();
-    }
-
-    // ===== Step 2: Call get_SingleMode() =====
-    let sm_data_obj = call_getter_ref(wdm_class, wdm_instance, "get_SingleMode");
-    if sm_data_obj.is_null() {
-        // Fallback: read field directly
-        let field_obj = read_field_ptr(wdm_instance, wdm_class, "<SingleMode>k__BackingField");
-        if field_obj.is_null() {
-            return r#"{"error":"SingleMode_null","step":"get_SingleMode"}"#.to_string();
-        }
-        return process_single_mode_data(field_obj, sm_data_class, chara_data_class);
-    }
-
-    process_single_mode_data(sm_data_obj, sm_data_class, chara_data_class)
-}
-
-unsafe fn process_single_mode_data(
-    sm_data_obj: *const c_void,
-    sm_data_class: *mut c_void,
-    chara_data_class: *mut c_void,
-) -> String {
-    // ===== Read metadata via getters =====
-    let month = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Month") } else { -1 };
-    let half = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Half") } else { -1 };
-    let playing_state = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_PlayingState") } else { -1 };
-    let is_playing = if !sm_data_class.is_null() { call_getter_bool(sm_data_class, sm_data_obj, "get_IsPlaying") } else { false };
-
-    ura_log(3, &format!("SM Data: month={} half={} playingState={} isPlaying={}", month, half, playing_state, is_playing));
-
-    // ===== Call get_Character() =====
-    if sm_data_class.is_null() {
-        return format!(r#"{{"error":"WorkSingleModeData_class_null","month":{},"half":{}}}"#, month, half);
-    }
-    let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
-    if chara_obj.is_null() {
-        // Fallback: try field
-        let chara_field = read_field_ptr(sm_data_obj, sm_data_class, "<Character>k__BackingField");
-        if chara_field.is_null() {
-            return format!(
-                r#"{{"error":"Character_null","month":{},"half":{},"playingState":{},"isPlaying":{}}}"#,
-                month, half, playing_state, is_playing
-            );
-        }
-        return read_chara_data(chara_field, chara_data_class, month, half, playing_state, is_playing);
-    }
-
-    read_chara_data(chara_obj, chara_data_class, month, half, playing_state, is_playing)
-}
-
-unsafe fn read_chara_data(
-    chara_obj: *const c_void,
-    chara_data_class: *mut c_void,
-    month: i32,
-    half: i32,
-    playing_state: i32,
-    is_playing: bool,
-) -> String {
-    if chara_data_class.is_null() {
-        return r#"{"error":"WorkSingleModeCharaData_class_null"}"#.to_string();
-    }
-
-    ura_log(3, &format!("WorkSingleModeCharaData: {:p}", chara_obj));
-
-    // ===== ★ ALL FIELDS VIA GETTER METHODS =====
-    // These return plain Int32 (auto-decrypted by C# getter):
-    //   get_Speed(), get_Stamina(), get_Power(), get_Guts(), get_Wiz()
-    //   get_Hp(), get_MaxHp()
-    //   get_Motivation() returns Motivation enum (int)
-    //   get_ScenarioId() returns Int32
-    //   get_FanCount() returns Int32
-    // ObscuredInt getters (need special handling):
-    //   get_SkillPoint() returns ObscuredInt struct
-
-    let speed = call_getter_int(chara_data_class, chara_obj, "get_Speed");
-    let stamina = call_getter_int(chara_data_class, chara_obj, "get_Stamina");
-    let power = call_getter_int(chara_data_class, chara_obj, "get_Power");
-    let guts = call_getter_int(chara_data_class, chara_obj, "get_Guts");
-    let wiz = call_getter_int(chara_data_class, chara_obj, "get_Wiz");
-    let hp = call_getter_int(chara_data_class, chara_obj, "get_Hp");
-    let max_hp = call_getter_int(chara_data_class, chara_obj, "get_MaxHp");
-    let motivation = call_getter_int(chara_data_class, chara_obj, "get_Motivation");
-    let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
-    let fan_count = call_getter_int(chara_data_class, chara_obj, "get_FanCount");
-
-    // SkillPoint returns ObscuredInt - try the ObscuredInt decoder first,
-    // fall back to regular int read if it fails
-    let skill_point = call_getter_obscured_int(chara_data_class, chara_obj, "get_SkillPoint");
-
-    // ★ Scenario buffs: charaEffectIdArray (ObscuredInt[]) and scenarioProgress (ObscuredInt)
-    let chara_effect_ids = read_obscured_int_array(chara_data_class, chara_obj, "get_CharaEffectIdArray");
-    let scenario_progress = call_getter_obscured_int(chara_data_class, chara_obj, "get_ScenarioProgress");
-
-    // ★ Try to read scenario-specific object (Breeders, Ramen, etc.)
-    let scenario_obj = try_get_scenario_obj(chara_data_class, chara_obj, scenario_id);
-    let scenario_info = if !scenario_obj.is_null() {
-        format!(r#""scenario_obj":"{:p}""#, scenario_obj)
-    } else {
-        r#""scenario_obj":"null""#.to_string()
-    };
-
-    // Turn is not a direct getter on chara - it's on WorkSingleModeData
-    // Actually from dump.cs, WorkSingleModeCharaData doesn't have turn/totalTurn
-    // Those are on WorkSingleModeData: _totalTurnNum (offset 68)
-    // We'll read turn from the parent data via a separate call
-
-    ura_log(3, &format!("★ Chara: SPD={} STA={} POW={} GUT={} WIZ={} HP={}/{} MOT={} SKPT={} SCID={} FAN={} EFFECTS={:?} SPROG={}",
-        speed, stamina, power, guts, wiz, hp, max_hp, motivation, skill_point, scenario_id, fan_count, chara_effect_ids, scenario_progress));
-
-    let any_valid = speed > 0 || stamina > 0 || power > 0 || wiz > 0 || guts > 0 || hp > 0;
-
-    let cache = CharaCache {
-        speed, stamina, power, guts, wiz,
-        vital: hp, max_vital: max_hp,
-        motivation,
-        turn: 0, // will be populated from WorkSingleModeData
-        skill_point, scenario_id, fan_count,
-        month, half,
-        playing_state, is_playing,
-        valid: any_valid,
-    };
-    CHARA = cache;
-
-    if any_valid {
-        let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
-        format!(
-            r#"{{"ok":true,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
-            speed, stamina, power, guts, wiz,
-            hp, max_hp, motivation, skill_point, scenario_id, fan_count,
-            effect_ids_str.join(","), scenario_progress,
-            month, half, playing_state, is_playing, scenario_info
-        )
-    } else {
-        let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
-        format!(
-            r#"{{"ok":false,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"warning":"all_fields_negative_or_zero",{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
-            speed, stamina, power, guts, wiz,
-            hp, max_hp, motivation, skill_point, scenario_id, fan_count,
-            effect_ids_str.join(","), scenario_progress,
-            month, half, scenario_info
-        )
-    }
-}
-
-// ============================================================
-// Enumerate ALL fields including parent classes
-// ============================================================
-
-unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
-    if class.is_null() || API.is_null() { return r#"{"error":"null_class"}"#.to_string(); }
-
-    let get_fields_fn: Option<FnClassGetFields> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_fields");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetFields>(p)) }
-    };
-    let get_parent_fn: Option<FnClassGetParent> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(p)) }
-    };
-    let get_class_name_fn: Option<FnClassGetName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetName>(p)) }
-    };
-
-    if get_fields_fn.is_none() {
-        return r#"{"error":"no_il2cpp_class_get_fields"}"#.to_string();
-    }
-
-    let mut all_fields: Vec<String> = Vec::new();
-    let mut current_class = class;
-    let mut depth = 0;
-
-    loop {
-        if current_class.is_null() || depth > 10 { break; }
-
-        let class_name = if let Some(ref get_name) = get_class_name_fn {
-            let name_ptr = get_name(current_class);
-            if !name_ptr.is_null() {
-                let s = std::ffi::CStr::from_ptr(name_ptr);
-                s.to_string_lossy().to_string()
-            } else { format!("depth{}", depth) }
-        } else { format!("depth{}", depth) };
-
-        let mut iter: *mut c_void = ptr::null_mut();
-        loop {
-            let field_info = get_fields_fn.unwrap()(current_class, &mut iter);
-            if field_info.is_null() { break; }
-
-            let field_name = if !(*field_info).name.is_null() {
-                let s = std::ffi::CStr::from_ptr((*field_info).name);
-                s.to_string_lossy().to_string()
-            } else { String::from("?") };
-
-            let offset = (*field_info).offset;
-            all_fields.push(format!(r#"{{"name":"{}","offset":{},"class":"{}"}}"#, field_name, offset, class_name));
-        }
-
-        if let Some(ref get_parent) = get_parent_fn {
-            let parent = get_parent(current_class);
-            if parent.is_null() || parent == current_class { break; }
-            current_class = parent;
-        } else {
-            break;
-        }
-        depth += 1;
-    }
-
-    format!(r#"{{"total":{},"fields":[{}]}}"#, all_fields.len(), all_fields.join(","))
-}
-
-// ============================================================
-// Enumerate methods on a class
-// ============================================================
-
-unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
-    if class.is_null() || API.is_null() { return r#"{"error":"null_class"}"#.to_string(); }
-
-    let get_methods_fn: Option<FnClassGetMethods> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethods>(p)) }
-    };
-    let get_method_name_fn: Option<FnMethodGetName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnMethodGetName>(p)) }
-    };
-    let get_parent_fn: Option<FnClassGetParent> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(p)) }
-    };
-    let get_class_name_fn: Option<FnClassGetName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetName>(p)) }
-    };
-
-    if get_methods_fn.is_none() {
-        return r#"{"error":"no_il2cpp_class_get_methods"}"#.to_string();
-    }
-
-    let mut all_methods: Vec<String> = Vec::new();
-    let mut current_class = class;
-    let mut depth = 0;
-    let max_methods = 500;
-
-    loop {
-        if current_class.is_null() || depth > 5 { break; }
-        if all_methods.len() >= max_methods { break; }
-
-        let class_name = if let Some(ref get_name) = get_class_name_fn {
-            let name_ptr = get_name(current_class);
-            if !name_ptr.is_null() {
-                let s = std::ffi::CStr::from_ptr(name_ptr);
-                s.to_string_lossy().to_string()
-            } else { format!("depth{}", depth) }
-        } else { format!("depth{}", depth) };
-
-        let mut iter: *mut c_void = ptr::null_mut();
-        loop {
-            if all_methods.len() >= max_methods { break; }
-            let method_info = get_methods_fn.unwrap()(current_class, &mut iter);
-            if method_info.is_null() { break; }
-
-            let method_name = if let Some(ref get_name) = get_method_name_fn {
-                let name_ptr = get_name(method_info);
-                if !name_ptr.is_null() {
-                    let s = std::ffi::CStr::from_ptr(name_ptr);
-                    s.to_string_lossy().to_string()
-                } else { String::from("?") }
-            } else { String::from("?") };
-
-            all_methods.push(format!(r#"{{"name":"{}","class":"{}"}}"#, method_name, class_name));
-        }
-
-        if let Some(ref get_parent) = get_parent_fn {
-            let parent = get_parent(current_class);
-            if parent.is_null() || parent == current_class { break; }
-            current_class = parent;
-        } else {
-            break;
-        }
-        depth += 1;
-    }
-
-    format!(r#"{{"total":{},"methods":[{}]}}"#, all_methods.len(), all_methods.join(","))
-}
-
-// ============================================================
-// /find_method endpoint
-// ============================================================
-
-unsafe fn find_method_in_all_classes(method_name: &str) -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let get_method_fn: Option<FnClassGetMethodFromName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
-    };
-
-    if get_method_fn.is_none() {
-        return r#"{"error":"no_class_get_method_from_name"}"#.to_string();
-    }
-
-    let method_name_c = to_cstr(method_name);
-    let mut found: Vec<String> = Vec::new();
-
-    for (ns, cls) in KNOWN_CLASSES {
-        let ns_c = to_cstr(ns);
-        let cls_c = to_cstr(cls);
-        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
-        if class.is_null() { continue; }
-
-        let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
-
-        let method = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
-        if !method.is_null() {
-            found.push(format!(r#"{{"class":"{}","args":0}}"#, full_name));
-        }
-
-        let method1 = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 1);
-        if !method1.is_null() && method.is_null() {
-            found.push(format!(r#"{{"class":"{}","args":1}}"#, full_name));
-        }
-    }
-
-    format!(r#"{{"method":"{}","found":{},"results":[{}]}}"#,
-        method_name, !found.is_empty(), found.join(","))
-}
-
-// ============================================================
-// ★ CharaEffectId → human-readable buff mapping (v3.14.2)
-// From dump.cs CharaEffectId enum + CharaEffectType enum
-fn chara_effect_name(id: i32) -> (&'static str, &'static str) {
-    // Returns (name, effect_type) where effect_type is "Good" or "Bad"
-    match id {
-        1 => ("夜鷹", "Bad"),
-        2 => ("怠け", "Bad"),
-        3 => ("肌荒れ", "Bad"),
-        4 => ("太り気", "Bad"),
-        5 => ("頭痛", "Bad"),
-        6 => ("練習下手", "Bad"),
-        7 => ("Pt割引", "Good"),
-        8 => ("愛嬌", "Good"),
-        9 => ("注目", "Good"),
-        10 => ("練習上手", "Good"),
-        11 => ("練習◎", "Good"),
-        25 => ("やる気G", "Good"),
-        26 => ("調子G", "Good"),
-        999 => ("ランダム", "Special"),
-        _ => ("", ""), // unknown
-    }
-}
-
-/// Generate buffs JSON from chara_effect_ids (works for ALL scenarios)
-fn effects_to_buffs_json(effect_ids: &[i32]) -> String {
-    if effect_ids.is_empty() { return "[]".to_string(); }
-    let mut buffs = Vec::new();
-    for &id in effect_ids {
-        let (name, etype) = chara_effect_name(id);
-        if name.is_empty() {
-            // Unknown effect — output raw ID for debugging
-            buffs.push(format!(r#"{{"name":"Effect#{}","level":0,"desc":"unknown effect","type":"Unknown"}}"#, id));
-        } else {
-            buffs.push(format!(r#"{{"name":"{}","level":0,"desc":"{}","type":"{}"}}"#, name, name, etype));
-        }
-    }
-    format!("[{}]", buffs.join(","))
-}
-
-// ★ Clean summary for floating window app (/summary endpoint)
-// v3.10.0: Player-friendly output — stats + training gains in one response
-// ============================================================
-
-/// Breeders作戦会議buff (游戏内青・緑・桃三色)
-/// GroupType 1=青(フィジカル), 2=緑(テクニック), 3=桃(メンタル)
-fn breeders_buff_desc(group_type: i32, level: i32) -> (&'static str, String) {
-    match group_type {
-        1 => { // 青: 友情ボーナス + サブ能力UP + 体力消費DOWN
-            let desc = match level {
-                0 => "-".to_string(),
-                1 => "友情+10% サブ+15%".to_string(),
-                2 => "友情+20% サブ+25% 体消-40%".to_string(),
-                3 => "友情+25% サブ+30% 体消-70%".to_string(),
-                4 => "友情+35% サブ+35% 体消-100%".to_string(),
-                5 => "友情+40% サブ+40% 体消-100%".to_string(),
-                6 => "友情+50% サブ+45% 体消-100%".to_string(),
-                7 => "友情+55% サブ+50% 体消-100%".to_string(),
-                8 => "友情+65%".to_string(),
-                _ => format!("Lv{}", level),
-            };
-            ("青", desc)
-        }
-        2 => { // 緑: スキルPt効果UP + ヒント発生
-            let desc = match level {
-                0 => "-".to_string(),
-                1 => "Pt+10%".to_string(),
-                2 => "Pt+15%".to_string(),
-                3 => "Pt+20% ヒント1人".to_string(),
-                4 => "Pt+25% ヒント2人".to_string(),
-                5 => "Pt+30% ヒント2人 全ヒント".to_string(),
-                6 => "Pt+35% ヒント2人 全ヒント".to_string(),
-                7 => "Pt+40% ヒント2人 全ヒント".to_string(),
-                8 => "Pt+50% ヒント2人 全ヒント".to_string(),
-                _ => format!("Lv{}", level),
-            };
-            ("緑", desc)
-        }
-        3 => { // 桃: 絆獲得UP + 失敗率DOWN + 獲得上限UP
-            let desc = match level {
-                0 => "-".to_string(),
-                1 => "絆+3 失敗-5%".to_string(),
-                2 => "絆+5 失敗-50% 上限+15".to_string(),
-                3 => "絆+7 失敗-100% 上限+25 Pt上限+40".to_string(),
-                4 => "絆+7 失敗-100% 上限+35 Pt上限+60".to_string(),
-                5 => "絆+7 失敗-100% 上限+40 Pt上限+80".to_string(),
-                6 => "絆+7 失敗-100% 上限+45 Pt上限+100".to_string(),
-                7 => "絆+7 失敗-100% 上限+50 Pt上限+110".to_string(),
-                8 => "絆+7 失敗-100% 上限+60 Pt上限+120".to_string(),
-                _ => format!("Lv{}", level),
-            };
-            ("桃", desc)
-        }
-        _ => ("?", format!("Lv{}", level)),
-    }
-}
-
-/// Safe wrapper: catches panics from read_summary_inner to prevent game crash
 fn read_summary() -> String {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unsafe { read_summary_inner() }
@@ -1856,9 +743,103 @@ unsafe fn read_summary_inner() -> String {
 
     // ★ state field removed: get_State() doesn't exist on WorkSingleModeCharaData
     // Health condition is now detected via chara_effect_ids (top-level array)
+
+    // === ★ AI Evaluation (v3.15.0) ===
+    let ai_json = {
+        // Compute turn from month+half (URA: turn = (month-1)*2 + (half-1), max 71 for training)
+        let turn = std::cmp::min((mon - 1) * 2 + (half - 1), 71);
+        let stats = [spd, sta, pow_, gut, wiz];
+
+        // Parse trainings JSON back into eval input
+        // We already have the training data from phase2, but it's in JSON string.
+        // Instead, re-extract from the training data we collected.
+        // Simple approach: parse the tr_json we just built
+        let mut eval_trainings: Vec<(i32, [i32; 5], i32, i32, i32, i32)> = Vec::new();
+
+        // Re-read training data for AI evaluation
+        if !home_info_obj.is_null() && !hi_class.is_null() {
+            let cmd_arr2 = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
+            if !cmd_arr2.is_null() {
+                let cb2 = cmd_arr2 as *const u8;
+                let cl2 = std::ptr::read_unaligned::<usize>(cb2.add(0x18) as *const usize);
+                if cl2 > 0 && cl2 < 100 {
+                    let cmd_elem2 = find_class_by_short_name(image, "SingleModeCommandInfoData");
+                    let pid_class2 = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
+                    for i in 0..cl2 {
+                        let ep = std::ptr::read_unaligned::<*mut c_void>(cb2.add(0x20 + i * 8) as *const *mut c_void);
+                        if ep.is_null() { continue; }
+
+                        let cid = if !cmd_elem2.is_null() {
+                            call_getter_obscured_int(cmd_elem2, ep, "get_CommandId")
+                        } else { -1 };
+
+                        let is_enable = if !cmd_elem2.is_null() {
+                            call_getter_obscured_int(cmd_elem2, ep, "get_IsEnable")
+                        } else { -1 };
+
+                        let fail_rate = if !cmd_elem2.is_null() {
+                            call_getter_obscured_int(cmd_elem2, ep, "get_FailureRate")
+                        } else { -1 };
+
+                        // Parse gains into [5 stat gains] + skill_pt + vital_cost
+                        let mut stat_gains = [0i32; 5]; // [Speed, Stamina, Power, Guts, Wisdom]
+                        let mut skill_pt_gain = 0i32;
+                        let mut vital_cost = 0i32;
+
+                        if !cmd_elem2.is_null() {
+                            let pa = call_getter_on_instance(cmd_elem2, ep, "get_ParamsIncDecInfoArray");
+                            if !pa.is_null() {
+                                let pb = pa as *const u8;
+                                let pl = std::ptr::read_unaligned::<usize>(pb.add(0x18) as *const usize);
+                                if pl > 0 && pl < 100 {
+                                    for j in 0..pl {
+                                        let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(0x20 + j * 8) as *const *mut c_void);
+                                        if pe.is_null() { continue; }
+                                        let tt = if !pid_class2.is_null() {
+                                            call_getter_obscured_int(pid_class2, pe, "get_TargetType")
+                                        } else { -1 };
+                                        let v = if !pid_class2.is_null() {
+                                            call_getter_obscured_int(pid_class2, pe, "get_Value")
+                                        } else { 0 };
+                                        if v == 0 { continue; }
+                                        match tt {
+                                            1 => stat_gains[0] += v, // Speed
+                                            2 => stat_gains[1] += v, // Stamina
+                                            4 => stat_gains[2] += v, // Power
+                                            3 => stat_gains[3] += v, // Guts
+                                            5 => stat_gains[4] += v, // Wisdom
+                                            10 => vital_cost += v,    // HP (vital change)
+                                            30 => skill_pt_gain += v, // SkillPt
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Only add valid training commands
+                        if cmd_id_to_train_idx(cid).is_some() {
+                            eval_trainings.push((cid, stat_gains, skill_pt_gain, vital_cost, fail_rate, is_enable));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Detect buffs from chara_effect_ids
+        let has_ai_jiao = chara_effect_ids.iter().any(|&id| id == 8);
+        let has_renshou_jouzu = chara_effect_ids.iter().any(|&id| id == 10 || id == 11);
+
+        let result = evaluate_ai(
+            turn, stats, vit, mvit, mot, sid,
+            &eval_trainings, has_ai_jiao, has_renshou_jouzu,
+        );
+        ai_result_to_json(&result)
+    };
+
     format!(
-        r#"{{"version":"3.14.2","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}]}}"#,
-        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(",")
+        r#"{{"version":"3.15.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}}}"#,
+        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json
     )
 }
 
@@ -2169,7 +1150,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.14.2").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.15.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -2374,7 +1355,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.14.2 loaded (panic protection + probe init)");
+    ura_log(3, "URA plugin v3.15.0 loaded (AI evaluation + panic protection)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr("URA v3.7.8 Loaded!").as_ptr());
