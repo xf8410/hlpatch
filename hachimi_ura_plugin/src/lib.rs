@@ -51,7 +51,7 @@ static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
 
 // ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
 static mut LAST_PUSH_HASH: u64 = 0;
-static PUSH_INTERVAL_SECS: u64 = 3;
+static PUSH_INTERVAL_SECS: u64 = 1;
 
 // ★ Training log (v3.7.9): auto-record snapshots from /data and /scenario
 const MAX_LOG_ENTRIES: usize = 30;
@@ -1475,6 +1475,20 @@ fn push_to_app(json: &str) {
 
 fn push_loop() {
     let interval = std::time::Duration::from_secs(PUSH_INTERVAL_SECS);
+
+    // ★ Initial push: try pushing current data on startup
+    // Wait for game to be ready, then push immediately
+    for _ in 0..30 {
+        if GAME_INITIALIZED.load(Ordering::Relaxed) { break; }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    let init_summary = unsafe { read_summary() };
+    if !init_summary.contains("\"error\"") {
+        unsafe { LAST_PUSH_HASH = simple_hash(&init_summary); }
+        push_to_app(&init_summary);
+        unsafe { ura_log(3, "Push: initial data pushed"); }
+    }
+
     loop {
         std::thread::sleep(interval);
         if !GAME_INITIALIZED.load(Ordering::Relaxed) {
