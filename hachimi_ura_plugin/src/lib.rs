@@ -731,7 +731,7 @@ unsafe fn read_scenario_detail() -> String {
                                             let (tt, val) = (t, v);
                                             let tt_name = match tt {
                                                 0 => "None", 1 => "Speed", 2 => "Stamina",
-                                                3 => "Power", 4 => "Guts", 5 => "Wiz",
+                                                3 => "Guts", 4 => "Power", 5 => "Wiz",
                                                 6 => "Unknown6", 10 => "HP", 20 => "Motivation",
                                                 30 => "SkillPt",
                                                 _ => "Unknown"
