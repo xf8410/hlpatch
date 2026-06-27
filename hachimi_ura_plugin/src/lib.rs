@@ -1,4 +1,4 @@
-//! URA Plugin v3.14.0
+//! URA Plugin v3.14.2
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
 //! ★ v3.13.0: Add all training runtime fields to /summary via HomeInfoData path (all scenarios)
 //! ★ v3.12.0: Add gui_ui_text_edit_singleline for config input fields (Push Host/Port)
@@ -1404,6 +1404,45 @@ unsafe fn find_method_in_all_classes(method_name: &str) -> String {
 }
 
 // ============================================================
+// ★ CharaEffectId → human-readable buff mapping (v3.14.2)
+// From dump.cs CharaEffectId enum + CharaEffectType enum
+fn chara_effect_name(id: i32) -> (&'static str, &'static str) {
+    // Returns (name, effect_type) where effect_type is "Good" or "Bad"
+    match id {
+        1 => ("夜鷹", "Bad"),
+        2 => ("怠け", "Bad"),
+        3 => ("肌荒れ", "Bad"),
+        4 => ("太り気", "Bad"),
+        5 => ("頭痛", "Bad"),
+        6 => ("練習下手", "Bad"),
+        7 => ("Pt割引", "Good"),
+        8 => ("愛嬌", "Good"),
+        9 => ("注目", "Good"),
+        10 => ("練習上手", "Good"),
+        11 => ("練習◎", "Good"),
+        25 => ("やる気G", "Good"),
+        26 => ("調子G", "Good"),
+        999 => ("ランダム", "Special"),
+        _ => ("", ""), // unknown
+    }
+}
+
+/// Generate buffs JSON from chara_effect_ids (works for ALL scenarios)
+fn effects_to_buffs_json(effect_ids: &[i32]) -> String {
+    if effect_ids.is_empty() { return "[]".to_string(); }
+    let mut buffs = Vec::new();
+    for &id in effect_ids {
+        let (name, etype) = chara_effect_name(id);
+        if name.is_empty() {
+            // Unknown effect — output raw ID for debugging
+            buffs.push(format!(r#"{{"name":"Effect#{}","level":0,"desc":"unknown effect","type":"Unknown"}}"#, id));
+        } else {
+            buffs.push(format!(r#"{{"name":"{}","level":0,"desc":"{}","type":"{}"}}"#, name, name, etype));
+        }
+    }
+    format!("[{}]", buffs.join(","))
+}
+
 // ★ Clean summary for floating window app (/summary endpoint)
 // v3.10.0: Player-friendly output — stats + training gains in one response
 // ============================================================
@@ -1755,9 +1794,10 @@ unsafe fn read_summary_inner() -> String {
         }
     }
 
-    // --- Buffs (Breeders enhance groups, keep existing logic) ---
+    // --- Buffs: chara_effect_ids → readable names (ALL scenarios) + EnhanceGroup (Breeders) ---
     ura_log(3, "★ read_summary phase6: buffs");
-    let mut buff_json = "[]".to_string();
+    // ★ v3.14.2: Always generate buffs from chara_effect_ids first
+    let mut buff_json = effects_to_buffs_json(&chara_effect_ids);
     let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
     if !scenario_obj.is_null() {
         let sc_name = match sid {
@@ -1778,7 +1818,8 @@ unsafe fn read_summary_inner() -> String {
                     let ds_name = format!("{}DataSet", sc_name);
                     let ds_class = find_class_by_short_name(image, &ds_name);
                     if !ds_class.is_null() {
-                        // ★ EnhanceGroups (Breeders buff data) → human-readable descriptions
+                        // ★ EnhanceGroups (Breeders buff data) → override chara_effect_ids buffs
+                        // Only for Breeders scenario; enhances have proper levels 1-8
                         let enhance_cls_name = match sid {
                             13 => "ObscuredSingleModeBreedersEnhanceGroup",
                             _ => ""
@@ -1790,16 +1831,20 @@ unsafe fn read_summary_inner() -> String {
                                 if !enhance_arr.is_null() {
                                     let eb = enhance_arr as *const u8;
                                     let el = std::ptr::read_unaligned::<usize>(eb.add(0x18) as *const usize);
-                                    let mut buffs = Vec::new();
-                                    for i in 0..el {
-                                        let ep = std::ptr::read_unaligned::<*mut c_void>(eb.add(0x20 + i * 8) as *const *mut c_void);
-                                        if ep.is_null() { continue; }
-                                        let gt = call_getter_obscured_int(enhance_cls, ep, "get_GroupType");
-                                        let lv = call_getter_obscured_int(enhance_cls, ep, "get_Level");
-                                        let (gtn, desc) = breeders_buff_desc(gt, lv);
-                                        buffs.push(format!(r#"{{"name":"{}","level":{},"desc":"{}"}}"#, gtn, lv, desc));
+                                    if el > 0 && el < 20 {
+                                        let mut buffs = Vec::new();
+                                        for i in 0..el {
+                                            let ep = std::ptr::read_unaligned::<*mut c_void>(eb.add(0x20 + i * 8) as *const *mut c_void);
+                                            if ep.is_null() { continue; }
+                                            let gt = call_getter_obscured_int(enhance_cls, ep, "get_GroupType");
+                                            let lv = call_getter_obscured_int(enhance_cls, ep, "get_Level");
+                                            let (gtn, desc) = breeders_buff_desc(gt, lv);
+                                            buffs.push(format!(r#"{{"name":"{}","level":{},"desc":"{}","type":"Breeders"}}"#, gtn, lv, desc));
+                                        }
+                                        if !buffs.is_empty() {
+                                            buff_json = format!("[{}]", buffs.join(","));
+                                        }
                                     }
-                                    buff_json = format!("[{}]", buffs.join(","));
                                 }
                             }
                         }
@@ -1812,7 +1857,7 @@ unsafe fn read_summary_inner() -> String {
     // ★ state field removed: get_State() doesn't exist on WorkSingleModeCharaData
     // Health condition is now detected via chara_effect_ids (top-level array)
     format!(
-        r#"{{"version":"3.14.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}]}}"#,
+        r#"{{"version":"3.14.2","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}]}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(",")
     )
 }
@@ -1864,7 +1909,8 @@ fn push_to_app(json: &str) {
 }
 
 fn push_loop() {
-    let interval = std::time::Duration::from_secs(unsafe { get_config() }.push_interval_secs.max(1));
+    let interval = std::time::Duration::from_secs(unsafe { get_config() }.push_interval_secs.max(2));
+    let mut consecutive_errors: u32 = 0;
 
     // ★ Initial push: try pushing current data on startup
     // Don't rely solely on GAME_INITIALIZED callback — it may never fire
@@ -1897,8 +1943,16 @@ fn push_loop() {
         // if the game isn't ready, read_summary returns error and we skip.
         let summary = read_summary();
         if summary.contains("\"error\"") {
+            consecutive_errors += 1;
+            // ★ v3.14.2: backoff on consecutive errors to avoid crash loop
+            if consecutive_errors > 3 {
+                let backoff = std::time::Duration::from_secs((consecutive_errors as u64).min(30));
+                unsafe { ura_log(3, &format!("Push: {} consecutive errors, backing off {}s", consecutive_errors, backoff.as_secs())); }
+                std::thread::sleep(backoff);
+            }
             continue;
         }
+        consecutive_errors = 0;
         // If we got here, game is definitely ready
         if !GAME_INITIALIZED.load(Ordering::Relaxed) {
             GAME_INITIALIZED.store(true, Ordering::Relaxed);
@@ -1977,7 +2031,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.14.1","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.14.2","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -2115,7 +2169,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.14.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.14.2").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -2320,7 +2374,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.14.0 loaded (panic protection + probe init)");
+    ura_log(3, "URA plugin v3.14.2 loaded (panic protection + probe init)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr("URA v3.7.8 Loaded!").as_ptr());
