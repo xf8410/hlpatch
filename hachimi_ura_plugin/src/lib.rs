@@ -1403,6 +1403,7 @@ unsafe fn read_summary() -> String {
 
     // --- Training gains ---
     let mut tr_json = "[]".to_string();
+    let mut buff_json = "[]".to_string();
     let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
     if !scenario_obj.is_null() {
         let sc_name = match sid {
@@ -1474,7 +1475,6 @@ unsafe fn read_summary() -> String {
 
                         // ★ EnhanceGroups (Breeders buff data) → human-readable descriptions
                         // Plugin translates game data into readable text so the app doesn't need to understand game mechanics
-                        let mut buff_json = "[]".to_string();
                         let enhance_cls_name = match sid {
                             13 => "ObscuredSingleModeBreedersEnhanceGroup",
                             _ => ""
