@@ -699,6 +699,22 @@ unsafe fn read_scenario_detail() -> String {
                             for i in 0..cmd_len {
                                 let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
                                 let mut detail = if i < elements.len() { elements[i].clone() } else { "{}".to_string() };
+                                // ★ Add CommandId→training name mapping
+                                {
+                                    let cmd_id_val = if detail.contains("\"CommandId\":") {
+                                        detail.split("\"CommandId\":").nth(1)
+                                            .and_then(|s| s.split(',').next())
+                                            .and_then(|s| s.trim().parse::<i32>().ok())
+                                            .unwrap_or(-1)
+                                    } else { -1 };
+                                    let cmd_name = match cmd_id_val {
+                                        101 => "Speed", 102 => "Stamina", 103 => "Guts",
+                                        105 => "Power", 106 => "Wiz",
+                                        _ => "Unknown"
+                                    };
+                                    if detail.ends_with('}') { detail.pop(); }
+                                    detail.push_str(&format!(",\"CommandName\":\"{}\"}}", cmd_name));
+                                }
                                 if !elem_ptr.is_null() {
                                     let params_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_ParamsIncDecInfoArray");
                                     let mut params_items = Vec::new();
@@ -713,7 +729,13 @@ unsafe fn read_scenario_detail() -> String {
                                             let t = std::ptr::read_unaligned::<i32>(bytes.add(0x10) as *const i32);
                                             let v = std::ptr::read_unaligned::<i32>(bytes.add(0x14) as *const i32);
                                             let (tt, val) = (t, v);
-                                            params_items.push(format!(r#"{{"TargetType":{},"Value":{}}}"#, tt, val));
+                                            let tt_name = match tt {
+                                                0 => "Speed", 1 => "Speed", 2 => "Stamina",
+                                                3 => "Guts", 4 => "Power", 5 => "Wiz",
+                                                6 => "HP", 30 => "SkillPt",
+                                                _ => "Unknown"
+                                            };
+                                            params_items.push(format!(r#"{{"TargetType":{},"TargetTypeName":"{}","Value":{}}}"#, tt, tt_name, val));
                                         }
                                     }
                                     // Read TeamMemberInfoArray length
@@ -1323,7 +1345,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.8.1","fix":"Breeders_hardcode_plain_Int32+safe_class_name_detect","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.8.2","fix":"TargetType+CommandId_name_mapping","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
