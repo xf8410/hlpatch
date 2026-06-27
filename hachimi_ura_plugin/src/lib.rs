@@ -1,4 +1,4 @@
-//! URA Plugin v3.10.0
+//! URA Plugin v3.11.0
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
 //! ★ v3.8.7: TargetType 3=Guts,4=Power (实测); CommandId→name mapping
 //! ★ v3.8.1: Fix crash — safe class name detection via il2cpp_class_get_name
@@ -52,6 +52,80 @@ static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
 // ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
 static mut LAST_PUSH_HASH: u64 = 0;
 static PUSH_INTERVAL_SECS: u64 = 1;
+
+// ★ Config (v3.11.0): runtime config updated via POST /config from App
+// No file editing needed — App settings page sends config to plugin HTTP endpoint
+struct PluginConfig {
+    push_host: String,      // default: "127.0.0.1"
+    push_port: u16,         // default: 18766
+    http_port: u16,         // default: 18765
+    push_interval_secs: u64, // default: 1
+    push_enabled: bool,     // default: true
+    http_enabled: bool,     // default: true
+}
+
+impl PluginConfig {
+    fn defaults() -> Self {
+        Self {
+            push_host: "127.0.0.1".to_string(),
+            push_port: 18766,
+            http_port: 18765,
+            push_interval_secs: 1,
+            push_enabled: true,
+            http_enabled: true,
+        }
+    }
+
+    fn push_addr(&self) -> String {
+        format!("{}:{}", self.push_host, self.push_port)
+    }
+
+    // Parse JSON config from POST /config body (simple manual parse, no serde)
+    fn from_json(data: &str) -> Option<Self> {
+        let mut cfg = Self::defaults();
+        let mut changed = false;
+        // Extract key-value pairs from JSON
+        for line in data.lines() {
+            let l = line.trim().trim_end_matches(',');
+            if l.is_empty() || l == "{" || l == "}" { continue; }
+            if let Some((k, v)) = l.split_once(':') {
+                let k = k.trim().trim_matches('"');
+                let v = v.trim().trim_matches('"');
+                match k {
+                    "push_host" => { cfg.push_host = v.to_string(); changed = true; }
+                    "push_port" => if let Ok(n) = v.parse() { cfg.push_port = n; changed = true; }
+                    "http_port" => if let Ok(n) = v.parse() { cfg.http_port = n; changed = true; }
+                    "push_interval_secs" => if let Ok(n) = v.parse() { cfg.push_interval_secs = n.max(1); changed = true; }
+                    "push_enabled" => { cfg.push_enabled = v == "true"; changed = true; }
+                    "http_enabled" => { cfg.http_enabled = v == "true"; changed = true; }
+                    _ => {}
+                }
+            }
+        }
+        if changed { Some(cfg) } else { None }
+    }
+
+    fn to_json(&self) -> String {
+        format!(
+            r#"{{"push_host":"{}","push_port":{},"http_port":{},"push_interval_secs":{},"push_enabled":{},"http_enabled":{}}}"#,
+            self.push_host, self.push_port, self.http_port,
+            self.push_interval_secs, self.push_enabled, self.http_enabled
+        )
+    }
+}
+
+static mut PLUGIN_CONFIG: Option<PluginConfig> = None;
+
+unsafe fn get_config() -> &'static PluginConfig {
+    if PLUGIN_CONFIG.is_none() {
+        PLUGIN_CONFIG = Some(PluginConfig::defaults());
+    }
+    PLUGIN_CONFIG.as_ref().unwrap()
+}
+
+unsafe fn update_config(new_cfg: PluginConfig) {
+    PLUGIN_CONFIG = Some(new_cfg);
+}
 
 // ★ Training log (v3.7.9): auto-record snapshots from /data and /scenario
 const MAX_LOG_ENTRIES: usize = 30;
@@ -1507,7 +1581,7 @@ unsafe fn read_summary() -> String {
     }
 
     format!(
-        r#"{{"version":"3.10.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"buffs":{}}}"#,
+        r#"{{"version":"3.11.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"buffs":{}}}"#,
         mon, half, scn_s, spd, sta, pow, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, buff_json
     )
 }
@@ -1533,7 +1607,10 @@ fn simple_hash(s: &str) -> u64 {
 
 fn push_to_app(json: &str) {
     use std::io::{Read, Write};
-    let addr: std::net::SocketAddr = match "127.0.0.1:18766".parse() {
+    let cfg = unsafe { get_config() };
+    if !cfg.push_enabled { return; }
+    let addr_str = cfg.push_addr();
+    let addr: std::net::SocketAddr = match addr_str.parse() {
         Ok(a) => a,
         Err(_) => return,
     };
@@ -1545,8 +1622,8 @@ fn push_to_app(json: &str) {
     };
     let body = json.as_bytes();
     let req = format!(
-        "POST /data HTTP/1.1\r\nHost: 127.0.0.1:18766\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
+        "POST /data HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        addr_str, body.len()
     );
     let _ = stream.write_all(req.as_bytes());
     let _ = stream.write_all(body);
@@ -1556,7 +1633,7 @@ fn push_to_app(json: &str) {
 }
 
 fn push_loop() {
-    let interval = std::time::Duration::from_secs(PUSH_INTERVAL_SECS);
+    let interval = std::time::Duration::from_secs(unsafe { get_config() }.push_interval_secs.max(1));
 
     // ★ Initial push: try pushing current data on startup
     // Wait for game to be ready, then push immediately
@@ -1654,7 +1731,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.10.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.11.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1722,6 +1799,34 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { get_training_log() }
     } else if path == "/debug/params" {
         unsafe { debug_params_inc_dec() }
+    } else if path == "/config" {
+        // POST /config to update, GET /config to read current
+        let is_post = req.starts_with("POST");
+        if is_post {
+            // Parse body from request
+            let body_start = req.find("\r\n\r\n").map(|i| i + 4).unwrap_or(req.len());
+            let post_body = &req[body_start..];
+            if let Some(new_cfg) = PluginConfig::from_json(post_body) {
+                let json = new_cfg.to_json();
+                unsafe { update_config(new_cfg); }
+                unsafe { ura_log(3, &format!("Config updated: {}", json)); }
+                format!(r#"{{"ok":true,"config":{}}}"#, json)
+            } else {
+                r#"{"ok":false,"error":"invalid_json"}"#.to_string()
+            }
+        } else {
+            format!(r#"{{"ok":true,"config":{}}}"#, unsafe { get_config() }.to_json())
+        }
+    } else if path == "/config.html" {
+        // Serve a simple HTML form for config editing - open in any browser
+        let cfg = unsafe { get_config() };
+        let html = format!(r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>URA Plugin Config</title><style>body{{font-family:system-ui;max-width:500px;margin:20px auto;padding:0 16px;background:#1a1a2e;color:#e0e0e0}}h1{{color:#4fc3f7;font-size:1.3em}}label{{display:block;margin:12px 0 4px;color:#aaa;font-size:0.85em}}input{{width:100%;padding:8px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;box-sizing:border-box}}button{{margin-top:16px;padding:10px 24px;background:#4fc3f7;border:none;border-radius:4px;color:#000;font-weight:bold;cursor:pointer}}.ok{{color:#4caf50;margin-top:8px}}</style></head><body><h1>URA Plugin Config</h1><form id="f"><label>Push Host</label><input id="push_host" value="{}"><label>Push Port</label><input id="push_port" type="number" value="{}"><label>HTTP Port</label><input id="http_port" type="number" value="{}"><label>Push Interval (sec)</label><input id="push_interval_secs" type="number" value="{}" min="1"><label>Push Enabled</label><input id="push_enabled" type="checkbox" {}><label>HTTP Enabled</label><input id="http_enabled" type="checkbox" {}><button type="submit">Save</button></form><div id="r"></div><script>document.getElementById('f').onsubmit=async(e)=>{{e.preventDefault();const d={{push_host:push_host.value,push_port:+push_port.value,http_port:+http_port.value,push_interval_secs:+push_interval_secs.value,push_enabled:push_enabled.checked,http_enabled:http_enabled.checked}};const r=await fetch('/config',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(d)}});const j=await r.json();document.getElementById('r').innerHTML=j.ok?'<p class="ok">Saved!</p>':'<p style="color:red">Error: '+j.error+'</p>';}};</script></body></html>"#,
+            cfg.push_host, cfg.push_port, cfg.http_port, cfg.push_interval_secs,
+            if cfg.push_enabled { "checked" } else { "" },
+            if cfg.http_enabled { "checked" } else { "" }
+        );
+        // Return HTML with text/html content type (handled below)
+        html
     } else if path.starts_with("/classes") {
         let search = if path == "/classes" || path == "/classes/" {
             ""
@@ -1733,9 +1838,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
         format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/classes/search/keyword"]}}"#, path)
     };
 
+    let content_type = if body.starts_with("<!DOCTYPE") || body.starts_with("<html") { "text/html; charset=utf-8" } else { "application/json" };
     let resp = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(), body
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        content_type, body.len(), body
     );
     let _ = stream.write_all(resp.as_bytes());
     let _ = stream.flush();
@@ -1777,7 +1883,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
 
         if let Some(f) = api.gui_ui_colored_label_fn {
             if HTTP_RUNNING.load(Ordering::Relaxed) {
-                f(ui, 0, 255, 136, 255, to_cstr("HTTP: Running :18765").as_ptr());
+                f(ui, 0, 255, 136, 255, to_cstr(&format!("HTTP: Running :{}", unsafe { get_config() }.http_port)).as_ptr());
             } else {
                 f(ui, 255, 80, 80, 255, to_cstr("HTTP: Failed").as_ptr());
             }
@@ -1848,7 +1954,8 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
 
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
         if let Some(f) = api.gui_ui_label_fn {
-            f(ui, to_cstr("127.0.0.1:18765/data").as_ptr());
+            let cfg = unsafe { get_config() };
+            f(ui, to_cstr(&format!("{}:{}/data", cfg.push_host, cfg.http_port)).as_ptr());
         }
     }
 }
