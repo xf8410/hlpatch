@@ -730,9 +730,10 @@ unsafe fn read_scenario_detail() -> String {
                                             let v = std::ptr::read_unaligned::<i32>(bytes.add(0x14) as *const i32);
                                             let (tt, val) = (t, v);
                                             let tt_name = match tt {
-                                                0 => "Speed", 1 => "Speed", 2 => "Stamina",
-                                                3 => "Guts", 4 => "Power", 5 => "Wiz",
-                                                6 => "HP", 30 => "SkillPt",
+                                                0 => "None", 1 => "Speed", 2 => "Stamina",
+                                                3 => "Power", 4 => "Guts", 5 => "Wiz",
+                                                6 => "Unknown6", 10 => "HP", 20 => "Motivation",
+                                                30 => "SkillPt",
                                                 _ => "Unknown"
                                             };
                                             params_items.push(format!(r#"{{"TargetType":{},"TargetTypeName":"{}","Value":{}}}"#, tt, tt_name, val));
@@ -1345,7 +1346,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.8.2","fix":"TargetType+CommandId_name_mapping","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
+        r#"{"status":"ok","version":"3.8.3","fix":"ParameterType_enum_correct_mapping","data_path":"WorkDataManager->get_SingleMode->get_Character->get_Speed()","endpoints":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/fields/ClassName","/methods","/methods/ClassName","/singletons","/find_method/methodName","/classes","/classes/search/keyword"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
