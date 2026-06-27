@@ -1,4 +1,4 @@
-//! URA Plugin v3.15.6
+//! URA Plugin v3.15.7
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -272,6 +272,25 @@ unsafe fn find_class_by_iteration(image: *const c_void, class_name: &str) -> *mu
         }
     }
     ptr::null_mut()
+}
+
+/// ★ Get class name directly from an Il2CppClass pointer (no iteration needed)
+unsafe fn get_class_name_from_pointer(klass: *mut c_void) -> String {
+    if klass.is_null() { return String::new(); }
+    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
+    if get_name_fn.is_null() { return String::new(); }
+    let get_name: FnClassGetName = std::mem::transmute(get_name_fn);
+    let name_ptr = get_name(klass);
+    if name_ptr.is_null() { return String::new(); }
+    std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().into_owned()
+}
+
+/// ★ Get class name from an object instance by reading its klass pointer from the object header
+/// IL2CPP object layout: offset 0 = Il2CppClass* klass (8 bytes on 64-bit)
+unsafe fn get_object_class_name(obj: *const c_void) -> String {
+    if obj.is_null() { return String::new(); }
+    let klass = std::ptr::read_unaligned::<*mut c_void>(obj as *const *mut c_void);
+    get_class_name_from_pointer(klass)
 }
 
 unsafe fn get_singleton(class: *mut c_void) -> *const c_void {
@@ -3112,75 +3131,31 @@ unsafe fn read_breeders_team() -> String {
         }
     }
 
-    // ★ Read TeamSpTrainingInfo for DREAMS training count
+    // ★ Read TeamSpTrainingInfo for DREAMS training count (confirmed class+getters from debug!)
     let sp_train_obj = call_getter_on_instance(ds_class, ds_obj, "get_TeamSpTrainingInfo");
     let mut dream_left: i32 = -1;
     let mut dream_max: i32 = -1;
+    let mut dream_activated: i32 = -1;
     let mut dream_overflow = false;
     if !sp_train_obj.is_null() {
-        // Try to read DreamTrainingLeft/Count from TeamSpTrainingInfo
-        // We need to find the class of TeamSpTrainingInfo first
-        let sp_train_class_names = [
-            "ObscuredSingleModeBreedersTeamSpTrainingInfo",
-            "SingleModeBreedersTeamSpTrainingInfo",
-            "ObscuredSingleModeScenarioBreedersTeamSpTrainingInfo",
-            "SingleModeScenarioBreedersTeamSpTrainingInfo",
-            "WorkSingleModeScenarioBreedersTeamSpTrainingInfo",
-        ];
-        for &cn in &sp_train_class_names {
-            let cls = find_class_by_short_name(image, cn);
-            if !cls.is_null() {
-                // Try common getter names for dream training count
-                let count_names = ["get_StockCount", "get_TrainingCount", "get_RemainCount",
-                                   "get_LeftCount", "get_SpTrainingCount", "get_DreamsTrainingCount"];
-                let max_names = ["get_MaxStockCount", "get_MaxCount", "get_MaxTrainingCount",
-                                  "get_Capacity"];
-                for &n in &count_names {
-                    let v = call_getter_obscured_int(cls, sp_train_obj, n);
-                    if v >= 0 && v <= 10 {
-                        dream_left = v;
-                        break;
-                    }
-                    let v2 = call_getter_int(cls, sp_train_obj, n);
-                    if v2 >= 0 && v2 <= 10 {
-                        dream_left = v2;
-                        break;
-                    }
-                }
-                for &n in &max_names {
-                    let v = call_getter_obscured_int(cls, sp_train_obj, n);
-                    if v >= 0 && v <= 10 {
-                        dream_max = v;
-                        break;
-                    }
-                    let v2 = call_getter_int(cls, sp_train_obj, n);
-                    if v2 >= 0 && v2 <= 10 {
-                        dream_max = v2;
-                        break;
-                    }
-                }
-                break;
+        let sp_train_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersTeamSpTrainingInfo");
+        if !sp_train_class.is_null() {
+            dream_left = call_getter_obscured_int(sp_train_class, sp_train_obj, "get_StockNum");
+            dream_max = call_getter_obscured_int(sp_train_class, sp_train_obj, "get_StockMax");
+            dream_activated = call_getter_obscured_int(sp_train_class, sp_train_obj, "get_ActivatedState");
+            // dream_overflow: StockNum > StockMax means overflow
+            if dream_left >= 0 && dream_max >= 0 {
+                dream_overflow = dream_left > dream_max;
             }
         }
     }
 
-    // ★ Also check IsOverflowTeamSpTrainingStock from ChangeParameterInfo
-    let chg_class = find_class_by_short_name(image, "WorkSingleModeChangeParameterInfoScenarioBreeders");
-    if !chg_class.is_null() && !scenario_obj.is_null() {
-        // The ChangeParameterInfo might be on a different path
-        // Try reading from DataSet's TeamSpLevelLimit as overflow hint
-        let sp_limit = call_getter_obscured_int(ds_class, ds_obj, "get_TeamSpLevelLimit");
-        if sp_limit >= 0 {
-            dream_overflow = sp_limit > 0; // heuristic: if SP level limit > 0, might be overflow
-        }
-    }
-
-    // ★ Read TeamMemberInfoArray from DataSet (correct getter name from debug!)
+    // ★ Read TeamMemberInfoArray from DataSet
     let member_arr = call_getter_on_instance(ds_class, ds_obj, "get_TeamMemberInfoArray");
     if member_arr.is_null() {
         return format!(
-            r#"{{"error":"member_arr_null","scenario_id":13,"team_rank":{},"having_dp":{},"dream_left":{},"enhance_groups":[{}]}}"#,
-            team_rank, having_dp, dream_left, enhance_groups_json.join(",")
+            r#"{{"error":"member_arr_null","scenario_id":13,"team_rank":{},"having_dp":{},"dream_left":{},"dream_max":{},"enhance_groups":[{}]}}"#,
+            team_rank, having_dp, dream_left, dream_max, enhance_groups_json.join(",")
         );
     }
 
@@ -3189,12 +3164,27 @@ unsafe fn read_breeders_team() -> String {
 
     if ml == 0 || ml > 10 {
         return format!(
-            r#"{{"error":"member_arr_empty","count":{},"team_rank":{},"having_dp":{},"dream_left":{},"enhance_groups":[{}]}}"#,
-            ml, team_rank, having_dp, dream_left, enhance_groups_json.join(",")
+            r#"{{"error":"member_arr_empty","count":{},"team_rank":{},"having_dp":{},"dream_left":{},"dream_max":{},"enhance_groups":[{}]}}"#,
+            ml, team_rank, having_dp, dream_left, dream_max, enhance_groups_json.join(",")
         );
     }
 
-    // ★ Read member data
+    // ★ Discover member element class name from runtime object header
+    // Instead of guessing class names, read the klass pointer from the first element
+    // and use il2cpp_class_get_name to get the actual class name
+    let mut discovered_member_class_name = String::new();
+    let mut member_class: *mut c_void = std::ptr::null_mut();
+    {
+        let first_ep = std::ptr::read_unaligned::<*mut c_void>(mb.add(0x20) as *const *mut c_void);
+        if !first_ep.is_null() {
+            discovered_member_class_name = get_object_class_name(first_ep);
+            if !discovered_member_class_name.is_empty() {
+                member_class = find_class_by_short_name(image, &discovered_member_class_name);
+            }
+        }
+    }
+
+    // ★ Read member data using discovered class
     let mut members_json = Vec::new();
     let mut min_level: i32 = 999;
 
@@ -3202,104 +3192,52 @@ unsafe fn read_breeders_team() -> String {
         let ep = std::ptr::read_unaligned::<*mut c_void>(mb.add(0x20 + i * 8) as *const *mut c_void);
         if ep.is_null() { continue; }
 
-        // ★ Try to determine element class from object header (il2cpp object klass pointer)
-        // Object layout: offset 0 = klass pointer, offset 8 = monitor data
-        let elem_klass = std::ptr::read_unaligned::<*mut c_void>(ep as *const *mut c_void);
-
-        // Try known member info class names
-        let member_class_names = [
-            "ObscuredSingleModeBreedersMemberInfo",
-            "SingleModeBreedersMemberInfo",
-            "ObscuredSingleModeBreedersUnitInfo",
-            "SingleModeBreedersUnitInfo",
-            "SingleModeBreedersPartnerInfo",
-            "SingleModeBreedersMemberInfoData",
-            "ObscuredSingleModeScenarioBreedersMemberInfo",
-            "WorkSingleModeScenarioBreedersTeamMemberInfo",
-        ];
-        let mut member_class: *mut c_void = std::ptr::null_mut();
-        for &cn in &member_class_names {
-            let cls = find_class_by_short_name(image, cn);
-            if !cls.is_null() && cls == elem_klass {
-                member_class = cls;
-                break;
-            }
-        }
-        // If no match by klass pointer, try any that exists
-        if member_class.is_null() {
-            for &cn in &member_class_names {
-                let cls = find_class_by_short_name(image, cn);
-                if !cls.is_null() {
-                    member_class = cls;
-                    break;
-                }
-            }
-        }
-
-        let level_names = ["get_Level", "get_Rank", "get_Grade"];
-        let gauge_names = ["get_DreamGauge", "get_DreamCount", "get_SoulGauge", "get_Gauge",
-                           "get_DreamGaugeCount", "get_DreamsGauge"];
-        let charaid_names = ["get_CharaId", "get_CharacterId"];
-        let exp_names = ["get_Exp", "get_Experience", "get_RankExp"];
-
         let mut level: i32 = -1;
         let mut gauge: i32 = -1;
         let mut chara_id: i32 = 0;
         let mut exp: i32 = 0;
-        let mut found_level = false;
-        let mut found_gauge = false;
+        let mut burst_ready = false;
+        let mut found_data = false;
 
         if !member_class.is_null() {
-            for &ln in &level_names {
+            // Try all plausible getter name patterns for member fields
+            // Level/Rank
+            for &ln in &["get_Level", "get_Rank", "get_Grade", "get_RankLevel"] {
                 let v = call_getter_obscured_int(member_class, ep, ln);
-                if v >= 0 && v <= 17 {
-                    level = v;
-                    found_level = true;
-                    break;
-                }
+                if v >= 0 && v <= 17 { level = v; break; }
                 let v2 = call_getter_int(member_class, ep, ln);
-                if v2 >= 0 && v2 <= 17 {
-                    level = v2;
-                    found_level = true;
-                    break;
-                }
+                if v2 >= 0 && v2 <= 17 { level = v2; break; }
             }
-            for &gn in &gauge_names {
-                let v = call_getter_int(member_class, ep, gn);
-                if v >= 0 && v <= 3 {
-                    gauge = v;
-                    found_gauge = true;
-                    break;
-                }
-                let v2 = call_getter_obscured_int(member_class, ep, gn);
-                if v2 >= 0 && v2 <= 3 {
-                    gauge = v2;
-                    found_gauge = true;
-                    break;
-                }
+            // Dream gauge / soul gauge
+            for &gn in &["get_DreamGauge", "get_SoulGauge", "get_Gauge", "get_DreamGaugeCount",
+                         "get_BurstGauge", "get_SoulBurstGauge", "get_DreamsGauge"] {
+                let v = call_getter_obscured_int(member_class, ep, gn);
+                if v >= 0 && v <= 5 { gauge = v; break; }
+                let v2 = call_getter_int(member_class, ep, gn);
+                if v2 >= 0 && v2 <= 5 { gauge = v2; break; }
             }
-            for &cn in &charaid_names {
+            // Chara ID
+            for &cn in &["get_CharaId", "get_CharacterId", "get_CardId"] {
                 let v = call_getter_int(member_class, ep, cn);
-                if v > 0 {
-                    chara_id = v;
-                    break;
-                }
+                if v > 0 { chara_id = v; break; }
                 let v2 = call_getter_obscured_int(member_class, ep, cn);
-                if v2 > 0 {
-                    chara_id = v2;
-                    break;
-                }
+                if v2 > 0 { chara_id = v2; break; }
             }
-            for &en in &exp_names {
+            // Exp
+            for &en in &["get_Exp", "get_Experience", "get_RankExp", "get_DreamExp"] {
                 let v = call_getter_obscured_int(member_class, ep, en);
-                if v >= 0 {
-                    exp = v;
-                    break;
-                }
+                if v >= 0 { exp = v; break; }
             }
+            // Burst ready
+            for &bn in &["get_IsBurstReady", "get_BurstReady", "get_IsBurst", "get_CanBurst"] {
+                let v = call_getter_bool(member_class, ep, bn);
+                if v { burst_ready = true; break; }
+            }
+
+            found_data = level >= 0;
         }
 
-        // If class-based reading failed, dump raw bytes + try offset-based reading
+        // Build hex dump as fallback
         let mut hex = String::new();
         let epb = ep as *const u8;
         for b in 0..0x80 {
@@ -3307,19 +3245,23 @@ unsafe fn read_breeders_team() -> String {
             hex.push_str(&format!("{:02x}", *epb.add(b)));
         }
 
-        if found_level && found_gauge {
-            let burst_ready = gauge >= 3;
-            if level < min_level { min_level = level; }
+        if gauge < 0 { gauge = 0; }
+        if level < 0 { level = 0; }
+        if !burst_ready && gauge >= 3 { burst_ready = true; } // fallback: gauge≥3 means burst
+
+        if level < min_level && level >= 0 { min_level = level; }
+
+        if found_data {
             members_json.push(format!(
                 r#"{{"chara_id":{},"level":{},"dream_gauge":{},"burst_ready":{},"exp":{}}}"#,
                 chara_id, level, gauge, burst_ready, exp
             ));
         } else {
-            // Fallback: include raw hex dump for analysis
+            // Fallback: include raw hex dump + discovered class name for analysis
             members_json.push(format!(
-                r#"{{"idx":{},"chara_id":{},"level":{},"gauge":{},"burst_ready":{},"exp":{},"klass":"0x{:x}","raw":"{}"}}"#,
-                i, chara_id, level, gauge, gauge >= 3, exp,
-                elem_klass as usize, hex
+                r#"{{"idx":{},"chara_id":{},"level":{},"gauge":{},"burst_ready":{},"exp":{},"klass_name":"{}","raw":"{}"}}"#,
+                i, chara_id, level, gauge, burst_ready, exp,
+                discovered_member_class_name, hex
             ));
         }
     }
@@ -3327,9 +3269,9 @@ unsafe fn read_breeders_team() -> String {
     if min_level == 999 { min_level = 0; }
 
     format!(
-        r#"{{"team_members":[{}],"team_rank":{},"having_dp":{},"dream_left":{},"dream_max":{},"dream_overflow":{},"enhance_groups":[{}],"member_count":{}}}"#,
+        r#"{{"team_members":[{}],"team_rank":{},"having_dp":{},"dream_left":{},"dream_max":{},"dream_overflow":{},"dream_activated":{},"enhance_groups":[{}],"member_count":{},"member_class":"{}"}}"#,
         members_json.join(","), team_rank, having_dp, dream_left, dream_max, dream_overflow,
-        enhance_groups_json.join(","), ml
+        dream_activated, enhance_groups_json.join(","), ml, discovered_member_class_name
     )
 }
 
@@ -3382,6 +3324,8 @@ unsafe fn debug_breeders_team() -> String {
             "WorkSingleModeChangeParameterInfoScenarioBreeders",
             "SingleModeBreedersPartnerInfo",
             "SingleModeBreedersMemberInfoData",
+            "SingleModeBreedersTeamMemberInfo",
+            "ObscuredSingleModeBreedersTeamMemberInfo",
         ],
         14 => vec![
             "WorkSingleModeScenarioRamen",
@@ -3424,12 +3368,55 @@ unsafe fn debug_breeders_team() -> String {
 
     let team_data = if sid == 13 { read_breeders_team() } else { r#"{"skip":"not_breeders"}"#.to_string() };
 
+    // ★ Runtime member class discovery: read actual class name from TeamMemberInfoArray elements
+    let mut member_class_detail = String::new();
+    {
+        let sc_class = find_class_by_short_name(image, scenario_class_name);
+        if !sc_class.is_null() && !scenario_obj.is_null() {
+            let ds_obj = call_getter_on_instance(sc_class, scenario_obj, "get_DataSet");
+            if !ds_obj.is_null() {
+                let ds_cls = find_class_by_short_name(image, dataset_class_name);
+                if !ds_cls.is_null() {
+                    let arr = call_getter_on_instance(ds_cls, ds_obj, "get_TeamMemberInfoArray");
+                    if !arr.is_null() {
+                        let ab = arr as *const u8;
+                        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+                        if al > 0 {
+                            let first_ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20) as *const *mut c_void);
+                            if !first_ep.is_null() {
+                                let disc_name = get_object_class_name(first_ep);
+                                if !disc_name.is_empty() {
+                                    // Found the real class name! Enumerate its methods and fields
+                                    let disc_class = find_class_by_short_name(image, &disc_name);
+                                    if !disc_class.is_null() {
+                                        let methods = enumerate_class_methods(disc_class);
+                                        let fields = enumerate_class_fields(disc_class);
+                                        member_class_detail = format!(
+                                            r#","member_class_runtime":{{"name":"{}","found":true,"methods":{},"fields":{}}}"#,
+                                            disc_name, methods, fields
+                                        );
+                                    } else {
+                                        member_class_detail = format!(
+                                            r#","member_class_runtime":{{"name":"{}","found_but_cannot_locate":true}}"#,
+                                            disc_name
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     format!(
-        r#"{{"scenario_id":{},"team_data":{},"class_details":[{}],"chara_getters":[{}]}}"#,
+        r#"{{"scenario_id":{},"team_data":{},"class_details":[{}],"chara_getters":[{}]{} }}"#,
         sid,
         team_data,
         class_details.join(","),
-        getter_results.join(",")
+        getter_results.join(","),
+        member_class_detail
     )
 }
 
