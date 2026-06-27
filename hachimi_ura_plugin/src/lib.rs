@@ -1,12 +1,1513 @@
+//! URA Plugin v3.15.0
+//! ★ v3.15.0: AI evaluation — score, training recommendation, rest/outgoing evaluation
+//! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
+//! ★ v3.13.0: Add all training runtime fields to /summary via HomeInfoData path (all scenarios)
+//! ★ v3.12.0: Add gui_ui_text_edit_singleline for config input fields (Push Host/Port)
+//! ★ v3.8.7: TargetType 3=Guts,4=Power (实测); CommandId→name mapping
+//! ★ v3.8.1: Fix crash — safe class name detection via il2cpp_class_get_name
+//! ★ v3.7.8: Fix crash from null namespace ptr + expand ParamsIncDecInfoArray (TargetType+Value)
+//! ★ ObscuredInt fix: All chara fields use getter methods instead of field reads
+//! CY encrypts speed/stamina/etc as ObscuredInt, must call get_Speed()/get_Stamina() etc
+//! which return plain Int32 after decryption
+//!
+//! Data path: WorkDataManager (Singleton) -> get_SingleMode() -> WorkSingleModeData
+//!            WorkSingleModeData -> get_Character() -> WorkSingleModeCharaData
+//!            WorkSingleModeCharaData -> get_Speed(), get_Stamina(), get_Hp(), etc.
+//!
+//! Motivation enum: 1=Worst, 2=Bad, 3=Normal, 4=Good, 5=Best
+//! ObscuredInt getters: get_SkillPoint() returns ObscuredInt (boxed) - needs special handling
+
+#![allow(dead_code)]
+
+use std::ffi::{c_char, c_void, CString};
+use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[repr(i32)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum InitResult { Error = 0, Ok = 1 }
+
+struct Api {
+    log_fn: Option<unsafe extern "C" fn(i32, *const c_char, *const c_char)>,
+    gui_show_notification_fn: Option<unsafe extern "C" fn(*const c_char) -> bool>,
+    gui_register_menu_item_fn: Option<unsafe extern "C" fn(*const c_char, Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool>,
+    gui_register_menu_section_fn: Option<unsafe extern "C" fn(Option<extern "C" fn(*mut c_void, *mut c_void)>, *mut c_void) -> bool>,
+    hachimi_register_on_game_initialized_fn: Option<unsafe extern "C" fn(Option<extern "C" fn(*mut c_void)>, *mut c_void) -> bool>,
+    gui_ui_heading_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> bool>,
+    gui_ui_label_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> bool>,
+    gui_ui_colored_label_fn: Option<unsafe extern "C" fn(*mut c_void, u8, u8, u8, u8, *const c_char) -> bool>,
+    gui_ui_separator_fn: Option<unsafe extern "C" fn(*mut c_void) -> bool>,
+    gui_ui_text_edit_singleline_fn: Option<unsafe extern "C" fn(*mut c_void, *mut c_char, i32) -> bool>,
+    il2cpp_get_assembly_image_fn: Option<unsafe extern "C" fn(*const c_char) -> *const c_void>,
+    il2cpp_get_class_fn: Option<unsafe extern "C" fn(*const c_void, *const c_char, *const c_char) -> *mut c_void>,
+    il2cpp_get_field_from_name_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void>,
+    il2cpp_get_field_value_fn: Option<unsafe extern "C" fn(*const c_void, *const c_void, *mut c_void)>,
+    il2cpp_get_static_field_value_fn: Option<unsafe extern "C" fn(*const c_void, *mut c_void)>,
+    il2cpp_resolve_symbol_fn: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>,
+    il2cpp_get_singleton_like_instance_fn: Option<unsafe extern "C" fn(*mut c_void) -> *const c_void>,
+    il2cpp_string_chars_fn: Option<unsafe extern "C" fn(*const c_void) -> *mut u16>,
+    il2cpp_string_length_fn: Option<unsafe extern "C" fn(*const c_void) -> i32>,
+}
+
+static mut API: *const Api = ptr::null();
+static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
+
+// ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
+static mut LAST_PUSH_HASH: u64 = 0;
+static PUSH_INTERVAL_SECS: u64 = 1;
+
+// ★ Config (v3.11.0): runtime config updated via POST /config from App
+// No file editing needed — App settings page sends config to plugin HTTP endpoint
+#[derive(Clone)]
+struct PluginConfig {
+    push_host: String,      // default: "127.0.0.1"
+    push_port: u16,         // default: 18766
+    http_port: u16,         // default: 18765
+    push_interval_secs: u64, // default: 1
+    push_enabled: bool,     // default: true
+    http_enabled: bool,     // default: true
+}
+
+impl PluginConfig {
+    fn defaults() -> Self {
+        Self {
+            push_host: "127.0.0.1".to_string(),
+            push_port: 18766,
+            http_port: 18765,
+            push_interval_secs: 1,
+            push_enabled: true,
+            http_enabled: true,
+        }
+    }
+
+    fn push_addr(&self) -> String {
+        format!("{}:{}", self.push_host, self.push_port)
+    }
+
+    // Parse JSON config from POST /config body (simple manual parse, no serde)
+    fn from_json(data: &str) -> Option<Self> {
+        let mut cfg = Self::defaults();
+        let mut changed = false;
+        // Extract key-value pairs from JSON
+        for line in data.lines() {
+            let l = line.trim().trim_end_matches(',');
+            if l.is_empty() || l == "{" || l == "}" { continue; }
+            if let Some((k, v)) = l.split_once(':') {
+                let k = k.trim().trim_matches('"');
+                let v = v.trim().trim_matches('"');
+                match k {
+                    "push_host" => { cfg.push_host = v.to_string(); changed = true; }
+                    "push_port" => if let Ok(n) = v.parse::<u16>() { cfg.push_port = n; changed = true; }
+                    "http_port" => if let Ok(n) = v.parse::<u16>() { cfg.http_port = n; changed = true; }
+                    "push_interval_secs" => if let Ok(n) = v.parse::<u64>() { cfg.push_interval_secs = n.max(1); changed = true; }
+                    "push_enabled" => { cfg.push_enabled = v == "true"; changed = true; }
+                    "http_enabled" => { cfg.http_enabled = v == "true"; changed = true; }
+                    _ => {}
+                }
+            }
+        }
+        if changed { Some(cfg) } else { None }
+    }
+
+    fn to_json(&self) -> String {
+        format!(
+            r#"{{"push_host":"{}","push_port":{},"http_port":{},"push_interval_secs":{},"push_enabled":{},"http_enabled":{}}}"#,
+            self.push_host, self.push_port, self.http_port,
+            self.push_interval_secs, self.push_enabled, self.http_enabled
+        )
+    }
+}
+
+static mut PLUGIN_CONFIG: Option<PluginConfig> = None;
+
+// ★ Text edit buffers for GUI config (v3.12.0): persist across frames for egui immediate mode
+static mut GUI_HOST_BUF: [u8; 64] = [0u8; 64];  // push_host input buffer
+static mut GUI_HOST_BUF_LEN: i32 = 0;
+static mut GUI_PORT_BUF: [u8; 8] = [0u8; 8];    // push_port input buffer
+static mut GUI_PORT_BUF_LEN: i32 = 0;
+
+unsafe fn get_config() -> &'static PluginConfig {
+    if PLUGIN_CONFIG.is_none() {
+        PLUGIN_CONFIG = Some(PluginConfig::defaults());
+    }
+    PLUGIN_CONFIG.as_ref().unwrap()
+}
+
+unsafe fn update_config(new_cfg: PluginConfig) {
+    PLUGIN_CONFIG = Some(new_cfg);
+}
+
+// ★ Training log (v3.7.9): auto-record snapshots from /data and /scenario
+const MAX_LOG_ENTRIES: usize = 30;
+static mut TRAINING_LOG: Vec<String> = Vec::new();
+
+unsafe fn log_snapshot(source: &str, data: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = format!(r#"{{"ts":{},"src":"{}","data":{}}}"#, ts, source, data);
+    if TRAINING_LOG.len() >= MAX_LOG_ENTRIES {
+        TRAINING_LOG.remove(0);
+    }
+    TRAINING_LOG.push(entry);
+}
+
+unsafe fn get_training_log() -> String {
+    if TRAINING_LOG.is_empty() {
+        return r#"{"entries":0,"log":[]}"#.to_string();
+    }
+    format!(r#"{{"entries":{},"log":[{}]}}"#, TRAINING_LOG.len(), TRAINING_LOG.join(","))
+}
+
+#[derive(Copy, Clone)]
+struct CharaCache {
+    speed: i32, stamina: i32, power: i32, guts: i32, wiz: i32,
+    vital: i32, max_vital: i32, motivation: i32, turn: i32,
+    skill_point: i32, scenario_id: i32, fan_count: i32,
+    month: i32, half: i32,
+    playing_state: i32, is_playing: bool,
+    valid: bool,
+}
+
+static mut CHARA: CharaCache = CharaCache {
+    speed: 0, stamina: 0, power: 0, wiz: 0, guts: 0,
+    vital: 0, max_vital: 0, motivation: 0, turn: 0,
+    skill_point: 0, scenario_id: 0, fan_count: 0,
+    month: 0, half: 0,
+    playing_state: 0, is_playing: false,
+    valid: false,
+};
+
+fn to_cstr(s: &str) -> CString {
+    CString::new(s).unwrap_or_else(|_| CString::new("<err>").unwrap())
+}
+
+unsafe fn ura_log(level: i32, msg: &str) {
+    if API.is_null() { return; }
+    if let Some(log_fn) = (*API).log_fn {
+        let tag = to_cstr("URA");
+        let text = to_cstr(msg);
+        log_fn(level, tag.as_ptr(), text.as_ptr());
+    }
+}
+
+unsafe fn ura_notify(msg: &str) {
+    if API.is_null() { return; }
+    if let Some(notify_fn) = (*API).gui_show_notification_fn {
+        let text = to_cstr(msg);
+        notify_fn(text.as_ptr());
+    }
+}
+
 // ============================================================
-// ★ AI Evaluation (v3.15.0) — Handwritten evaluation logic
-// Ported from UmaAi HandwrittenLogic.cpp + GameConstants.cpp
-// Provides: current score, training recommendation, rest/outgoing evaluation
+// IL2CPP Helpers
 // ============================================================
 
-/// FiveStatusFinalScore lookup table (2801 values, index 0-2800)
-/// Maps total revised stats → evaluation score
-/// Source: hzyhhzy/UmaAi GameConstants.cpp
+unsafe fn get_image() -> *const c_void {
+    if API.is_null() { return ptr::null(); }
+    match (*API).il2cpp_get_assembly_image_fn {
+        Some(fn_ptr) => {
+            let name = to_cstr("umamusume.dll");
+            let img = fn_ptr(name.as_ptr());
+            if img.is_null() {
+                ura_log(1, "get_image: umamusume.dll image = null");
+            }
+            img
+        }
+        None => { ura_log(1, "get_image: no get_assembly_image_fn"); ptr::null() }
+    }
+}
+
+unsafe fn find_class(image: *const c_void, ns: *const c_char, name: *const c_char) -> *mut c_void {
+    if image.is_null() || API.is_null() { return ptr::null_mut(); }
+    match (*API).il2cpp_get_class_fn {
+        Some(fn_ptr) => fn_ptr(image, ns, name),
+        None => ptr::null_mut(),
+    }
+}
+
+unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
+    let name_c = to_cstr(class_name);
+    // Try known namespaces first (fast path)
+    let ns_gallop = to_cstr("Gallop");
+    let ns_empty = to_cstr("");
+    for ns in [ns_gallop.as_ptr(), ns_empty.as_ptr()] {
+        let cls = find_class(image, ns, name_c.as_ptr());
+        if !cls.is_null() { return cls; }
+    }
+    // Fallback: iterate all classes to find by name (slow but handles any namespace)
+    find_class_by_iteration(image, class_name)
+}
+
+/// Slow fallback: iterate all classes in the assembly to find one by name
+unsafe fn find_class_by_iteration(image: *const c_void, class_name: &str) -> *mut c_void {
+    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
+    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
+    if get_count_fn.is_null() || get_class_fn.is_null() { return ptr::null_mut(); }
+
+    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
+    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
+    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
+
+    let count = get_count(image);
+    for i in 0..count {
+        let cls = get_class(image, i);
+        if cls.is_null() { continue; }
+        if !get_name_fn.is_null() {
+            let get_name: FnClassGetName = std::mem::transmute(get_name_fn);
+            let name_ptr = get_name(cls);
+            if !name_ptr.is_null() {
+                let len = (0usize..).find(|&j| *name_ptr.add(j) == 0).unwrap_or(0);
+                let bytes = std::slice::from_raw_parts(name_ptr as *const u8, len);
+                if bytes == class_name.as_bytes() {
+                    return cls;
+                }
+            }
+        }
+    }
+    ptr::null_mut()
+}
+
+unsafe fn get_singleton(class: *mut c_void) -> *const c_void {
+    if class.is_null() || API.is_null() { return ptr::null(); }
+    match (*API).il2cpp_get_singleton_like_instance_fn {
+        Some(fn_ptr) => fn_ptr(class),
+        None => ptr::null(),
+    }
+}
+
+unsafe fn read_field_ptr(obj: *const c_void, class: *mut c_void, field_name: &str) -> *const c_void {
+    if obj.is_null() || class.is_null() || API.is_null() { return ptr::null(); }
+    let field = match (*API).il2cpp_get_field_from_name_fn {
+        Some(fn_ptr) => {
+            let name_c = to_cstr(field_name);
+            fn_ptr(class, name_c.as_ptr())
+        }
+        None => return ptr::null(),
+    };
+    if field.is_null() { return ptr::null(); }
+    let mut value: *const c_void = ptr::null();
+    match (*API).il2cpp_get_field_value_fn {
+        Some(fn_ptr) => fn_ptr(obj as *mut c_void, field, &mut value as *mut *const c_void as *mut c_void),
+        None => return ptr::null(),
+    }
+    value
+}
+
+
+// ★ Read a field value from an object by class + field name (returns *mut c_void)
+// Used for reading public fields (not getter properties) like CommandInfoArray
+unsafe fn read_field_value(class: *mut c_void, obj: *const c_void, field_name: &str) -> *mut c_void {
+    if class.is_null() || obj.is_null() || API.is_null() { return ptr::null_mut(); }
+    let field_info = match (*API).il2cpp_get_field_from_name_fn {
+        Some(f) => f(class, to_cstr(field_name).as_ptr()),
+        None => return ptr::null_mut(),
+    };
+    if field_info.is_null() { return ptr::null_mut(); }
+    let mut value: *mut c_void = ptr::null_mut();
+    match (*API).il2cpp_get_field_value_fn {
+        Some(f) => f(field_info, obj, &mut value as *mut _ as *mut c_void),
+        None => return ptr::null_mut(),
+    };
+    value
+}
+
+// ============================================================
+// IL2CPP Runtime API types
+// ============================================================
+
+type FnClassGetFields = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *mut Il2CppFieldInfo;
+type FnClassGetParent = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+type FnClassGetName = unsafe extern "C" fn(*mut c_void) -> *const c_char;
+type FnClassGetMethodFromName = unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *const c_void;
+type FnRuntimeInvoke = unsafe extern "C" fn(*const c_void, *mut c_void, *mut *mut c_void, *mut *mut c_void) -> *mut c_void;
+type FnClassGetMethods = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void;
+type FnMethodGetName = unsafe extern "C" fn(*const c_void) -> *const c_char;
+type FnImageGetClassCount = unsafe extern "C" fn(*const c_void) -> u32;
+type FnImageGetClass = unsafe extern "C" fn(*const c_void, u32) -> *mut c_void;
+
+#[repr(C)]
+struct Il2CppFieldInfo {
+    name: *const c_char,
+    _ty: *const c_void,
+    parent: *mut c_void,
+    offset: i32,
+    _token: u32,
+}
+
+unsafe fn resolve_il2cpp_symbol(name: &str) -> *mut c_void {
+    if API.is_null() { return ptr::null_mut(); }
+    match (*API).il2cpp_resolve_symbol_fn {
+        Some(resolve) => {
+            let cname = to_cstr(name);
+            resolve(cname.as_ptr()) as *mut c_void
+        }
+        None => ptr::null_mut(),
+    }
+}
+
+// ============================================================
+// Call getter method via il2cpp_runtime_invoke
+// ============================================================
+
+unsafe fn call_getter_on_instance(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> *mut c_void {
+    if class.is_null() || instance.is_null() {
+        return ptr::null_mut();
+    }
+
+    let get_method_fn: Option<FnClassGetMethodFromName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
+    };
+    let invoke_fn: Option<FnRuntimeInvoke> = {
+        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p)) }
+    };
+
+    if get_method_fn.is_none() || invoke_fn.is_none() {
+        return ptr::null_mut();
+    }
+
+    let method_name_c = to_cstr(method_name);
+    let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
+    if method_info.is_null() {
+        ura_log(4, &format!("call_getter: '{}' not found", method_name));
+        return ptr::null_mut();
+    }
+
+    let mut exc: *mut c_void = ptr::null_mut();
+    let result = invoke_fn.unwrap()(
+        method_info,
+        instance as *mut c_void,
+        ptr::null_mut(),
+        &mut exc,
+    );
+
+    if !exc.is_null() {
+        ura_log(1, &format!("call_getter: '{}' threw exception", method_name));
+        return ptr::null_mut();
+    }
+
+    result
+}
+
+/// Call getter that returns a reference type (class instance)
+/// Result is a direct Il2CppObject pointer
+unsafe fn call_getter_ref(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> *mut c_void {
+    call_getter_on_instance(class, instance, method_name)
+}
+
+/// Call getter that returns i32 (value type - gets boxed by il2cpp_runtime_invoke)
+/// The boxed value is at result_ptr + 16 (after Il2CppObject header on 64-bit)
+unsafe fn call_getter_int(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> i32 {
+    if class.is_null() || instance.is_null() { return -1; }
+
+    let result = call_getter_on_instance(class, instance, method_name);
+    if result.is_null() { return -1; }
+
+    // Value type (int/enum) is boxed: real value at offset +16
+    let val_ptr = result as *const u8;
+    let int_val = std::ptr::read_unaligned::<i32>(val_ptr.add(16) as *const i32);
+    int_val
+}
+
+/// Call getter that returns bool (value type - gets boxed)
+unsafe fn call_getter_bool(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> bool {
+    call_getter_int(class, instance, method_name) != 0
+}
+
+/// ★ ObscuredInt getter: The C# property returns ObscuredInt struct,
+/// but il2cpp_runtime_invoke boxes it. We need to call the implicit
+/// conversion operator to get a plain int.
+/// ObscuredInt has an implicit operator that converts to int.
+/// Alternative: ObscuredInt struct has fields we can read directly.
+/// ObscuredInt layout (from dump.cs struct, 0x20 bytes on 64-bit):
+///   offset 0x10: int currentValue (the decrypted value if no crypto)
+///   offset 0x14: int fakeValue
+///   offset 0x18: int fakeValueActive  
+///   offset 0x1C: byte cryptoKey
+/// Actually, the getter method get_SkillPoint() returns ObscuredInt,
+/// but the C# property SkillPoint has type ObscuredInt.
+/// When il2cpp_runtime_invoke calls it, the result is boxed ObscuredInt.
+/// We need to read the ObscuredInt struct fields from the boxed result.
+///
+/// From dump.cs line 1166804:
+/// public struct ObscuredInt : IFormattable, IEquatable`1, IComparable`1
+/// It has: implicit operator int, explicit operator int
+/// The boxed result will have the ObscuredInt data starting at offset 0x10
+///
+/// Looking at ObscuredInt implementation (Anti-Cheat Toolkit):
+/// struct ObscuredInt {
+///     int currentValue;   // offset 0x10 in boxed form (after header)
+///     int fakeValue;      // offset 0x14
+///     int fakeValueActive; // offset 0x18
+///     byte cryptoKey;     // offset 0x1C
+/// }
+/// currentValue = encrypted_value ^ cryptoKey
+/// Decrypted = currentValue ^ cryptoKey
+///
+/// BUT: When we call get_SkillPoint() via il2cpp_runtime_invoke,
+/// the return type is ObscuredInt (value type), so it gets boxed.
+/// We read the boxed ObscuredInt fields and decrypt manually.
+///
+/// HOWEVER: There's a simpler approach! The C# property wrapper
+/// actually calls the internal get method which returns ObscuredInt.
+/// We can try calling the implicit conversion operator instead.
+///
+/// Simplest approach: Read ObscuredInt fields from boxed result and decrypt.
+unsafe fn call_getter_obscured_int(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> i32 {
+    if class.is_null() || instance.is_null() { return -1; }
+
+    let result = call_getter_on_instance(class, instance, method_name);
+    if result.is_null() { return -1; }
+
+    // Boxed ObscuredInt struct layout (from dump.cs Anti-Cheat Toolkit):
+    // offset 0x10: currentCryptoKey (Int32) — the decryption key
+    // offset 0x14: hiddenValue (Int32) — the encrypted value
+    // offset 0x18: inited (Boolean)
+    // offset 0x1C: fakeValue (Int32)
+    // offset 0x20: fakeValueActive (Boolean)
+    let base = result as *const u8;
+
+    let current_crypto_key = std::ptr::read_unaligned::<i32>(base.add(0x10) as *const i32);
+    let hidden_value = std::ptr::read_unaligned::<i32>(base.add(0x14) as *const i32);
+
+    // Decrypt: hiddenValue ^ currentCryptoKey
+    let decrypted = hidden_value ^ current_crypto_key;
+
+    ura_log(4, &format!("ObscuredInt {}: hidden={} key={} decrypted={}", 
+        method_name, hidden_value, current_crypto_key, decrypted));
+
+    decrypted
+}
+
+// ============================================================
+// ★ Read ObscuredInt[] array (for charaEffectIdArray etc)
+// ============================================================
+
+unsafe fn read_obscured_int_array(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+) -> Vec<i32> {
+    let mut result = Vec::new();
+    if class.is_null() || instance.is_null() { return result; }
+
+    let arr_obj = call_getter_on_instance(class, instance, method_name);
+    if arr_obj.is_null() { return result; }
+
+    // IL2CPP array layout (64-bit):
+    // +0x00: Il2CppObject header (16 bytes)
+    // +0x10: bounds ptr (8 bytes, null for 1D)
+    // +0x18: max_length (8 bytes on 64-bit)
+    // +0x20: data start
+    let base = arr_obj as *const u8;
+    let length = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
+    if length == 0 || length > 1000 { return result; } // sanity check
+
+    // ObscuredInt struct (unboxed) layout:
+    // offset 0x00: currentCryptoKey (Int32)
+    // offset 0x04: hiddenValue (Int32)
+    // offset 0x08: inited (Boolean, padded to 4)
+    // offset 0x0C: fakeValue (Int32)
+    // offset 0x10: fakeValueActive (Boolean, padded to 4)
+    // struct size = 0x14 (20 bytes), aligned to 4
+    let struct_size: usize = 0x14;
+    let data_start = base.add(0x20);
+
+    for i in 0..length {
+        let elem_base = data_start.add(i * struct_size);
+        let crypto_key = std::ptr::read_unaligned::<i32>(elem_base as *const i32);
+        let hidden_val = std::ptr::read_unaligned::<i32>(elem_base.add(4) as *const i32);
+        let decrypted = hidden_val ^ crypto_key;
+        result.push(decrypted);
+    }
+
+    ura_log(4, &format!("{}: read {} elements", method_name, result.len()));
+    result
+}
+
+// ============================================================
+// ★ Read reference-type array elements with getter calls
+// For expanding EnhanceGroupArray, CommandInfoArray, etc.
+// ============================================================
+
+unsafe fn read_array_element_details(
+    array_obj: *mut c_void,
+    element_class: *mut c_void,
+    obscured_getters: &[&str],
+    plain_getters: &[&str],
+) -> Vec<String> {
+    let mut results = Vec::new();
+    if array_obj.is_null() || element_class.is_null() { return results; }
+
+    let base = array_obj as *const u8;
+    let length = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
+    if length == 0 || length > 100 { return results; }
+
+    for i in 0..length {
+        let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
+        if elem_ptr.is_null() {
+            results.push(r#"{"_null":true}"#.to_string());
+            continue;
+        }
+
+        let mut fields = Vec::new();
+        for getter in obscured_getters {
+            let val = call_getter_obscured_int(element_class, elem_ptr, getter);
+            let key = getter.strip_prefix("get_").unwrap_or(*getter);
+            fields.push(format!(r#""{}":{}"#, key, val));
+        }
+        for getter in plain_getters {
+            let val = call_getter_int(element_class, elem_ptr, getter);
+            let key = getter.strip_prefix("get_").unwrap_or(*getter);
+            fields.push(format!(r#""{}":{}"#, key, val));
+        }
+        results.push(format!(r#"{{{}}}"#, fields.join(",")));
+    }
+
+    ura_log(4, &format!("read_array_elements: {} elements, {} getters", length, obscured_getters.len() + plain_getters.len()));
+    results
+}
+
+// ============================================================
+// ★ Try to get scenario-specific object from chara
+// Based on scenario_id, try multiple possible getter names
+// ============================================================
+
+unsafe fn try_get_scenario_obj(
+    chara_class: *mut c_void,
+    chara_obj: *const c_void,
+    scenario_id: i32,
+) -> *mut c_void {
+    if chara_class.is_null() || chara_obj.is_null() { return ptr::null_mut(); }
+
+    // Map scenario_id to possible getter names
+    // From dump.cs, most scenarios use get_ScenarioXxx(), but URA uses get_WorkScenarioURA()
+    let getter_names: &[&str] = match scenario_id {
+        1 => &["get_WorkScenarioURA", "get_ScenarioURA", "get_Ura"],
+        2 => &["get_TeamRace", "get_ScenarioTeamRace"],
+        3 => &["get_ScenarioLive", "get_Live"],
+        4 => &["get_WorkScenarioFree", "get_ScenarioFree", "get_Free"],
+        5 => &["get_ScenarioVenus", "get_Venus"],
+        6 => &["get_ScenarioArc", "get_Arc"],
+        7 => &["get_ScenarioSport", "get_Sport"],
+        8 => &["get_ScenarioCook", "get_Cook"],
+        9 => &["get_ScenarioMecha", "get_Mecha"],
+        10 => &["get_ScenarioLegend", "get_Legend"],
+        11 => &["get_ScenarioPioneer", "get_Pioneer"],
+        12 => &["get_ScenarioOnsen", "get_Onsen"],
+        13 => &["get_ScenarioBreeders", "get_WorkScenarioBreeders", "get_Breeders"], // ★ 育马者杯
+        14 => &["get_ScenarioRamen", "get_WorkScenarioRamen", "get_Ramen"],          // ★ 拉面杯
+        _ => &[],
+    };
+
+    for name in getter_names {
+        let result = call_getter_ref(chara_class, chara_obj, name);
+        if !result.is_null() {
+            ura_log(3, &format!("★ Scenario {} getter '{}' found at {:p}", scenario_id, name, result));
+            return result;
+        }
+    }
+
+    ura_log(3, &format!("Scenario {} getter: all attempts failed", scenario_id));
+    ptr::null_mut()
+}
+
+// ============================================================
+// ★ Read scenario detail data (/scenario endpoint)
+// ============================================================
+
+unsafe fn read_scenario_detail() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm_class"}"#.to_string(); }
+
+    let wdm_instance = get_singleton(wdm_class);
+    if wdm_instance.is_null() { return r#"{"error":"no_wdm_singleton"}"#.to_string(); }
+
+    let sm_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_data_obj = call_getter_ref(wdm_class, wdm_instance, "get_SingleMode");
+    if sm_data_obj.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
+
+    let chara_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
+    let scenario_obj = try_get_scenario_obj(chara_data_class, chara_obj, scenario_id);
+
+    if scenario_obj.is_null() {
+        return format!(r#"{{"scenario_id":{},"error":"scenario_obj_null","hint":"getter_name_not_found"}}"#, scenario_id);
+    }
+
+    // Try to get DataSet from the scenario object
+    // First find the scenario class
+    let scenario_class_name = match scenario_id {
+        1 => "WorkSingleModeScenarioURA",
+        2 => "WorkSingleModeScenarioTeamRace",
+        3 => "WorkSingleModeScenarioLive",
+        4 => "WorkSingleModeScenarioFree",
+        5 => "WorkSingleModeScenarioVenus",
+        6 => "WorkSingleModeScenarioArc",
+        7 => "WorkSingleModeScenarioSport",
+        8 => "WorkSingleModeScenarioCook",
+        9 => "WorkSingleModeScenarioMecha",
+        10 => "WorkSingleModeScenarioLegend",
+        11 => "WorkSingleModeScenarioPioneer",
+        12 => "WorkSingleModeScenarioOnsen",
+        13 => "WorkSingleModeScenarioBreeders",
+        14 => "WorkSingleModeScenarioRamen",
+        _ => "Unknown",
+    };
+
+    let scenario_class = find_class_by_short_name(image, scenario_class_name);
+
+    let mut result_parts = vec![
+        format!(r#""scenario_id":{}"#, scenario_id),
+        format!(r#""scenario_class":"{}""#, scenario_class_name),
+        format!(r#""scenario_obj":"{:p}""#, scenario_obj),
+    ];
+
+    // Try get_DataSet()
+    if !scenario_class.is_null() {
+        let dataset_obj = call_getter_ref(scenario_class, scenario_obj, "get_DataSet");
+        if !dataset_obj.is_null() {
+            result_parts.push(format!(r#""dataset_obj":"{:p}""#, dataset_obj));
+
+            // Determine DataSet class name for all known scenarios
+            let dataset_class_name = match scenario_id {
+                1 => "WorkSingleModeScenarioURADataSet",
+                2 => "WorkSingleModeScenarioTeamRaceDataSet",
+                3 => "WorkSingleModeScenarioLiveDataSet",
+                4 => "WorkSingleModeScenarioFreeDataSet",
+                5 => "WorkSingleModeScenarioVenusDataSet",
+                6 => "WorkSingleModeScenarioArcDataSet",
+                7 => "WorkSingleModeScenarioSportDataSet",
+                8 => "WorkSingleModeScenarioCookDataSet",
+                9 => "WorkSingleModeScenarioMechaDataSet",
+                10 => "WorkSingleModeScenarioLegendDataSet",
+                11 => "WorkSingleModeScenarioPioneerDataSet",
+                12 => "WorkSingleModeScenarioOnsenDataSet",
+                13 => "WorkSingleModeScenarioBreedersDataSet",
+                14 => "WorkSingleModeScenarioRamenDataSet",
+                _ => "UnknownDataSet",
+            };
+            let dataset_class = find_class_by_short_name(image, dataset_class_name);
+            if !dataset_class.is_null() {
+                result_parts.push(format!(r#""dataset_class":"{}""#, dataset_class_name));
+
+                // ★ Read int-type DataSet getters (CY uses ObscuredInt for everything)
+                let int_getters = [
+                    "get_TeamRank", "get_HavingEnhancePoint", "get_PredictEnhancePoint",
+                    "get_BcRaceTrackId", "get_DeckId", "get_TeamSpLevelLimit",
+                    "get_TeamUnionProgress",
+                ];
+                let mut ds_ints = Vec::new();
+                for getter in &int_getters {
+                    // DataSet getters return ObscuredInt - must use obscured_int decoder
+                    let val = call_getter_obscured_int(dataset_class, dataset_obj, getter);
+                    if val >= 0 {
+                        ds_ints.push(format!(r#""{}":{}"#, getter, val));
+                    }
+                }
+                if !ds_ints.is_empty() {
+                    result_parts.push(format!(r#""dataset_values":{{{}}}"#, ds_ints.join(",")));
+                }
+
+                // ★ Read array-type DataSet getters (report length + element pointers)
+                let array_getters = [
+                    "get_EnhanceGroupArray", "get_CommandInfoArray",
+                    "get_TeamMemberInfoArray", "get_TeamReviewResultArray",
+                    "get_BcRaceResultArray", "get_CommandGainExpArray",
+                ];
+                let mut ds_arrays = Vec::new();
+                for getter in &array_getters {
+                    let arr_obj = call_getter_on_instance(dataset_class, dataset_obj, getter);
+                    if !arr_obj.is_null() {
+                        let base = arr_obj as *const u8;
+                        let length = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
+                        ds_arrays.push(format!(r#""{}":{{"len":{},"ptr":"{:p}"}}"#, getter, length, arr_obj));
+                    }
+                }
+                if !ds_arrays.is_empty() {
+                    result_parts.push(format!(r#""dataset_arrays":{{{}}}"#, ds_arrays.join(",")));
+                }
+
+                // ★ Expand EnhanceGroupArray elements (Breeders buff data)
+                // Element class: ObscuredSingleModeBreedersEnhanceGroup
+                // Getters: get_GroupType (ObscuredInt), get_Level (ObscuredInt)
+                if scenario_id == 13 {
+                    let enhance_elem_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersEnhanceGroup");
+                    if !enhance_elem_class.is_null() {
+                        let enhance_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_EnhanceGroupArray");
+                        if !enhance_arr.is_null() {
+                            let elements = read_array_element_details(
+                                enhance_arr, enhance_elem_class,
+                                &["get_GroupType", "get_Level"],
+                                &[],
+                            );
+                            result_parts.push(format!(r#""enhance_groups":[{}]"#, elements.join(",")));
+                        }
+                    }
+                }
+
+                // ★ Expand CommandInfoArray elements (Breeders training commands)
+                // Element class: ObscuredSingleModeBreedersCommandInfo
+                // Getters: CommandType(ObscuredInt), CommandId(ObscuredInt),
+                //          RankUpPredict(ObscuredInt), ParamsIncDecInfoArray, TeamMemberInfoArray
+                // ★★ v3.8.0 FIX: ParamsIncDecInfoArray uses SingleModeParamsIncDecInfo (plain Int32),
+                //    NOT SingleModeParamsIncDecInfoData (ObscuredInt). The Onsen scenario confirms
+                //    Obscured wrappers use plain DTOs, not ObscuredInt-wrapped Data classes.
+                if scenario_id == 13 {
+                    let cmd_elem_class = find_class_by_short_name(image, "ObscuredSingleModeBreedersCommandInfo");
+                    if !cmd_elem_class.is_null() {
+                        let cmd_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandInfoArray");
+                        if !cmd_arr.is_null() {
+                            let elements = read_array_element_details(
+                                cmd_arr, cmd_elem_class,
+                                &["get_CommandType", "get_CommandId", "get_RankUpPredict"],
+                                &[],
+                            );
+                            // ★ Breeders uses SingleModeParamsIncDecInfo (plain Int32 at 0x10, 0x14)
+                            //    Confirmed via Onsen scenario's ObscuredSingleModeOnsenCommandInfo
+                            //    which uses SingleModeParamsIncDecInfo[] (not Data variant)
+                            //    NO auto-detection needed — hardcode to avoid class lookup crashes
+
+                            let base = cmd_arr as *const u8;
+                            let cmd_len = std::ptr::read_unaligned::<usize>(base.add(0x18) as *const usize);
+                            let mut cmd_details = Vec::new();
+                            for i in 0..cmd_len {
+                                let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(0x20 + i * 8) as *const *mut c_void);
+                                let mut detail = if i < elements.len() { elements[i].clone() } else { "{}".to_string() };
+                                // ★ Add CommandId→training name mapping
+                                {
+                                    let cmd_id_val = if detail.contains("\"CommandId\":") {
+                                        detail.split("\"CommandId\":").nth(1)
+                                            .and_then(|s| s.split(',').next())
+                                            .and_then(|s| s.trim().parse::<i32>().ok())
+                                            .unwrap_or(-1)
+                                    } else { -1 };
+                                    let cmd_name = match cmd_id_val {
+                                        101 => "Speed", 102 => "Stamina", 103 => "Guts",
+                                        105 => "Power", 106 => "Wiz",
+                                        _ => "Unknown"
+                                    };
+                                    if detail.ends_with('}') { detail.pop(); }
+                                    detail.push_str(&format!(",\"CommandName\":\"{}\"}}", cmd_name));
+                                }
+                                if !elem_ptr.is_null() {
+                                    let params_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_ParamsIncDecInfoArray");
+                                    let mut params_items = Vec::new();
+                                    if !params_arr.is_null() {
+                                        let p_base = params_arr as *const u8;
+                                        let p_len = std::ptr::read_unaligned::<usize>(p_base.add(0x18) as *const usize);
+                                        for j in 0..p_len {
+                                            let p_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(0x20 + j * 8) as *const *mut c_void);
+                                            if p_elem.is_null() { continue; }
+                                            // ★ Breeders: always plain Int32 (SingleModeParamsIncDecInfo)
+                                            // TargetType 实测映射（与dump.cs ParameterType枚举不同！）：
+                                            //   枚举定义3=Power 4=Guts，但target_type字段实际3=Guts 4=Power
+                                            //   验证：Stamina训练(TT3)加Guts，Power训练(TT4)加Power
+                                            //   0=None, 1=Speed, 2=Stamina, 3=Guts, 4=Power, 5=Wiz
+                                            //   10=HP, 20=Motivation, 30=SkillPt
+                                            let bytes = p_elem as *const u8;
+                                            let t = std::ptr::read_unaligned::<i32>(bytes.add(0x10) as *const i32);
+                                            let v = std::ptr::read_unaligned::<i32>(bytes.add(0x14) as *const i32);
+                                            let (tt, val) = (t, v);
+                                            let tt_name = match tt {
+                                                0 => "None", 1 => "Speed", 2 => "Stamina",
+                                                3 => "Guts", 4 => "Power", 5 => "Wiz",
+                                                6 => "Unknown6", 10 => "HP", 20 => "Motivation",
+                                                30 => "SkillPt",
+                                                _ => "Unknown"
+                                            };
+                                            params_items.push(format!(r#"{{"TargetType":{},"TargetTypeName":"{}","Value":{}}}"#, tt, tt_name, val));
+                                        }
+                                    }
+                                    // Read TeamMemberInfoArray length
+                                    let member_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_TeamMemberInfoArray");
+                                    let member_len = if !member_arr.is_null() {
+                                        let mbase = member_arr as *const u8;
+                                        std::ptr::read_unaligned::<usize>(mbase.add(0x18) as *const usize)
+                                    } else { 0 };
+                                    // Trim trailing } and add new fields
+                                    if detail.ends_with('}') { detail.pop(); }
+                                    detail.push_str(&format!(",\"params_inc_dec\":[{}],\"team_member_len\":{}}}",
+                                        params_items.join(","), member_len));
+                                }
+                                cmd_details.push(detail);
+                            }
+                            result_parts.push(format!(r#""command_info":[{}]"#, cmd_details.join(",")));
+                        }
+                    }
+                }
+
+                // ★ Read object-type DataSet getters
+                let obj_getters = [
+                    "get_TeamSpTrainingInfo", "get_NotUpParameterInfo",
+                    "get_ScenarioDressSetting", "get_TeamUnionEvent",
+                ];
+                let mut ds_objs = Vec::new();
+                for getter in &obj_getters {
+                    let obj = call_getter_on_instance(dataset_class, dataset_obj, getter);
+                    if !obj.is_null() {
+                        ds_objs.push(format!(r#""{}":"{:p}""#, getter, obj));
+                    }
+                }
+                if !ds_objs.is_empty() {
+                    result_parts.push(format!(r#""dataset_objects":{{{}}}"#, ds_objs.join(",")));
+                }
+            }
+        } else {
+            result_parts.push(r#""dataset_obj":"null""#.to_string());
+        }
+    }
+
+    format!(r#"{{{}}}"#, result_parts.join(","))
+}
+
+// ============================================================
+// ★ Enumerate ALL classes in assembly (runtime dump)
+// ============================================================
+
+unsafe fn enumerate_all_classes(search: &str) -> String {
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+
+    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
+    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
+
+    if get_count_fn.is_null() || get_class_fn.is_null() {
+        return r#"{"error":"class_enum_api_not_found"}"#.to_string();
+    }
+
+    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
+    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
+
+    let total = get_count(image);
+    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
+    let get_namespace_fn = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
+
+    let mut results = Vec::new();
+    let search_lower = search.to_lowercase();
+
+    for i in 0..total {
+        let cls = get_class(image, i);
+        if cls.is_null() { continue; }
+
+        let name = if !get_name_fn.is_null() {
+            let name_fn: FnClassGetName = std::mem::transmute(get_name_fn);
+            let cstr = name_fn(cls);
+            if cstr.is_null() { continue; }
+            std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned()
+        } else {
+            format!("class_{}", i)
+        };
+
+        let namespace = if !get_namespace_fn.is_null() {
+            let ns_fn: FnClassGetName = std::mem::transmute(get_namespace_fn);
+            let cstr = ns_fn(cls);
+            if cstr.is_null() { String::new() } else { std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned() }
+        } else {
+            String::new()
+        };
+
+        // Filter by search term if provided
+        if !search.is_empty() {
+            let full = format!("{}.{}", namespace, name).to_lowercase();
+            if !full.contains(&search_lower) { continue; }
+        }
+
+        results.push(format!(r#"{{"ns":"{}","name":"{}"}}"#, namespace, name));
+    }
+
+    format!(r#"{{"total_classes":{},"matched":{},"search":"{}","classes":[{}]}}"#,
+        total, results.len(), search, results.join(","))
+}
+
+// ============================================================
+// All known classes for scanning
+// ============================================================
+
+const KNOWN_CLASSES: &[(&str, &str)] = &[
+    ("Gallop", "WorkDataManager"),
+    ("Gallop", "WorkSingleModeData"),
+    ("Gallop", "WorkSingleModeCharaData"),
+    ("Gallop", "WorkSingleModeHomeInfo"),
+    ("Gallop", "WorkSingleModeScenarioBreeders"),
+    ("Gallop", "WorkSingleModeScenarioLegend"),
+    ("Gallop", "WorkSingleModeScenarioMecha"),
+    ("Gallop", "WorkSingleModeScenarioOnsen"),
+    ("Gallop", "WorkSingleModeScenarioPioneer"),
+    ("Gallop", "WorkSingleModeScenarioRamen"),
+    ("Gallop", "GameSystem"),
+    ("Gallop", "HomeScene"),
+    ("Gallop", "SingleModeScene"),
+    ("Gallop", "RaceScene"),
+    ("Gallop", "SingleModeSceneController"),
+];
+
+// ============================================================
+// Scan Classes
+// ============================================================
+
+unsafe fn scan_il2cpp_classes() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let mut found_list: Vec<String> = Vec::new();
+    let mut singleton_list: Vec<String> = Vec::new();
+
+    for (ns, cls) in KNOWN_CLASSES {
+        let ns_c = to_cstr(ns);
+        let cls_c = to_cstr(cls);
+        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
+        if !class.is_null() {
+            let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
+            if !found_list.contains(&full_name) {
+                found_list.push(full_name.clone());
+            }
+            let inst = get_singleton(class);
+            if !inst.is_null() {
+                singleton_list.push(full_name);
+            }
+        }
+    }
+
+    format!(
+        r#"{{"found_classes":["{}"],"singletons":["{}"],"total":{}}}"#,
+        found_list.join("\",\""), singleton_list.join("\",\""), found_list.len()
+    )
+}
+
+// ============================================================
+// /singletons endpoint
+// ============================================================
+
+unsafe fn find_all_singletons() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let mut results: Vec<String> = Vec::new();
+
+    for (ns, cls) in KNOWN_CLASSES {
+        let ns_c = to_cstr(ns);
+        let cls_c = to_cstr(cls);
+        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
+        if !class.is_null() {
+            let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
+            let inst = get_singleton(class);
+            let has_singleton = !inst.is_null();
+            results.push(format!(r#"{{"class":"{}","singleton":{},"instance":"{:p}"}}"#,
+                full_name, has_singleton, inst));
+        }
+    }
+
+    format!(r#"{{"total":{},"classes":[{}]}}"#, results.len(), results.join(","))
+}
+
+// ============================================================
+// ★ Read Training Data v3.7.8 — All via getter methods
+// ============================================================
+
+unsafe fn read_training_data() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    ura_log(3, "Reading training data v3.7.8...");
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    let sm_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let chara_data_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+
+    ura_log(3, &format!("Classes: WDM={} SMD={} Chara={}",
+        if wdm_class.is_null() { "null" } else { "ok" },
+        if sm_data_class.is_null() { "null" } else { "ok" },
+        if chara_data_class.is_null() { "null" } else { "ok" },
+    ));
+
+    // ===== Step 1: Get WorkDataManager singleton =====
+    if wdm_class.is_null() {
+        return r#"{"error":"WorkDataManager_class_not_found"}"#.to_string();
+    }
+    let wdm_instance = get_singleton(wdm_class);
+    if wdm_instance.is_null() {
+        return r#"{"error":"WorkDataManager_no_singleton","hint":"start_a_training_run"}"#.to_string();
+    }
+
+    // ===== Step 2: Call get_SingleMode() =====
+    let sm_data_obj = call_getter_ref(wdm_class, wdm_instance, "get_SingleMode");
+    if sm_data_obj.is_null() {
+        // Fallback: read field directly
+        let field_obj = read_field_ptr(wdm_instance, wdm_class, "<SingleMode>k__BackingField");
+        if field_obj.is_null() {
+            return r#"{"error":"SingleMode_null","step":"get_SingleMode"}"#.to_string();
+        }
+        return process_single_mode_data(field_obj, sm_data_class, chara_data_class);
+    }
+
+    process_single_mode_data(sm_data_obj, sm_data_class, chara_data_class)
+}
+
+unsafe fn process_single_mode_data(
+    sm_data_obj: *const c_void,
+    sm_data_class: *mut c_void,
+    chara_data_class: *mut c_void,
+) -> String {
+    // ===== Read metadata via getters =====
+    let month = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Month") } else { -1 };
+    let half = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_Half") } else { -1 };
+    let playing_state = if !sm_data_class.is_null() { call_getter_int(sm_data_class, sm_data_obj, "get_PlayingState") } else { -1 };
+    let is_playing = if !sm_data_class.is_null() { call_getter_bool(sm_data_class, sm_data_obj, "get_IsPlaying") } else { false };
+
+    ura_log(3, &format!("SM Data: month={} half={} playingState={} isPlaying={}", month, half, playing_state, is_playing));
+
+    // ===== Call get_Character() =====
+    if sm_data_class.is_null() {
+        return format!(r#"{{"error":"WorkSingleModeData_class_null","month":{},"half":{}}}"#, month, half);
+    }
+    let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
+    if chara_obj.is_null() {
+        // Fallback: try field
+        let chara_field = read_field_ptr(sm_data_obj, sm_data_class, "<Character>k__BackingField");
+        if chara_field.is_null() {
+            return format!(
+                r#"{{"error":"Character_null","month":{},"half":{},"playingState":{},"isPlaying":{}}}"#,
+                month, half, playing_state, is_playing
+            );
+        }
+        return read_chara_data(chara_field, chara_data_class, month, half, playing_state, is_playing);
+    }
+
+    read_chara_data(chara_obj, chara_data_class, month, half, playing_state, is_playing)
+}
+
+unsafe fn read_chara_data(
+    chara_obj: *const c_void,
+    chara_data_class: *mut c_void,
+    month: i32,
+    half: i32,
+    playing_state: i32,
+    is_playing: bool,
+) -> String {
+    if chara_data_class.is_null() {
+        return r#"{"error":"WorkSingleModeCharaData_class_null"}"#.to_string();
+    }
+
+    ura_log(3, &format!("WorkSingleModeCharaData: {:p}", chara_obj));
+
+    // ===== ★ ALL FIELDS VIA GETTER METHODS =====
+    // These return plain Int32 (auto-decrypted by C# getter):
+    //   get_Speed(), get_Stamina(), get_Power(), get_Guts(), get_Wiz()
+    //   get_Hp(), get_MaxHp()
+    //   get_Motivation() returns Motivation enum (int)
+    //   get_ScenarioId() returns Int32
+    //   get_FanCount() returns Int32
+    // ObscuredInt getters (need special handling):
+    //   get_SkillPoint() returns ObscuredInt struct
+
+    let speed = call_getter_int(chara_data_class, chara_obj, "get_Speed");
+    let stamina = call_getter_int(chara_data_class, chara_obj, "get_Stamina");
+    let power = call_getter_int(chara_data_class, chara_obj, "get_Power");
+    let guts = call_getter_int(chara_data_class, chara_obj, "get_Guts");
+    let wiz = call_getter_int(chara_data_class, chara_obj, "get_Wiz");
+    let hp = call_getter_int(chara_data_class, chara_obj, "get_Hp");
+    let max_hp = call_getter_int(chara_data_class, chara_obj, "get_MaxHp");
+    let motivation = call_getter_int(chara_data_class, chara_obj, "get_Motivation");
+    let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
+    let fan_count = call_getter_int(chara_data_class, chara_obj, "get_FanCount");
+
+    // SkillPoint returns ObscuredInt - try the ObscuredInt decoder first,
+    // fall back to regular int read if it fails
+    let skill_point = call_getter_obscured_int(chara_data_class, chara_obj, "get_SkillPoint");
+
+    // ★ Scenario buffs: charaEffectIdArray (ObscuredInt[]) and scenarioProgress (ObscuredInt)
+    let chara_effect_ids = read_obscured_int_array(chara_data_class, chara_obj, "get_CharaEffectIdArray");
+    let scenario_progress = call_getter_obscured_int(chara_data_class, chara_obj, "get_ScenarioProgress");
+
+    // ★ Try to read scenario-specific object (Breeders, Ramen, etc.)
+    let scenario_obj = try_get_scenario_obj(chara_data_class, chara_obj, scenario_id);
+    let scenario_info = if !scenario_obj.is_null() {
+        format!(r#""scenario_obj":"{:p}""#, scenario_obj)
+    } else {
+        r#""scenario_obj":"null""#.to_string()
+    };
+
+    // Turn is not a direct getter on chara - it's on WorkSingleModeData
+    // Actually from dump.cs, WorkSingleModeCharaData doesn't have turn/totalTurn
+    // Those are on WorkSingleModeData: _totalTurnNum (offset 68)
+    // We'll read turn from the parent data via a separate call
+
+    ura_log(3, &format!("★ Chara: SPD={} STA={} POW={} GUT={} WIZ={} HP={}/{} MOT={} SKPT={} SCID={} FAN={} EFFECTS={:?} SPROG={}",
+        speed, stamina, power, guts, wiz, hp, max_hp, motivation, skill_point, scenario_id, fan_count, chara_effect_ids, scenario_progress));
+
+    let any_valid = speed > 0 || stamina > 0 || power > 0 || wiz > 0 || guts > 0 || hp > 0;
+
+    let cache = CharaCache {
+        speed, stamina, power, guts, wiz,
+        vital: hp, max_vital: max_hp,
+        motivation,
+        turn: 0, // will be populated from WorkSingleModeData
+        skill_point, scenario_id, fan_count,
+        month, half,
+        playing_state, is_playing,
+        valid: any_valid,
+    };
+    CHARA = cache;
+
+    if any_valid {
+        let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
+        format!(
+            r#"{{"ok":true,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
+            speed, stamina, power, guts, wiz,
+            hp, max_hp, motivation, skill_point, scenario_id, fan_count,
+            effect_ids_str.join(","), scenario_progress,
+            month, half, playing_state, is_playing, scenario_info
+        )
+    } else {
+        let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
+        format!(
+            r#"{{"ok":false,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"warning":"all_fields_negative_or_zero",{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
+            speed, stamina, power, guts, wiz,
+            hp, max_hp, motivation, skill_point, scenario_id, fan_count,
+            effect_ids_str.join(","), scenario_progress,
+            month, half, scenario_info
+        )
+    }
+}
+
+// ============================================================
+// Enumerate ALL fields including parent classes
+// ============================================================
+
+unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
+    if class.is_null() || API.is_null() { return r#"{"error":"null_class"}"#.to_string(); }
+
+    let get_fields_fn: Option<FnClassGetFields> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_fields");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetFields>(p)) }
+    };
+    let get_parent_fn: Option<FnClassGetParent> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(p)) }
+    };
+    let get_class_name_fn: Option<FnClassGetName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetName>(p)) }
+    };
+
+    if get_fields_fn.is_none() {
+        return r#"{"error":"no_il2cpp_class_get_fields"}"#.to_string();
+    }
+
+    let mut all_fields: Vec<String> = Vec::new();
+    let mut current_class = class;
+    let mut depth = 0;
+
+    loop {
+        if current_class.is_null() || depth > 10 { break; }
+
+        let class_name = if let Some(ref get_name) = get_class_name_fn {
+            let name_ptr = get_name(current_class);
+            if !name_ptr.is_null() {
+                let s = std::ffi::CStr::from_ptr(name_ptr);
+                s.to_string_lossy().to_string()
+            } else { format!("depth{}", depth) }
+        } else { format!("depth{}", depth) };
+
+        let mut iter: *mut c_void = ptr::null_mut();
+        loop {
+            let field_info = get_fields_fn.unwrap()(current_class, &mut iter);
+            if field_info.is_null() { break; }
+
+            let field_name = if !(*field_info).name.is_null() {
+                let s = std::ffi::CStr::from_ptr((*field_info).name);
+                s.to_string_lossy().to_string()
+            } else { String::from("?") };
+
+            let offset = (*field_info).offset;
+            all_fields.push(format!(r#"{{"name":"{}","offset":{},"class":"{}"}}"#, field_name, offset, class_name));
+        }
+
+        if let Some(ref get_parent) = get_parent_fn {
+            let parent = get_parent(current_class);
+            if parent.is_null() || parent == current_class { break; }
+            current_class = parent;
+        } else {
+            break;
+        }
+        depth += 1;
+    }
+
+    format!(r#"{{"total":{},"fields":[{}]}}"#, all_fields.len(), all_fields.join(","))
+}
+
+// ============================================================
+// Enumerate methods on a class
+// ============================================================
+
+unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
+    if class.is_null() || API.is_null() { return r#"{"error":"null_class"}"#.to_string(); }
+
+    let get_methods_fn: Option<FnClassGetMethods> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethods>(p)) }
+    };
+    let get_method_name_fn: Option<FnMethodGetName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnMethodGetName>(p)) }
+    };
+    let get_parent_fn: Option<FnClassGetParent> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(p)) }
+    };
+    let get_class_name_fn: Option<FnClassGetName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetName>(p)) }
+    };
+
+    if get_methods_fn.is_none() {
+        return r#"{"error":"no_il2cpp_class_get_methods"}"#.to_string();
+    }
+
+    let mut all_methods: Vec<String> = Vec::new();
+    let mut current_class = class;
+    let mut depth = 0;
+    let max_methods = 500;
+
+    loop {
+        if current_class.is_null() || depth > 5 { break; }
+        if all_methods.len() >= max_methods { break; }
+
+        let class_name = if let Some(ref get_name) = get_class_name_fn {
+            let name_ptr = get_name(current_class);
+            if !name_ptr.is_null() {
+                let s = std::ffi::CStr::from_ptr(name_ptr);
+                s.to_string_lossy().to_string()
+            } else { format!("depth{}", depth) }
+        } else { format!("depth{}", depth) };
+
+        let mut iter: *mut c_void = ptr::null_mut();
+        loop {
+            if all_methods.len() >= max_methods { break; }
+            let method_info = get_methods_fn.unwrap()(current_class, &mut iter);
+            if method_info.is_null() { break; }
+
+            let method_name = if let Some(ref get_name) = get_method_name_fn {
+                let name_ptr = get_name(method_info);
+                if !name_ptr.is_null() {
+                    let s = std::ffi::CStr::from_ptr(name_ptr);
+                    s.to_string_lossy().to_string()
+                } else { String::from("?") }
+            } else { String::from("?") };
+
+            all_methods.push(format!(r#"{{"name":"{}","class":"{}"}}"#, method_name, class_name));
+        }
+
+        if let Some(ref get_parent) = get_parent_fn {
+            let parent = get_parent(current_class);
+            if parent.is_null() || parent == current_class { break; }
+            current_class = parent;
+        } else {
+            break;
+        }
+        depth += 1;
+    }
+
+    format!(r#"{{"total":{},"methods":[{}]}}"#, all_methods.len(), all_methods.join(","))
+}
+
+// ============================================================
+// /find_method endpoint
+// ============================================================
+
+unsafe fn find_method_in_all_classes(method_name: &str) -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let get_method_fn: Option<FnClassGetMethodFromName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
+    };
+
+    if get_method_fn.is_none() {
+        return r#"{"error":"no_class_get_method_from_name"}"#.to_string();
+    }
+
+    let method_name_c = to_cstr(method_name);
+    let mut found: Vec<String> = Vec::new();
+
+    for (ns, cls) in KNOWN_CLASSES {
+        let ns_c = to_cstr(ns);
+        let cls_c = to_cstr(cls);
+        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
+        if class.is_null() { continue; }
+
+        let full_name = if ns.is_empty() { cls.to_string() } else { format!("{}.{}", ns, cls) };
+
+        let method = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 0);
+        if !method.is_null() {
+            found.push(format!(r#"{{"class":"{}","args":0}}"#, full_name));
+        }
+
+        let method1 = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 1);
+        if !method1.is_null() && method.is_null() {
+            found.push(format!(r#"{{"class":"{}","args":1}}"#, full_name));
+        }
+    }
+
+    format!(r#"{{"method":"{}","found":{},"results":[{}]}}"#,
+        method_name, !found.is_empty(), found.join(","))
+}
+
+// ============================================================
+// ★ CharaEffectId → human-readable buff mapping (v3.14.2)
+// From dump.cs CharaEffectId enum + CharaEffectType enum
+fn chara_effect_name(id: i32) -> (&'static str, &'static str) {
+    // Returns (name, effect_type) where effect_type is "Good" or "Bad"
+    match id {
+        1 => ("夜鷹", "Bad"),
+        2 => ("怠け", "Bad"),
+        3 => ("肌荒れ", "Bad"),
+        4 => ("太り気", "Bad"),
+        5 => ("頭痛", "Bad"),
+        6 => ("練習下手", "Bad"),
+        7 => ("Pt割引", "Good"),
+        8 => ("愛嬌", "Good"),
+        9 => ("注目", "Good"),
+        10 => ("練習上手", "Good"),
+        11 => ("練習◎", "Good"),
+        25 => ("やる気G", "Good"),
+        26 => ("調子G", "Good"),
+        999 => ("ランダム", "Special"),
+        _ => ("", ""), // unknown
+    }
+}
+
+/// Generate buffs JSON from chara_effect_ids (works for ALL scenarios)
+fn effects_to_buffs_json(effect_ids: &[i32]) -> String {
+    if effect_ids.is_empty() { return "[]".to_string(); }
+    let mut buffs = Vec::new();
+    for &id in effect_ids {
+        let (name, etype) = chara_effect_name(id);
+        if name.is_empty() {
+            // Unknown effect — output raw ID for debugging
+            buffs.push(format!(r#"{{"name":"Effect#{}","level":0,"desc":"unknown effect","type":"Unknown"}}"#, id));
+        } else {
+            buffs.push(format!(r#"{{"name":"{}","level":0,"desc":"{}","type":"{}"}}"#, name, name, etype));
+        }
+    }
+    format!("[{}]", buffs.join(","))
+}
+
+// ★ Clean summary for floating window app (/summary endpoint)
+// v3.10.0: Player-friendly output — stats + training gains in one response
+// ============================================================
+
+/// Breeders作戦会議buff (游戏内青・緑・桃三色)
+/// GroupType 1=青(フィジカル), 2=緑(テクニック), 3=桃(メンタル)
+fn breeders_buff_desc(group_type: i32, level: i32) -> (&'static str, String) {
+    match group_type {
+        1 => { // 青: 友情ボーナス + サブ能力UP + 体力消費DOWN
+            let desc = match level {
+                0 => "-".to_string(),
+                1 => "友情+10% サブ+15%".to_string(),
+                2 => "友情+20% サブ+25% 体消-40%".to_string(),
+                3 => "友情+25% サブ+30% 体消-70%".to_string(),
+                4 => "友情+35% サブ+35% 体消-100%".to_string(),
+                5 => "友情+40% サブ+40% 体消-100%".to_string(),
+                6 => "友情+50% サブ+45% 体消-100%".to_string(),
+                7 => "友情+55% サブ+50% 体消-100%".to_string(),
+                8 => "友情+65%".to_string(),
+                _ => format!("Lv{}", level),
+            };
+            ("青", desc)
+        }
+        2 => { // 緑: スキルPt効果UP + ヒント発生
+            let desc = match level {
+                0 => "-".to_string(),
+                1 => "Pt+10%".to_string(),
+                2 => "Pt+15%".to_string(),
+                3 => "Pt+20% ヒント1人".to_string(),
+                4 => "Pt+25% ヒント2人".to_string(),
+                5 => "Pt+30% ヒント2人 全ヒント".to_string(),
+                6 => "Pt+35% ヒント2人 全ヒント".to_string(),
+                7 => "Pt+40% ヒント2人 全ヒント".to_string(),
+                8 => "Pt+50% ヒント2人 全ヒント".to_string(),
+                _ => format!("Lv{}", level),
+            };
+            ("緑", desc)
+        }
+        3 => { // 桃: 絆獲得UP + 失敗率DOWN + 獲得上限UP
+            let desc = match level {
+                0 => "-".to_string(),
+                1 => "絆+3 失敗-5%".to_string(),
+                2 => "絆+5 失敗-50% 上限+15".to_string(),
+                3 => "絆+7 失敗-100% 上限+25 Pt上限+40".to_string(),
+                4 => "絆+7 失敗-100% 上限+35 Pt上限+60".to_string(),
+                5 => "絆+7 失敗-100% 上限+40 Pt上限+80".to_string(),
+                6 => "絆+7 失敗-100% 上限+45 Pt上限+100".to_string(),
+                7 => "絆+7 失敗-100% 上限+50 Pt上限+110".to_string(),
+                8 => "絆+7 失敗-100% 上限+60 Pt上限+120".to_string(),
+                _ => format!("Lv{}", level),
+            };
+            ("桃", desc)
+        }
+        _ => ("?", format!("Lv{}", level)),
+    }
+}
+
+/// Safe wrapper: catches panics from read_summary_inner to prevent game crash
+
+// ============================================================
+// ★ AI Evaluation Module (v3.15.0)
+// Handwritten evaluation logic ported from UmaAi
+// ============================================================
+
 const FIVE_STATUS_FINAL_SCORE: [i32; 2801] = [
 0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,
     10,11,11,12,12,13,13,14,14,15,15,16,16,17,17,18,18,19,19,20,
@@ -743,8 +2244,9 @@ unsafe fn read_summary_inner() -> String {
 
     // ★ state field removed: get_State() doesn't exist on WorkSingleModeCharaData
     // Health condition is now detected via chara_effect_ids (top-level array)
+    format!(
 
-    // === ★ AI Evaluation (v3.15.0) ===
+    // ★ AI Evaluation (v3.15.0): compute score and training recommendation
     let ai_json = {
         // Compute turn from month+half (URA: turn = (month-1)*2 + (half-1), max 71 for training)
         let turn = std::cmp::min((mon - 1) * 2 + (half - 1), 71);
@@ -1012,7 +2514,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.14.2","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.15.0","endpoints":["/summary","/data","/scenario","/debug/params","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -1150,7 +2652,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.15.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.14.2").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -1355,7 +2857,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.15.0 loaded (AI evaluation + panic protection)");
+    ura_log(3, "URA plugin v3.14.2 loaded (panic protection + probe init)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr("URA v3.7.8 Loaded!").as_ptr());
