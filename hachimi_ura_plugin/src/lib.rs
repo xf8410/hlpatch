@@ -2520,15 +2520,6 @@ fn parse_path(req: &str) -> String {
     }
 }
 
-fn parse_query(req: &str) -> String {
-    let first_line = req.lines().next().unwrap_or("");
-    let uri = first_line.split(' ').nth(1).unwrap_or("/");
-    if let Some(pos) = uri.find('?') {
-        uri[pos+1..].to_string()
-    } else {
-        String::new()
-    }
-}
 
 fn handle_http(mut stream: std::net::TcpStream) {
     use std::io::{Read, Write};
@@ -2536,7 +2527,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let n = match stream.read(&mut buf) { Ok(n) if n > 0 => n, _ => return };
     let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let path = parse_path(req);
-    let query = parse_query(req);
 
     let body = if path == "/" || path == "/health" {
         r#"{"status":"ok","version":"3.17.1","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/log","/status","/health"]}"#.to_string()
@@ -2613,19 +2603,13 @@ fn handle_http(mut stream: std::net::TcpStream) {
         read_carddb()
     } else if path == "/skilldata" {
         read_skilldata()
+    } else if path == "/saddles-dl" {
+        let saddles_json = read_saddles();
+        let mut resp = String::from("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"saddles.json\"\r\nConnection: close\r\n\r\n");
+        resp.push_str(&saddles_json);
+        resp
     } else if path == "/saddles" {
-        let json = read_saddles();
-        if query.contains("download") {
-            format!("HTTP/1.1 200 OK
-Content-Type: application/octet-stream
-Content-Disposition: attachment; filename="saddles.json"
-Content-Length: {}
-Connection: close
-
-{}", json.len(), json)
-        } else {
-            json
-        }
+        read_saddles()
     } else if path == "/config" {
         let is_post = req.starts_with("POST");
         if is_post {
