@@ -3450,6 +3450,7 @@ unsafe fn search_classes(_keyword: &str) -> String {
     }
 
     format!("[{}]", found.join(","))
+}
 
 // ============================================================
 // ★ v3.16.1: /carddb & /skilldata — Read MasterDB via bundled rusqlite
