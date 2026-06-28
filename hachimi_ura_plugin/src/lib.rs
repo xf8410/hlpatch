@@ -2520,12 +2520,23 @@ fn parse_path(req: &str) -> String {
     }
 }
 
+fn parse_query(req: &str) -> String {
+    let first_line = req.lines().next().unwrap_or("");
+    let uri = first_line.split(' ').nth(1).unwrap_or("/");
+    if let Some(pos) = uri.find('?') {
+        uri[pos+1..].to_string()
+    } else {
+        String::new()
+    }
+}
+
 fn handle_http(mut stream: std::net::TcpStream) {
     use std::io::{Read, Write};
     let mut buf = [0u8; 8192];
     let n = match stream.read(&mut buf) { Ok(n) if n > 0 => n, _ => return };
     let req = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let path = parse_path(req);
+    let query = parse_query(req);
 
     let body = if path == "/" || path == "/health" {
         r#"{"status":"ok","version":"3.17.1","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/log","/status","/health"]}"#.to_string()
