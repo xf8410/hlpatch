@@ -24,6 +24,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use rusqlite::{Connection, OpenFlags, params};
 
 #[repr(i32)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -2353,7 +2354,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.16.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
+        r#"{{"version":"3.16.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json
     )
 }
@@ -2527,7 +2528,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.16.0","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.16.1","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -2598,9 +2599,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/breeders" {
         unsafe { debug_breeders_team() }
     } else if path == "/carddb" {
-        unsafe { read_carddb() }
+        read_carddb()
     } else if path == "/skilldata" {
-        unsafe { read_skilldata() }
+        read_skilldata()
     } else if path == "/config" {
         // POST /config to update, GET /config to read current
         let is_post = req.starts_with("POST");
@@ -3452,119 +3453,12 @@ unsafe fn search_classes(_keyword: &str) -> String {
 }
 
 // ============================================================
-// ★ v3.16.0: /carddb & /skilldata — Read MasterDB via SQLite3 C API
+// ★ v3.16.1: /carddb & /skilldata — Read MasterDB via bundled rusqlite
 // ============================================================
 
-extern "C" {
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
-
-const RTLD_DEFAULT: usize = usize::MAX; // ((void*)-1)
-
-/// Resolve a native symbol from the process (not IL2CPP-specific)
-unsafe fn resolve_native_symbol(name: &str) -> *mut c_void {
-    let cname = to_cstr(name);
-    dlsym(RTLD_DEFAULT as *mut c_void, cname.as_ptr())
-}
-
-// SQLite3 C API function types
-type FnSqlite3Open = unsafe extern "C" fn(*const u8, *mut *mut c_void) -> i32;
-type FnSqlite3PrepareV2 = unsafe extern "C" fn(*mut c_void, *const u8, i32, *mut *mut c_void, *mut *const u8) -> i32;
-type FnSqlite3Step = unsafe extern "C" fn(*mut c_void) -> i32;
-type FnSqlite3ColumnInt = unsafe extern "C" fn(*mut c_void, i32) -> i32;
-type FnSqlite3ColumnText = unsafe extern "C" fn(*mut c_void, i32) -> *const u8;
-type FnSqlite3ColumnBytes = unsafe extern "C" fn(*mut c_void, i32) -> i32;
-type FnSqlite3ColumnType = unsafe extern "C" fn(*mut c_void, i32) -> i32;
-type FnSqlite3Finalize = unsafe extern "C" fn(*mut c_void) -> i32;
-type FnSqlite3CloseV2 = unsafe extern "C" fn(*mut c_void) -> i32;
-type FnSqlite3ErrMsg = unsafe extern "C" fn(*mut c_void) -> *const u8;
-
-const SQLITE_OK: i32 = 0;
-const SQLITE_ROW: i32 = 100;
-const SQLITE_DONE: i32 = 101;
-const SQLITE_TEXT: i32 = 3;
-const SQLITE_NULL: i32 = 5;
-
-#[derive(Clone)]
-struct Sqlite3Api {
-    open: Option<FnSqlite3Open>,
-    prepare_v2: Option<FnSqlite3PrepareV2>,
-    step: Option<FnSqlite3Step>,
-    column_int: Option<FnSqlite3ColumnInt>,
-    column_text: Option<FnSqlite3ColumnText>,
-    column_bytes: Option<FnSqlite3ColumnBytes>,
-    column_type: Option<FnSqlite3ColumnType>,
-    finalize: Option<FnSqlite3Finalize>,
-    close_v2: Option<FnSqlite3CloseV2>,
-    errmsg: Option<FnSqlite3ErrMsg>,
-}
-
-static SQLITE3_API: Mutex<Option<Sqlite3Api>> = Mutex::new(None);
-
-unsafe fn get_sqlite3_api() -> Option<Sqlite3Api> {
-    {
-        let guard = SQLITE3_API.lock().unwrap();
-        if guard.is_some() {
-            return guard.clone();
-        }
-    }
-
-    let api = Sqlite3Api {
-        open: {
-            let p = resolve_native_symbol("sqlite3_open");
-            if p.is_null() { ura_log(2, "SQLite3: sqlite3_open not found"); None }
-            else { ura_log(3, "SQLite3: sqlite3_open resolved"); Some(std::mem::transmute(p)) }
-        },
-        prepare_v2: {
-            let p = resolve_native_symbol("sqlite3_prepare_v2");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-        step: {
-            let p = resolve_native_symbol("sqlite3_step");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-        column_int: {
-            let p = resolve_native_symbol("sqlite3_column_int");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-        column_text: {
-            let p = resolve_native_symbol("sqlite3_column_text");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-        column_bytes: {
-            let p = resolve_native_symbol("sqlite3_column_bytes");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-        column_type: {
-            let p = resolve_native_symbol("sqlite3_column_type");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-        finalize: {
-            let p = resolve_native_symbol("sqlite3_finalize");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-        close_v2: {
-            let p = resolve_native_symbol("sqlite3_close_v2");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-        errmsg: {
-            let p = resolve_native_symbol("sqlite3_errmsg");
-            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-        },
-    };
-
-    if api.open.is_none() {
-        return None;
-    }
-
-    let mut guard = SQLITE3_API.lock().unwrap();
-    *guard = Some(api.clone());
-    Some(api)
-}
 
 /// Find MasterDB file on the device filesystem
-unsafe fn find_mdb_path() -> Option<String> {
-    // Try common Android paths for ウマ娘 MasterDB
+fn find_mdb_path() -> Option<String> {
     let paths = [
         "/data/data/jp.pokemon.pokeuma/files/master/master.mdb",
         "/data/user/0/jp.pokemon.pokeuma/files/master/master.mdb",
@@ -3575,7 +3469,6 @@ unsafe fn find_mdb_path() -> Option<String> {
 
     for p in &paths {
         if std::path::Path::new(p).exists() {
-            ura_log(3, &format!("MDB found: {}", p));
             return Some(p.to_string());
         }
     }
@@ -3592,7 +3485,6 @@ unsafe fn find_mdb_path() -> Option<String> {
                 ];
                 for p in &alt_paths {
                     if std::path::Path::new(p).exists() {
-                        ura_log(3, &format!("MDB found via cmdline({}): {}", pkg, p));
                         return Some(p.clone());
                     }
                 }
@@ -3600,232 +3492,209 @@ unsafe fn find_mdb_path() -> Option<String> {
         }
     }
 
-    ura_log(2, "MDB: file not found in any known path");
     None
 }
 
-/// Open SQLite3 database and return connection handle
-unsafe fn open_mdb(api: &Sqlite3Api, path: &str) -> Result<*mut c_void, String> {
-    let mut db: *mut c_void = ptr::null_mut();
-    let path_c = to_cstr(path);
-    let rc = (api.open.unwrap())(path_c.as_ptr() as *const u8, &mut db);
-    if rc != SQLITE_OK {
-        return Err(format!("sqlite3_open rc={}", rc));
-    }
-    ura_log(3, &format!("MDB opened: {}", path));
-    Ok(db)
-}
-
-/// Read a text column safely as JSON-escaped string
-unsafe fn read_text_col(api: &Sqlite3Api, stmt: *mut c_void, col: i32) -> String {
-    let ctype = (api.column_type.unwrap())(stmt, col);
-    match ctype {
-        SQLITE_TEXT => {
-            let tp = (api.column_text.unwrap())(stmt, col);
-            if tp.is_null() { return "null".to_string(); }
-            let len = (api.column_bytes.unwrap())(stmt, col) as usize;
-            if len == 0 { return "\"\"".to_string(); }
-            let bytes = std::slice::from_raw_parts(tp, len);
-            match std::str::from_utf8(bytes) {
-                Ok(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")),
-                Err(_) => "null".to_string()
-            }
-        }
-        SQLITE_NULL => "null".to_string(),
-        _ => format!("{}", (api.column_int.unwrap())(stmt, col)),
-    }
-}
-
-/// /carddb - Read support card data from MasterDB
-unsafe fn read_carddb() -> String {
-    let api = match get_sqlite3_api() {
-        Some(a) => a,
-        None => return r#"{"error":"sqlite3_not_found","hint":"sqlite3 symbols not available in process"}"#.to_string(),
-    };
-
-    let mdb_path = match find_mdb_path() {
-        Some(p) => p,
-        None => return r#"{"error":"mdb_not_found","hint":"MasterDB file not found on device","paths_tried":["/data/data/jp.pokemon.pokeuma/files/master/master.mdb"]}"#.to_string(),
-    };
-
-    let db = match open_mdb(&api, &mdb_path) {
-        Ok(d) => d,
-        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
-    };
-
-    // Query support_card_data
-    let card_sql = "SELECT id, chara_id, rarity, command_id, effect_table_id, unique_effect_id, support_card_type, outing_max FROM support_card_data ORDER BY id";
-    let sql_c = to_cstr(card_sql);
-    let mut stmt: *mut c_void = ptr::null_mut();
-    let rc = (api.prepare_v2.unwrap())(db, sql_c.as_ptr() as *const u8, -1, &mut stmt, ptr::null_mut());
-    if rc != SQLITE_OK {
-        let err = if api.errmsg.is_some() && !db.is_null() {
-            let ep = (api.errmsg.unwrap())(db);
-            if !ep.is_null() {
-                let len = (0usize..).find(|&i| *ep.add(i) == 0).unwrap_or(0);
-                std::str::from_utf8_unchecked(std::slice::from_raw_parts(ep, len)).to_string()
-            } else { format!("rc={}", rc) }
-        } else { format!("rc={}", rc) };
-        (api.close_v2.unwrap())(db);
-        return format!(r#"{{"error":"card_prepare_failed","detail":"{}"}}"#, err);
-    }
-
-    let card_cols = ["id", "chara_id", "rarity", "command_id", "effect_table_id", "unique_effect_id", "support_card_type", "outing_max"];
-    let mut cards = Vec::new();
-    loop {
-        let rc = (api.step.unwrap())(stmt);
-        if rc == SQLITE_DONE { break; }
-        if rc != SQLITE_ROW {
-            (api.finalize.unwrap())(stmt);
-            (api.close_v2.unwrap())(db);
-            return format!(r#"{{"error":"card_step_failed","rc":{}}}"#, rc);
-        }
-        let mut fields = Vec::new();
-        for (c, name) in card_cols.iter().enumerate() {
-            let val = (api.column_int.unwrap())(stmt, c as i32);
-            fields.push(format!(r#""{}":{}"#, name, val));
-        }
-        cards.push(format!("{{{}}}", fields.join(",")));
-    }
-    (api.finalize.unwrap())(stmt);
-
-    // Query support_card_effect_table
-    let eff_sql = "SELECT id, type, init, limit_lv5, limit_lv10, limit_lv15, limit_lv20, limit_lv25, limit_lv30, limit_lv35, limit_lv40, limit_lv45, limit_lv50 FROM support_card_effect_table ORDER BY id, type";
-    let sql_c2 = to_cstr(eff_sql);
-    let mut stmt2: *mut c_void = ptr::null_mut();
-    let rc2 = (api.prepare_v2.unwrap())(db, sql_c2.as_ptr() as *const u8, -1, &mut stmt2, ptr::null_mut());
-    if rc2 != SQLITE_OK {
-        (api.close_v2.unwrap())(db);
-        return format!(r#"{{"error":"effect_prepare_failed","rc":{}}}"#, rc2);
-    }
-
-    let eff_cols = ["id", "type", "init", "lv5", "lv10", "lv15", "lv20", "lv25", "lv30", "lv35", "lv40", "lv45", "lv50"];
-    let mut effects = Vec::new();
-    loop {
-        let rc = (api.step.unwrap())(stmt2);
-        if rc == SQLITE_DONE { break; }
-        if rc != SQLITE_ROW {
-            (api.finalize.unwrap())(stmt2);
-            (api.close_v2.unwrap())(db);
-            return format!(r#"{{"error":"effect_step_failed","rc":{}}}"#, rc);
-        }
-        let mut fields = Vec::new();
-        for (c, name) in eff_cols.iter().enumerate() {
-            let val = (api.column_int.unwrap())(stmt2, c as i32);
-            fields.push(format!(r#""{}":{}"#, name, val));
-        }
-        effects.push(format!("{{{}}}", fields.join(",")));
-    }
-    (api.finalize.unwrap())(stmt2);
-    (api.close_v2.unwrap())(db);
-
-    format!(r#"{{"ok":true,"version":"3.16.0","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
-        mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(","))
-}
-
-/// /skilldata - Read skill data from MasterDB
-unsafe fn read_skilldata() -> String {
-    let api = match get_sqlite3_api() {
-        Some(a) => a,
-        None => return r#"{"error":"sqlite3_not_found","hint":"sqlite3 symbols not available in process"}"#.to_string(),
-    };
-
+/// /carddb - Read support card data from MasterDB via rusqlite
+fn read_carddb() -> String {
     let mdb_path = match find_mdb_path() {
         Some(p) => p,
         None => return r#"{"error":"mdb_not_found","hint":"MasterDB file not found on device"}"#.to_string(),
     };
 
-    let db = match open_mdb(&api, &mdb_path) {
-        Ok(d) => d,
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
+    };
+
+    // Query support_card_data
+    let mut card_stmt = match conn.prepare(
+        "SELECT id, chara_id, rarity, command_id, effect_table_id, unique_effect_id, support_card_type, outing_max FROM support_card_data ORDER BY id"
+    ) {
+        Ok(s) => s,
+        Err(e) => return format!(r#"{{"error":"card_prepare_failed","detail":"{}"}}"#, e),
+    };
+
+    let card_rows = card_stmt.query_map([], |row| {
+        Ok(format!(
+            r#"{{"id":{},"chara_id":{},"rarity":{},"command_id":{},"effect_table_id":{},"unique_effect_id":{},"support_card_type":{},"outing_max":{}}}"#,
+            row.get::<_, i32>(0).unwrap_or(0),
+            row.get::<_, i32>(1).unwrap_or(0),
+            row.get::<_, i32>(2).unwrap_or(0),
+            row.get::<_, i32>(3).unwrap_or(0),
+            row.get::<_, i32>(4).unwrap_or(0),
+            row.get::<_, i32>(5).unwrap_or(0),
+            row.get::<_, i32>(6).unwrap_or(0),
+            row.get::<_, i32>(7).unwrap_or(0),
+        ))
+    });
+
+    let mut cards = Vec::new();
+    match card_rows {
+        Ok(rows) => {
+            for r in rows {
+                if let Ok(s) = r { cards.push(s); }
+            }
+        }
+        Err(e) => return format!(r#"{{"error":"card_query_failed","detail":"{}"}}"#, e),
+    }
+    drop(card_stmt);
+
+    // Query support_card_effect_table
+    let mut eff_stmt = match conn.prepare(
+        "SELECT id, type, init, limit_lv5, limit_lv10, limit_lv15, limit_lv20, limit_lv25, limit_lv30, limit_lv35, limit_lv40, limit_lv45, limit_lv50 FROM support_card_effect_table ORDER BY id, type"
+    ) {
+        Ok(s) => s,
+        Err(e) => return format!(r#"{{"error":"effect_prepare_failed","detail":"{}"}}"#, e),
+    };
+
+    let eff_rows = eff_stmt.query_map([], |row| {
+        Ok(format!(
+            r#"{{"id":{},"type":{},"init":{},"lv5":{},"lv10":{},"lv15":{},"lv20":{},"lv25":{},"lv30":{},"lv35":{},"lv40":{},"lv45":{},"lv50":{}}}"#,
+            row.get::<_, i32>(0).unwrap_or(0),
+            row.get::<_, i32>(1).unwrap_or(0),
+            row.get::<_, i32>(2).unwrap_or(0),
+            row.get::<_, i32>(3).unwrap_or(0),
+            row.get::<_, i32>(4).unwrap_or(0),
+            row.get::<_, i32>(5).unwrap_or(0),
+            row.get::<_, i32>(6).unwrap_or(0),
+            row.get::<_, i32>(7).unwrap_or(0),
+            row.get::<_, i32>(8).unwrap_or(0),
+            row.get::<_, i32>(9).unwrap_or(0),
+            row.get::<_, i32>(10).unwrap_or(0),
+            row.get::<_, i32>(11).unwrap_or(0),
+            row.get::<_, i32>(12).unwrap_or(0),
+        ))
+    });
+
+    let mut effects = Vec::new();
+    match eff_rows {
+        Ok(rows) => {
+            for r in rows {
+                if let Ok(s) = r { effects.push(s); }
+            }
+        }
+        Err(e) => return format!(r#"{{"error":"effect_query_failed","detail":"{}"}}"#, e),
+    }
+    drop(eff_stmt);
+    drop(conn);
+
+    format!(
+        r#"{{"ok":true,"version":"3.16.1","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
+    )
+}
+
+/// /skilldata - Read skill data from MasterDB via rusqlite
+fn read_skilldata() -> String {
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return r#"{"error":"mdb_not_found","hint":"MasterDB file not found on device"}"#.to_string(),
+    };
+
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
         Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
     };
 
     // Query skill_data
-    let skill_sql = "SELECT id, rarity, grade_value, skill_category, condition_1, ability_type_1_1, float_ability_value_1_1, icon_id, disable_singlemode FROM skill_data ORDER BY id";
-    let sql_c = to_cstr(skill_sql);
-    let mut stmt: *mut c_void = ptr::null_mut();
-    let rc = (api.prepare_v2.unwrap())(db, sql_c.as_ptr() as *const u8, -1, &mut stmt, ptr::null_mut());
-    if rc != SQLITE_OK {
-        (api.close_v2.unwrap())(db);
-        return format!(r#"{{"error":"skill_prepare_failed","rc":{}}}"#, rc);
+    let mut skill_stmt = match conn.prepare(
+        "SELECT id, rarity, grade_value, skill_category, condition_1, ability_type_1_1, float_ability_value_1_1, icon_id, disable_singlemode FROM skill_data ORDER BY id"
+    ) {
+        Ok(s) => s,
+        Err(e) => return format!(r#"{{"error":"skill_prepare_failed","detail":"{}"}}"#, e),
+    };
+
+    fn json_escape(s: &str) -> String {
+        s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
     }
 
-    let skill_int_cols = [
-        ("id", 0), ("rarity", 1), ("grade_value", 2), ("skill_category", 3),
-        ("ability_type", 5), ("ability_value", 6), ("icon_id", 7), ("disable_sm", 8),
-    ];
+    let skill_rows = skill_stmt.query_map([], |row| {
+        let condition: String = row.get::<_, Option<String>>(4).unwrap_or(None).unwrap_or_default();
+        Ok(format!(
+            r#"{{"id":{},"rarity":{},"grade_value":{},"skill_category":{},"condition":"{}","ability_type":{},"ability_value":{},"icon_id":{},"disable_sm":{}}}"#,
+            row.get::<_, i32>(0).unwrap_or(0),
+            row.get::<_, i32>(1).unwrap_or(0),
+            row.get::<_, i32>(2).unwrap_or(0),
+            row.get::<_, i32>(3).unwrap_or(0),
+            json_escape(&condition),
+            row.get::<_, i32>(5).unwrap_or(0),
+            row.get::<_, i32>(6).unwrap_or(0),
+            row.get::<_, i32>(7).unwrap_or(0),
+            row.get::<_, i32>(8).unwrap_or(0),
+        ))
+    });
+
     let mut skills = Vec::new();
-    loop {
-        let rc = (api.step.unwrap())(stmt);
-        if rc == SQLITE_DONE { break; }
-        if rc != SQLITE_ROW {
-            (api.finalize.unwrap())(stmt);
-            (api.close_v2.unwrap())(db);
-            return format!(r#"{{"error":"skill_step_failed","rc":{}}}"#, rc);
+    match skill_rows {
+        Ok(rows) => {
+            for r in rows {
+                if let Ok(s) = r { skills.push(s); }
+            }
         }
-        let mut fields = Vec::new();
-        for (name, col) in &skill_int_cols {
-            let val = (api.column_int.unwrap())(stmt, *col as i32);
-            fields.push(format!(r#""{}":{}"#, name, val));
-        }
-        // condition_1 is text column at index 4
-        let cond = read_text_col(&api, stmt, 4);
-        fields.push(format!(r#""condition":{}"#, cond));
-        skills.push(format!("{{{}}}", fields.join(",")));
+        Err(e) => return format!(r#"{{"error":"skill_query_failed","detail":"{}"}}"#, e),
     }
-    (api.finalize.unwrap())(stmt);
+    drop(skill_stmt);
 
     // Query text_data for skill names (category=47)
-    let name_sql = "SELECT id, text FROM text_data WHERE category=47 ORDER BY id";
-    let sql_c2 = to_cstr(name_sql);
-    let mut stmt2: *mut c_void = ptr::null_mut();
-    let rc2 = (api.prepare_v2.unwrap())(db, sql_c2.as_ptr() as *const u8, -1, &mut stmt2, ptr::null_mut());
-    if rc2 != SQLITE_OK {
-        (api.close_v2.unwrap())(db);
-        return format!(r#"{{"error":"name_prepare_failed","rc":{}}}"#, rc2);
-    }
+    let mut name_stmt = match conn.prepare(
+        "SELECT id, text FROM text_data WHERE category=47 ORDER BY id"
+    ) {
+        Ok(s) => s,
+        Err(e) => return format!(r#"{{"error":"name_prepare_failed","detail":"{}"}}"#, e),
+    };
+
+    let name_rows = name_stmt.query_map([], |row| {
+        let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
+        Ok(format!(r#"{{"id":{},"name":"{}"}}"#,
+            row.get::<_, i32>(0).unwrap_or(0),
+            json_escape(&text),
+        ))
+    });
+
     let mut names = Vec::new();
-    loop {
-        let rc = (api.step.unwrap())(stmt2);
-        if rc == SQLITE_DONE { break; }
-        if rc != SQLITE_ROW {
-            (api.finalize.unwrap())(stmt2);
-            (api.close_v2.unwrap())(db);
-            return format!(r#"{{"error":"name_step_failed","rc":{}}}"#, rc);
+    match name_rows {
+        Ok(rows) => {
+            for r in rows {
+                if let Ok(s) = r { names.push(s); }
+            }
         }
-        let id = (api.column_int.unwrap())(stmt2, 0);
-        let text = read_text_col(&api, stmt2, 1);
-        names.push(format!(r#"{{"id":{},"name":{}}}"#, id, text));
+        Err(e) => return format!(r#"{{"error":"name_query_failed","detail":"{}"}}"#, e),
     }
-    (api.finalize.unwrap())(stmt2);
+    drop(name_stmt);
 
     // Query skill need points
-    let pt_sql = "SELECT id, need_skill_point, status_type, status_value FROM single_mode_skill_need_point ORDER BY id";
-    let sql_c3 = to_cstr(pt_sql);
-    let mut stmt3: *mut c_void = ptr::null_mut();
-    let rc3 = (api.prepare_v2.unwrap())(db, sql_c3.as_ptr() as *const u8, -1, &mut stmt3, ptr::null_mut());
-    if rc3 != SQLITE_OK {
-        (api.close_v2.unwrap())(db);
-        return format!(r#"{{"error":"pt_prepare_failed","rc":{}}}"#, rc3);
-    }
-    let mut points = Vec::new();
-    loop {
-        let rc = (api.step.unwrap())(stmt3);
-        if rc == SQLITE_DONE { break; }
-        if rc != SQLITE_ROW {
-            (api.finalize.unwrap())(stmt3);
-            (api.close_v2.unwrap())(db);
-            return format!(r#"{{"error":"pt_step_failed","rc":{}}}"#, rc);
-        }
-        let id = (api.column_int.unwrap())(stmt3, 0);
-        let need = (api.column_int.unwrap())(stmt3, 1);
-        let st = (api.column_int.unwrap())(stmt3, 2);
-        let sv = (api.column_int.unwrap())(stmt3, 3);
-        points.push(format!(r#"{{"id":{},"need_pt":{},"status_type":{},"status_value":{}}}"#, id, need, st, sv));
-    }
-    (api.finalize.unwrap())(stmt3);
-    (api.close_v2.unwrap())(db);
+    let mut pt_stmt = match conn.prepare(
+        "SELECT id, need_skill_point, status_type, status_value FROM single_mode_skill_need_point ORDER BY id"
+    ) {
+        Ok(s) => s,
+        Err(e) => return format!(r#"{{"error":"pt_prepare_failed","detail":"{}"}}"#, e),
+    };
 
-    format!(r#"{{"ok":true,"version":"3.16.0","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
-        mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(","))
+    let pt_rows = pt_stmt.query_map([], |row| {
+        Ok(format!(
+            r#"{{"id":{},"need_pt":{},"status_type":{},"status_value":{}}}"#,
+            row.get::<_, i32>(0).unwrap_or(0),
+            row.get::<_, i32>(1).unwrap_or(0),
+            row.get::<_, i32>(2).unwrap_or(0),
+            row.get::<_, i32>(3).unwrap_or(0),
+        ))
+    });
+
+    let mut points = Vec::new();
+    match pt_rows {
+        Ok(rows) => {
+            for r in rows {
+                if let Ok(s) = r { points.push(s); }
+            }
+        }
+        Err(e) => return format!(r#"{{"error":"pt_query_failed","detail":"{}"}}"#, e),
+    }
+    drop(pt_stmt);
+    drop(conn);
+
+    format!(
+        r#"{{"ok":true,"version":"3.16.1","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
+    )
 }
