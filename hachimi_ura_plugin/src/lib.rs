@@ -24,7 +24,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags};
 
 #[repr(i32)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -3450,7 +3450,6 @@ unsafe fn search_classes(_keyword: &str) -> String {
     }
 
     format!("[{}]", found.join(","))
-}
 
 // ============================================================
 // ★ v3.16.1: /carddb & /skilldata — Read MasterDB via bundled rusqlite
@@ -3495,6 +3494,10 @@ fn find_mdb_path() -> Option<String> {
     None
 }
 
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
+}
+
 /// /carddb - Read support card data from MasterDB via rusqlite
 fn read_carddb() -> String {
     let mdb_path = match find_mdb_path() {
@@ -3507,76 +3510,51 @@ fn read_carddb() -> String {
         Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
     };
 
-    // Query support_card_data
-    let mut card_stmt = match conn.prepare(
+    // Collect all card data (consumes iterator, releases borrow)
+    let cards: Vec<String> = match conn.prepare(
         "SELECT id, chara_id, rarity, command_id, effect_table_id, unique_effect_id, support_card_type, outing_max FROM support_card_data ORDER BY id"
     ) {
-        Ok(s) => s,
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            Ok(format!(
+                r#"{{"id":{},"chara_id":{},"rarity":{},"command_id":{},"effect_table_id":{},"unique_effect_id":{},"support_card_type":{},"outing_max":{}}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                row.get::<_, i32>(1).unwrap_or(0),
+                row.get::<_, i32>(2).unwrap_or(0),
+                row.get::<_, i32>(3).unwrap_or(0),
+                row.get::<_, i32>(4).unwrap_or(0),
+                row.get::<_, i32>(5).unwrap_or(0),
+                row.get::<_, i32>(6).unwrap_or(0),
+                row.get::<_, i32>(7).unwrap_or(0),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
         Err(e) => return format!(r#"{{"error":"card_prepare_failed","detail":"{}"}}"#, e),
     };
 
-    let card_rows = card_stmt.query_map([], |row| {
-        Ok(format!(
-            r#"{{"id":{},"chara_id":{},"rarity":{},"command_id":{},"effect_table_id":{},"unique_effect_id":{},"support_card_type":{},"outing_max":{}}}"#,
-            row.get::<_, i32>(0).unwrap_or(0),
-            row.get::<_, i32>(1).unwrap_or(0),
-            row.get::<_, i32>(2).unwrap_or(0),
-            row.get::<_, i32>(3).unwrap_or(0),
-            row.get::<_, i32>(4).unwrap_or(0),
-            row.get::<_, i32>(5).unwrap_or(0),
-            row.get::<_, i32>(6).unwrap_or(0),
-            row.get::<_, i32>(7).unwrap_or(0),
-        ))
-    });
-
-    let mut cards = Vec::new();
-    match card_rows {
-        Ok(rows) => {
-            for r in rows {
-                if let Ok(s) = r { cards.push(s); }
-            }
-        }
-        Err(e) => return format!(r#"{{"error":"card_query_failed","detail":"{}"}}"#, e),
-    }
-    drop(card_stmt);
-
-    // Query support_card_effect_table
-    let mut eff_stmt = match conn.prepare(
+    // Collect all effect data
+    let effects: Vec<String> = match conn.prepare(
         "SELECT id, type, init, limit_lv5, limit_lv10, limit_lv15, limit_lv20, limit_lv25, limit_lv30, limit_lv35, limit_lv40, limit_lv45, limit_lv50 FROM support_card_effect_table ORDER BY id, type"
     ) {
-        Ok(s) => s,
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            Ok(format!(
+                r#"{{"id":{},"type":{},"init":{},"lv5":{},"lv10":{},"lv15":{},"lv20":{},"lv25":{},"lv30":{},"lv35":{},"lv40":{},"lv45":{},"lv50":{}}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                row.get::<_, i32>(1).unwrap_or(0),
+                row.get::<_, i32>(2).unwrap_or(0),
+                row.get::<_, i32>(3).unwrap_or(0),
+                row.get::<_, i32>(4).unwrap_or(0),
+                row.get::<_, i32>(5).unwrap_or(0),
+                row.get::<_, i32>(6).unwrap_or(0),
+                row.get::<_, i32>(7).unwrap_or(0),
+                row.get::<_, i32>(8).unwrap_or(0),
+                row.get::<_, i32>(9).unwrap_or(0),
+                row.get::<_, i32>(10).unwrap_or(0),
+                row.get::<_, i32>(11).unwrap_or(0),
+                row.get::<_, i32>(12).unwrap_or(0),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
         Err(e) => return format!(r#"{{"error":"effect_prepare_failed","detail":"{}"}}"#, e),
     };
 
-    let eff_rows = eff_stmt.query_map([], |row| {
-        Ok(format!(
-            r#"{{"id":{},"type":{},"init":{},"lv5":{},"lv10":{},"lv15":{},"lv20":{},"lv25":{},"lv30":{},"lv35":{},"lv40":{},"lv45":{},"lv50":{}}}"#,
-            row.get::<_, i32>(0).unwrap_or(0),
-            row.get::<_, i32>(1).unwrap_or(0),
-            row.get::<_, i32>(2).unwrap_or(0),
-            row.get::<_, i32>(3).unwrap_or(0),
-            row.get::<_, i32>(4).unwrap_or(0),
-            row.get::<_, i32>(5).unwrap_or(0),
-            row.get::<_, i32>(6).unwrap_or(0),
-            row.get::<_, i32>(7).unwrap_or(0),
-            row.get::<_, i32>(8).unwrap_or(0),
-            row.get::<_, i32>(9).unwrap_or(0),
-            row.get::<_, i32>(10).unwrap_or(0),
-            row.get::<_, i32>(11).unwrap_or(0),
-            row.get::<_, i32>(12).unwrap_or(0),
-        ))
-    });
-
-    let mut effects = Vec::new();
-    match eff_rows {
-        Ok(rows) => {
-            for r in rows {
-                if let Ok(s) = r { effects.push(s); }
-            }
-        }
-        Err(e) => return format!(r#"{{"error":"effect_query_failed","detail":"{}"}}"#, e),
-    }
-    drop(eff_stmt);
     drop(conn);
 
     format!(
@@ -3597,100 +3575,58 @@ fn read_skilldata() -> String {
         Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
     };
 
-    // Query skill_data
-    let mut skill_stmt = match conn.prepare(
+    // Collect skill data
+    let skills: Vec<String> = match conn.prepare(
         "SELECT id, rarity, grade_value, skill_category, condition_1, ability_type_1_1, float_ability_value_1_1, icon_id, disable_singlemode FROM skill_data ORDER BY id"
     ) {
-        Ok(s) => s,
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            let condition: String = row.get::<_, Option<String>>(4).unwrap_or(None).unwrap_or_default();
+            Ok(format!(
+                r#"{{"id":{},"rarity":{},"grade_value":{},"skill_category":{},"condition":"{}","ability_type":{},"ability_value":{},"icon_id":{},"disable_sm":{}}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                row.get::<_, i32>(1).unwrap_or(0),
+                row.get::<_, i32>(2).unwrap_or(0),
+                row.get::<_, i32>(3).unwrap_or(0),
+                json_escape(&condition),
+                row.get::<_, i32>(5).unwrap_or(0),
+                row.get::<_, i32>(6).unwrap_or(0),
+                row.get::<_, i32>(7).unwrap_or(0),
+                row.get::<_, i32>(8).unwrap_or(0),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
         Err(e) => return format!(r#"{{"error":"skill_prepare_failed","detail":"{}"}}"#, e),
     };
 
-    fn json_escape(s: &str) -> String {
-        s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
-    }
-
-    let skill_rows = skill_stmt.query_map([], |row| {
-        let condition: String = row.get::<_, Option<String>>(4).unwrap_or(None).unwrap_or_default();
-        Ok(format!(
-            r#"{{"id":{},"rarity":{},"grade_value":{},"skill_category":{},"condition":"{}","ability_type":{},"ability_value":{},"icon_id":{},"disable_sm":{}}}"#,
-            row.get::<_, i32>(0).unwrap_or(0),
-            row.get::<_, i32>(1).unwrap_or(0),
-            row.get::<_, i32>(2).unwrap_or(0),
-            row.get::<_, i32>(3).unwrap_or(0),
-            json_escape(&condition),
-            row.get::<_, i32>(5).unwrap_or(0),
-            row.get::<_, i32>(6).unwrap_or(0),
-            row.get::<_, i32>(7).unwrap_or(0),
-            row.get::<_, i32>(8).unwrap_or(0),
-        ))
-    });
-
-    let mut skills = Vec::new();
-    match skill_rows {
-        Ok(rows) => {
-            for r in rows {
-                if let Ok(s) = r { skills.push(s); }
-            }
-        }
-        Err(e) => return format!(r#"{{"error":"skill_query_failed","detail":"{}"}}"#, e),
-    }
-    drop(skill_stmt);
-
-    // Query text_data for skill names (category=47)
-    let mut name_stmt = match conn.prepare(
+    // Collect skill names (category=47)
+    let names: Vec<String> = match conn.prepare(
         "SELECT id, text FROM text_data WHERE category=47 ORDER BY id"
     ) {
-        Ok(s) => s,
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
+            Ok(format!(r#"{{"id":{},"name":"{}"}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                json_escape(&text),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
         Err(e) => return format!(r#"{{"error":"name_prepare_failed","detail":"{}"}}"#, e),
     };
 
-    let name_rows = name_stmt.query_map([], |row| {
-        let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
-        Ok(format!(r#"{{"id":{},"name":"{}"}}"#,
-            row.get::<_, i32>(0).unwrap_or(0),
-            json_escape(&text),
-        ))
-    });
-
-    let mut names = Vec::new();
-    match name_rows {
-        Ok(rows) => {
-            for r in rows {
-                if let Ok(s) = r { names.push(s); }
-            }
-        }
-        Err(e) => return format!(r#"{{"error":"name_query_failed","detail":"{}"}}"#, e),
-    }
-    drop(name_stmt);
-
-    // Query skill need points
-    let mut pt_stmt = match conn.prepare(
+    // Collect skill need points
+    let points: Vec<String> = match conn.prepare(
         "SELECT id, need_skill_point, status_type, status_value FROM single_mode_skill_need_point ORDER BY id"
     ) {
-        Ok(s) => s,
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            Ok(format!(
+                r#"{{"id":{},"need_pt":{},"status_type":{},"status_value":{}}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                row.get::<_, i32>(1).unwrap_or(0),
+                row.get::<_, i32>(2).unwrap_or(0),
+                row.get::<_, i32>(3).unwrap_or(0),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
         Err(e) => return format!(r#"{{"error":"pt_prepare_failed","detail":"{}"}}"#, e),
     };
 
-    let pt_rows = pt_stmt.query_map([], |row| {
-        Ok(format!(
-            r#"{{"id":{},"need_pt":{},"status_type":{},"status_value":{}}}"#,
-            row.get::<_, i32>(0).unwrap_or(0),
-            row.get::<_, i32>(1).unwrap_or(0),
-            row.get::<_, i32>(2).unwrap_or(0),
-            row.get::<_, i32>(3).unwrap_or(0),
-        ))
-    });
-
-    let mut points = Vec::new();
-    match pt_rows {
-        Ok(rows) => {
-            for r in rows {
-                if let Ok(s) = r { points.push(s); }
-            }
-        }
-        Err(e) => return format!(r#"{{"error":"pt_query_failed","detail":"{}"}}"#, e),
-    }
-    drop(pt_stmt);
     drop(conn);
 
     format!(
