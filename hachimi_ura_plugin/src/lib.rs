@@ -1,4 +1,4 @@
-//! URA Plugin v3.18.4
+//! URA Plugin v3.18.5
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -991,11 +991,25 @@ unsafe fn read_scenario_detail() -> String {
                         let fi_base = fi_arr as *const u8;
                         let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(0x18) as *const usize);
                         if fi_len > 0 && fi_len < 100 {
+                            // Try multiple class name patterns for FeelingInfo
                             let fi_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingInfo");
+                            let fi_class = if fi_class.is_null() { find_class_by_short_name(image, "SingleModeRamenFeelingInfo") } else { fi_class };
+                            let fi_class = if fi_class.is_null() { find_class_by_short_name(image, "WorkSingleModeRamenFeelingInfo") } else { fi_class };
+                            ura_log(3, &format!("★ FeelingInfoArray: len={}, class_found={}", fi_len, !fi_class.is_null()));
                             let fi_elements = if !fi_class.is_null() {
                                 read_array_element_details(fi_arr, fi_class, &["get_FeelingType", "get_FeelingValue"], &[])
                             } else {
-                                (0..fi_len).map(|_| "{}".to_string()).collect()
+                                // Fallback: read raw Int32 pairs from memory (FeelingType at 0x10, FeelingValue at 0x14)
+                                let mut elems = Vec::new();
+                                for fi in 0..fi_len {
+                                    let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(0x20 + fi * 8) as *const *mut c_void);
+                                    if fe_ptr.is_null() { elems.push("{}".to_string()); continue; }
+                                    let fe_bytes = fe_ptr as *const u8;
+                                    let ft = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x10) as *const i32);
+                                    let fv = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x14) as *const i32);
+                                    elems.push(format!(r#"{{"FeelingType":{},"FeelingValue":{}}}"#, ft, fv));
+                                }
+                                elems
                             };
                             result_parts.push(format!(r#""feeling_info":[{}]"#, fi_elements.join(",")));
                         }
@@ -2270,10 +2284,22 @@ unsafe fn read_summary_inner() -> String {
                         let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(0x18) as *const usize);
                         if fi_len > 0 && fi_len < 100 {
                             let fi_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingInfo");
+                            let fi_cls = if fi_cls.is_null() { find_class_by_short_name(image, "SingleModeRamenFeelingInfo") } else { fi_cls };
+                            let fi_cls = if fi_cls.is_null() { find_class_by_short_name(image, "WorkSingleModeRamenFeelingInfo") } else { fi_cls };
                             let fi_elems = if !fi_cls.is_null() {
                                 read_array_element_details(fi_arr, fi_cls, &["get_FeelingType", "get_FeelingValue"], &[])
                             } else {
-                                (0..fi_len).map(|_| "{}".to_string()).collect()
+                                // Fallback: read raw Int32 pairs from memory
+                                let mut elems = Vec::new();
+                                for fi in 0..fi_len {
+                                    let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(0x20 + fi * 8) as *const *mut c_void);
+                                    if fe_ptr.is_null() { elems.push("{}".to_string()); continue; }
+                                    let fe_bytes = fe_ptr as *const u8;
+                                    let ft = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x10) as *const i32);
+                                    let fv = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x14) as *const i32);
+                                    elems.push(format!(r#"{{"FeelingType":{},"FeelingValue":{}}}"#, ft, fv));
+                                }
+                                elems
                             };
                             ramen_feeling_info_json = fi_elems.join(",");
                         }
@@ -2683,14 +2709,9 @@ unsafe fn read_summary_inner() -> String {
                     let ds_name = format!("{}DataSet", sc_name);
                     let ds_class = find_class_by_short_name(image, &ds_name);
                     if !ds_class.is_null() {
-                        // ★ EnhanceGroups (Breeders buff data) → override chara_effect_ids buffs
-                        // Only for Breeders scenario; enhances have proper levels 1-8
-                        let enhance_cls_name = match sid {
-                            13 => "ObscuredSingleModeBreedersEnhanceGroup",
-                            _ => ""
-                        };
-                        if !enhance_cls_name.is_empty() {
-                            let enhance_cls = find_class_by_short_name(image, enhance_cls_name);
+                        // ★ Breeders EnhanceGroups → override chara_effect_ids buffs
+                        if sid == 13 {
+                            let enhance_cls = find_class_by_short_name(image, "ObscuredSingleModeBreedersEnhanceGroup");
                             if !enhance_cls.is_null() {
                                 let enhance_arr = call_getter_on_instance(ds_class, ds_obj, "get_EnhanceGroupArray");
                                 if !enhance_arr.is_null() {
@@ -2706,7 +2727,14 @@ unsafe fn read_summary_inner() -> String {
                                             let (gtn, desc) = breeders_buff_desc(gt, lv);
                                             buffs.push(format!(r#"{{"name":"{}","level":{},"desc":"{}","type":"Breeders"}}"#, gtn, lv, desc));
                                         }
-                        // ★ Ramen ActiveEffects (scenario_id == 14) → override chara_effect_ids buffs
+                                        if !buffs.is_empty() {
+                                            buff_json = format!("[{}]", buffs.join(","));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // ★ Ramen ActiveEffects → override chara_effect_ids buffs
                         if sid == 14 {
                             let ae_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenActiveEffectInfo");
                             if !ae_cls.is_null() {
@@ -2760,14 +2788,6 @@ unsafe fn read_summary_inner() -> String {
                                 }
                             }
                         }
-
-                                        if !buffs.is_empty() {
-                                            buff_json = format!("[{}]", buffs.join(","));
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -2813,7 +2833,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.18.4","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}{}}}"#,
+        r#"{{"version":"3.18.5","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json, ramen_json
     )
 }
@@ -2988,7 +3008,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.18.4","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.18.5","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3143,7 +3163,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.18.4").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.18.5").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -3348,10 +3368,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.18.4 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.18.5 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.18.4 Loaded!").as_ptr());
+        f(to_cstr("URA v3.18.5 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -4030,7 +4050,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.4","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.5","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4102,7 +4122,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.4","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.5","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4258,7 +4278,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.4","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.5","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
