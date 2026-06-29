@@ -2191,6 +2191,8 @@ unsafe fn read_summary_inner() -> String {
     let mut ramen_feeling_info_json = String::new();
     let mut ramen_selected_region_ids_json = String::new();
     let mut ramen_active_effects_raw_json = String::new();
+    let mut ramen_uraf_type: i32 = -1;
+    let mut ramen_uraf_state: i32 = -1;
     if sid == 14 {
         let ramen_sc_class = find_class_by_short_name(image, "WorkSingleModeScenarioRamen");
         if !ramen_sc_class.is_null() {
@@ -2754,13 +2756,14 @@ unsafe fn read_summary_inner() -> String {
                                 let mut cat: i32 = -1;
                                 let mut eid: i32 = 0;
                                 let mut val: i32 = 0;
-                                // Simple field extraction (avoid full JSON parse in no-std)
+                                // Simple field extraction from {"category":1,"id":36,"value":50}
                                 for field in ae_part.trim_start_matches('{').trim_end_matches('}').split(',') {
                                     let fv: Vec<&str> = field.splitn(2, ':').collect();
                                     if fv.len() == 2 {
-                                        if fv[0] == ""category"" { cat = fv[1].parse().unwrap_or(-1); }
-                                        else if fv[0] == ""id"" { eid = fv[1].parse().unwrap_or(0); }
-                                        else if fv[0] == ""value"" { val = fv[1].parse().unwrap_or(0); }
+                                        let key = fv[0].trim();
+                                        if key.contains("category") { cat = fv[1].parse().unwrap_or(-1); }
+                                        else if key.contains("id") && !key.contains("Eff") { eid = fv[1].parse().unwrap_or(0); }
+                                        else if key.contains("value") { val = fv[1].parse().unwrap_or(0); }
                                     }
                                 }
                                 if cat >= 0 {
