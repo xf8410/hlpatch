@@ -2078,7 +2078,7 @@ unsafe fn read_summary_inner() -> String {
     let mot = call_getter_int(chara_class, chara_obj, "get_Motivation");
     let spt = call_getter_obscured_int(chara_class, chara_obj, "get_SkillPoint");
     let fan = call_getter_int(chara_class, chara_obj, "get_FanCount");
-    // ★ v3.18.1 fix: Month/Half are on WorkSingleModeData, not CharaData
+    // ★ v3.18.2 fix: Month/Half are on WorkSingleModeData, not CharaData
     let mon = if !sm_class.is_null() { call_getter_int(sm_class, sm_obj, "get_Month") } else { call_getter_int(chara_class, chara_obj, "get_Month") };
     let half = if !sm_class.is_null() { call_getter_int(sm_class, sm_obj, "get_Half") } else { call_getter_int(chara_class, chara_obj, "get_Half") };
     let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
@@ -2091,6 +2091,92 @@ unsafe fn read_summary_inner() -> String {
         6=>"Arc", 7=>"Sport", 8=>"Cook", 9=>"Mecha", 10=>"Legend",
         11=>"Pioneer", 12=>"Onsen", 13=>"Breeders", 14=>"Ramen", _=>"Unknown"
     };
+
+
+    // ★ v3.18.2: Pre-read Ramen CommandInfoArray gains (scenario_id == 14)
+    // HomeInfoData.ParamsIncDecInfoArray is empty for Ramen scenario.
+    // Real gains are in WorkSingleModeScenarioRamenDataSet.CommandInfoArray
+    // → ObscuredSingleModeRamenCommandInfo.ParamsIncDecInfoArray
+    // Uses same plain Int32 format as Breeders: SingleModeParamsIncDecInfo at 0x10, 0x14
+    let mut ramen_gains_map: std::collections::HashMap<i32, String> = std::collections::HashMap::new();
+    let mut ramen_stat_gains_map: std::collections::HashMap<i32, [i32; 5]> = std::collections::HashMap::new();
+    let mut ramen_skill_pt_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    let mut ramen_vital_cost_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    if sid == 14 {
+        let ramen_sc_class = find_class_by_short_name(image, "WorkSingleModeScenarioRamen");
+        if !ramen_sc_class.is_null() {
+            let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
+            if !ramen_sc_obj.is_null() {
+                let ramen_ds_obj = call_getter_ref(ramen_sc_class, ramen_sc_obj, "get_DataSet");
+                if !ramen_ds_obj.is_null() {
+                    let ramen_ds_class = find_class_by_short_name(image, "WorkSingleModeScenarioRamenDataSet");
+                    if !ramen_ds_class.is_null() {
+                        let ramen_cmd_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_CommandInfoArray");
+                        if !ramen_cmd_arr.is_null() {
+                            let ramen_cmd_base = ramen_cmd_arr as *const u8;
+                            let ramen_cmd_len = std::ptr::read_unaligned::<usize>(ramen_cmd_base.add(0x18) as *const usize);
+                            if ramen_cmd_len > 0 && ramen_cmd_len < 50 {
+                                let ramen_cmd_elem_class = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandInfo");
+                                for ri in 0..ramen_cmd_len {
+                                    let re_ptr = std::ptr::read_unaligned::<*mut c_void>(ramen_cmd_base.add(0x20 + ri * 8) as *const *mut c_void);
+                                    if re_ptr.is_null() { continue; }
+                                    let r_cmd_id = if !ramen_cmd_elem_class.is_null() {
+                                        call_getter_obscured_int(ramen_cmd_elem_class, re_ptr, "get_CommandId")
+                                    } else { -1 };
+                                    // Read ParamsIncDecInfoArray (plain Int32, same as Breeders)
+                                    let mut r_gains = Vec::new();
+                                    let mut r_stat_gains = [0i32; 5];
+                                    let mut r_skill_pt = 0i32;
+                                    let mut r_vital_cost = 0i32;
+                                    let r_params_arr = if !ramen_cmd_elem_class.is_null() {
+                                        call_getter_on_instance(ramen_cmd_elem_class, re_ptr, "get_ParamsIncDecInfoArray")
+                                    } else { std::ptr::null_mut() };
+                                    if !r_params_arr.is_null() {
+                                        let r_pb = r_params_arr as *const u8;
+                                        let r_pl = std::ptr::read_unaligned::<usize>(r_pb.add(0x18) as *const usize);
+                                        if r_pl > 0 && r_pl < 100 {
+                                            for rj in 0..r_pl {
+                                                let r_pe = std::ptr::read_unaligned::<*mut c_void>(r_pb.add(0x20 + rj * 8) as *const *mut c_void);
+                                                if r_pe.is_null() { continue; }
+                                                // Plain Int32: TargetType at 0x10, Value at 0x14
+                                                let r_bytes = r_pe as *const u8;
+                                                let r_tt = std::ptr::read_unaligned::<i32>(r_bytes.add(0x10) as *const i32);
+                                                let r_val = std::ptr::read_unaligned::<i32>(r_bytes.add(0x14) as *const i32);
+                                                if r_val == 0 { continue; }
+                                                let r_tn = match r_tt {
+                                                    1=>"Speed", 2=>"Stamina", 3=>"Guts",
+                                                    4=>"Power", 5=>"Wiz", 10=>"HP",
+                                                    20=>"Motivation", 30=>"SkillPt", _=>"Unknown"
+                                                };
+                                                r_gains.push(format!(r#""{}":{}"#, r_tn, r_val));
+                                                match r_tt {
+                                                    1 => r_stat_gains[0] += r_val,
+                                                    2 => r_stat_gains[1] += r_val,
+                                                    4 => r_stat_gains[2] += r_val,
+                                                    3 => r_stat_gains[3] += r_val,
+                                                    5 => r_stat_gains[4] += r_val,
+                                                    10 => r_vital_cost += r_val,
+                                                    30 => r_skill_pt += r_val,
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if r_cmd_id > 0 && !r_gains.is_empty() {
+                                        ramen_gains_map.insert(r_cmd_id, r_gains.join(","));
+                                        ramen_stat_gains_map.insert(r_cmd_id, r_stat_gains);
+                                        ramen_skill_pt_map.insert(r_cmd_id, r_skill_pt);
+                                        ramen_vital_cost_map.insert(r_cmd_id, r_vital_cost);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ura_log(3, &format!("★ Ramen gains pre-read: {} commands with gains", ramen_gains_map.len()));
+    }
 
     // --- Training data via HomeInfoData (ALL scenarios) ---
     ura_log(3, "★ read_summary phase2: training data");
@@ -2191,6 +2277,22 @@ unsafe fn read_summary_inner() -> String {
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        // ★ v3.18.2: Ramen gains fallback - use pre-read CommandInfoArray gains
+                        if gains.is_empty() {
+                            if let Some(rg) = ramen_gains_map.get(&cid) {
+                                gains.push(rg.clone());
+                            }
+                            if let Some(rsg) = ramen_stat_gains_map.get(&cid) {
+                                stat_gains = *rsg;
+                            }
+                            if let Some(rsp) = ramen_skill_pt_map.get(&cid) {
+                                skill_pt_gain = *rsp;
+                            }
+                            if let Some(rvc) = ramen_vital_cost_map.get(&cid) {
+                                vital_cost = *rvc;
                             }
                         }
 
