@@ -2723,8 +2723,7 @@ unsafe fn read_summary_inner() -> String {
                                             let eid = call_getter_obscured_int(ae_cls, ep, "get_EffectId");
                                             let val = call_getter_obscured_int(ae_cls, ep, "get_EffectValue");
                                             let cat_name = match cat {
-                                                1 => "出汁", 2 => "醤油", 3 => "味噌", 4 => "塩",
-                                                5 => "豚骨", 6 => "辛", _ => "?",
+                                                1 => "試食会", 2 => "地域", 4 => "隠し味", _ => "?",
                                             };
                                             buffs.push(format!(
                                                 r#"{{"name":"{}","EffectId":{},"EffectValue":{},"type":"Ramen"}}"#,
@@ -2745,8 +2744,7 @@ unsafe fn read_summary_inner() -> String {
                                     let ut = call_getter_obscured_int(uraf_cls, uraf_obj, "get_UrafEffectType");
                                     let us_ = call_getter_obscured_int(uraf_cls, uraf_obj, "get_UrafEffectState");
                                     let ut_name = match ut {
-                                        1 => "出汁", 2 => "醤油", 3 => "味噌", 4 => "塩",
-                                        5 => "豚骨", 6 => "辛", _ => "?",
+                                        1 => "試食会", 2 => "地域", 4 => "隠し味", _ => "?",
                                     };
                                     let state_name = match us_ {
                                         0 => "無効", 1 => "有効", _ => "?",
