@@ -2170,6 +2170,13 @@ unsafe fn read_summary_inner() -> String {
     let mut ramen_stat_gains_map: std::collections::HashMap<i32, [i32; 5]> = std::collections::HashMap::new();
     let mut ramen_skill_pt_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
     let mut ramen_vital_cost_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    // ★ v3.18.4: Ramen scenario-specific data for /summary
+    let mut ramen_checkpoint_pt: i32 = -1;
+    let mut ramen_special_feeling_num: i32 = -1;
+    let mut ramen_recommend_type: i32 = -1;
+    let mut ramen_feeling_info_json = String::new();
+    let mut ramen_selected_region_ids_json = String::new();
+    let mut ramen_active_effects_raw_json = String::new();
     if sid == 14 {
         let ramen_sc_class = find_class_by_short_name(image, "WorkSingleModeScenarioRamen");
         if !ramen_sc_class.is_null() {
@@ -2244,6 +2251,78 @@ unsafe fn read_summary_inner() -> String {
             }
         }
         ura_log(3, &format!("★ Ramen gains pre-read: {} commands with gains", ramen_gains_map.len()));
+
+        // ★ v3.18.4: Read Ramen-specific fields for /summary
+        {
+            let rso2 = try_get_scenario_obj(chara_class, chara_obj, 14);
+            let rds_obj2 = if !rso2.is_null() { call_getter_ref(ramen_sc_class, rso2, "get_DataSet") } else { std::ptr::null_mut() };
+            if !rds_obj2.is_null() {
+                let rds_cls2 = find_class_by_short_name(image, "WorkSingleModeScenarioRamenDataSet");
+                if !rds_cls2.is_null() {
+                    ramen_checkpoint_pt = call_getter_obscured_int(rds_cls2, rds_obj2, "get_CheckPointPt");
+                    ramen_special_feeling_num = call_getter_obscured_int(rds_cls2, rds_obj2, "get_SpecialFeelingNum");
+                    ramen_recommend_type = call_getter_obscured_int(rds_cls2, rds_obj2, "get_RecommendType");
+
+                    // FeelingInfoArray: コツ inventory
+                    let fi_arr = call_getter_on_instance(rds_cls2, rds_obj2, "get_FeelingInfoArray");
+                    if !fi_arr.is_null() {
+                        let fi_base = fi_arr as *const u8;
+                        let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(0x18) as *const usize);
+                        if fi_len > 0 && fi_len < 100 {
+                            let fi_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingInfo");
+                            let fi_elems = if !fi_cls.is_null() {
+                                read_array_element_details(fi_arr, fi_cls, &["get_FeelingType", "get_FeelingValue"], &[])
+                            } else {
+                                (0..fi_len).map(|_| "{}".to_string()).collect()
+                            };
+                            ramen_feeling_info_json = fi_elems.join(",");
+                        }
+                    }
+
+                    // SelectedRegionIdArray
+                    let sr_arr = call_getter_on_instance(rds_cls2, rds_obj2, "get_SelectedRegionIdArray");
+                    if !sr_arr.is_null() {
+                        let sr_base = sr_arr as *const u8;
+                        let sr_len = std::ptr::read_unaligned::<usize>(sr_base.add(0x18) as *const usize);
+                        if sr_len > 0 && sr_len < 50 {
+                            let mut sr_ids = Vec::new();
+                            for si in 0..sr_len {
+                                // Int32 array: each element is 4 bytes
+                                let sr_val = std::ptr::read_unaligned::<i32>(sr_base.add(0x20 + si * 4) as *const i32);
+                                sr_ids.push(sr_val.to_string());
+                            }
+                            ramen_selected_region_ids_json = sr_ids.join(",");
+                        }
+                    }
+
+                    // ActiveEffectArray (raw data for training)
+                    let ae_arr2 = call_getter_on_instance(rds_cls2, rds_obj2, "get_ActiveEffectArray");
+                    if !ae_arr2.is_null() {
+                        let ae_base2 = ae_arr2 as *const u8;
+                        let ae_len2 = std::ptr::read_unaligned::<usize>(ae_base2.add(0x18) as *const usize);
+                        if ae_len2 > 0 && ae_len2 < 100 {
+                            let ae_cls2 = find_class_by_short_name(image, "ObscuredSingleModeRamenActiveEffectInfo");
+                            if !ae_cls2.is_null() {
+                                let mut ae_elems2 = Vec::new();
+                                for ai2 in 0..ae_len2 {
+                                    let ae_ptr2 = std::ptr::read_unaligned::<*mut c_void>(ae_base2.add(0x20 + ai2 * 8) as *const *mut c_void);
+                                    if ae_ptr2.is_null() { continue; }
+                                    let cat2 = call_getter_obscured_int(ae_cls2, ae_ptr2, "get_EffectCategory");
+                                    let eid2 = call_getter_obscured_int(ae_cls2, ae_ptr2, "get_EffectId");
+                                    let val2 = call_getter_obscured_int(ae_cls2, ae_ptr2, "get_EffectValue");
+                                    ae_elems2.push(format!(r#"{{"category":{},"id":{},"value":{}}}"#, cat2, eid2, val2));
+                                }
+                                ramen_active_effects_raw_json = ae_elems2.join(",");
+                            }
+                        }
+                    }
+
+                    ura_log(3, &format!("★ Ramen summary fields: cppt={} sfn={} rt={} fi=[{}] regions=[{}] effects=[{}]",
+                        ramen_checkpoint_pt, ramen_special_feeling_num, ramen_recommend_type,
+                        ramen_feeling_info_json.len(), ramen_selected_region_ids_json.len(), ramen_active_effects_raw_json.len()));
+                }
+            }
+        }
     }
 
     // --- Training data via HomeInfoData (ALL scenarios) ---
@@ -2673,9 +2752,16 @@ unsafe fn read_summary_inner() -> String {
         String::new()
     };
 
+    // ★ v3.18.4: Ramen scenario data for /summary
+    let ramen_json = if sid == 14 && ramen_checkpoint_pt >= 0 {
+        format!(r#","ramen":{{"checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"feeling_info":[{}],"selected_region_ids":[{}],"active_effects":[{}]}}"#, ramen_checkpoint_pt, ramen_special_feeling_num, ramen_recommend_type, ramen_feeling_info_json, ramen_selected_region_ids_json, ramen_active_effects_raw_json)
+    } else {
+        String::new()
+    };
+
     format!(
-        r#"{{"version":"3.18.3","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
-        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json
+        r#"{{"version":"3.18.4","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}{}}}"#,
+        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json, ramen_json
     )
 }
 
@@ -2849,7 +2935,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.18.3","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.18.4","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3891,7 +3977,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.3","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.4","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -3963,7 +4049,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.3","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.4","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4119,7 +4205,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.3","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.4","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
