@@ -3004,7 +3004,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.14.2").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.18.3").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -3209,10 +3209,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.15.2 loaded (AI eval + single-pass training read)");
+    ura_log(3, "URA plugin v3.18.3 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.15.2 Loaded!").as_ptr());
+        f(to_cstr("URA v3.18.3 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
