@@ -2118,7 +2118,9 @@ unsafe fn read_summary_inner() -> String {
                         } else { -1 };
                         let cname = match cid {
                             101=>"Speed", 102=>"Stamina", 103=>"Guts",
-                            105=>"Power", 106=>"Wiz", _=>"Unknown"
+                            105=>"Power", 106=>"Wiz",
+                            301=>"Outing", 390=>"Rest", 401=>"Outing2",
+                            701=>"Outing3", 801=>"Outing4", _=>"Unknown"
                         };
                         let is_enable = if !cmd_elem_class.is_null() {
                             call_getter_obscured_int(cmd_elem_class, ep, "get_IsEnable")
