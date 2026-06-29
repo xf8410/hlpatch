@@ -2356,6 +2356,7 @@ unsafe fn read_summary_inner() -> String {
                         ramen_checkpoint_pt, ramen_special_feeling_num, ramen_recommend_type,
                         ramen_feeling_info_json.len(), ramen_selected_region_ids_json.len(), ramen_active_effects_raw_json.len(),
                         ramen_uraf_type, ramen_uraf_state));
+                }
             }
         }
     }
