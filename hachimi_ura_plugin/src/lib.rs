@@ -2512,6 +2512,61 @@ unsafe fn read_summary_inner() -> String {
         }
     }
 
+    // ★ v3.18.4: Fallback - try WorkSingleModeData if support_cards still empty
+    if sc_json == "[]" {
+        let arr2 = read_field_value(sm_class, sm_obj, "support_card_array");
+        if arr2.is_null() {
+            let arr3 = call_getter_on_instance(sm_class, sm_obj, "get_SupportCardArray");
+            if !arr3.is_null() {
+                let ab = arr3 as *const u8;
+                let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+                if al > 0 && al < 100 {
+                    let mut scs = Vec::new();
+                    for i in 0..al {
+                        let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                        if ep.is_null() { continue; }
+                        let b = ep as *const u8;
+                        let position = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                        let support_card_id = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                        let limit_break_count = std::ptr::read_unaligned::<i32>(b.add(0x18) as *const i32);
+                        let training_partner_state = std::ptr::read_unaligned::<i32>(b.add(0x20) as *const i32);
+                        scs.push(format!(
+                            r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{}}}"#,
+                            position, support_card_id, limit_break_count, training_partner_state
+                        ));
+                    }
+                    if !scs.is_empty() {
+                        sc_json = format!("[{}]", scs.join(","));
+                        ura_log(3, &format!("★ support_cards fallback (sm_class): {} cards", scs.len()));
+                    }
+                }
+            }
+        } else {
+            let ab = arr2 as *const u8;
+            let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+            if al > 0 && al < 100 {
+                let mut scs = Vec::new();
+                for i in 0..al {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                    if ep.is_null() { continue; }
+                    let b = ep as *const u8;
+                    let position = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+                    let support_card_id = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+                    let limit_break_count = std::ptr::read_unaligned::<i32>(b.add(0x18) as *const i32);
+                    let training_partner_state = std::ptr::read_unaligned::<i32>(b.add(0x20) as *const i32);
+                    scs.push(format!(
+                        r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{}}}"#,
+                        position, support_card_id, limit_break_count, training_partner_state
+                    ));
+                }
+                if !scs.is_empty() {
+                    sc_json = format!("[{}]", scs.join(","));
+                    ura_log(3, &format!("★ support_cards fallback (sm_class field): {} cards", scs.len()));
+                }
+            }
+        }
+    }
+
     // --- Evaluation info (graceful fallback) ---
     ura_log(3, "★ read_summary phase4: evaluation");
     let mut ev_json = "[]".to_string();
