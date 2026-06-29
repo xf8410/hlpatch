@@ -843,6 +843,9 @@ unsafe fn read_scenario_detail() -> String {
                                     let cmd_name = match cmd_id_val {
                                         101 => "Speed", 102 => "Stamina", 103 => "Guts",
                                         105 => "Power", 106 => "Wiz",
+                                        601 => "Speed", 602 => "Stamina", 603 => "Guts",
+                                        604 => "Power", 605 => "Wiz",
+                                        304 => "Kakushimi",
                                         _ => "Unknown"
                                     };
                                     if detail.ends_with('}') { detail.pop(); }
@@ -979,6 +982,71 @@ unsafe fn read_scenario_detail() -> String {
                     let all_region_ids = read_obscured_int_array(dataset_class, dataset_obj, "get_AllSelectedRegionIdArray");
                     if !all_region_ids.is_empty() {
                         result_parts.push(format!(r#""all_selected_region_ids":[{}]"#, all_region_ids.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")));
+                    }
+
+                    // ★ v3.18.3: Read Ramen Feeling arrays for 隠し味の秘訣 (Kakushimi) tracking
+                    // FeelingInfoArray: available Kakushimi items
+                    let fi_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingInfoArray");
+                    if !fi_arr.is_null() {
+                        let fi_base = fi_arr as *const u8;
+                        let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(0x18) as *const usize);
+                        if fi_len > 0 && fi_len < 100 {
+                            let fi_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingInfo");
+                            let fi_elements = if !fi_class.is_null() {
+                                read_array_element_details(fi_arr, fi_class, &["get_FeelingType", "get_FeelingValue"], &[])
+                            } else {
+                                (0..fi_len).map(|_| "{}".to_string()).collect()
+                            };
+                            result_parts.push(format!(r#""feeling_info":[{}]"#, fi_elements.join(",")));
+                        }
+                    }
+
+                    // FeelingTurnInfoArray: turn-based Kakushimi schedule
+                    let ft_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingTurnInfoArray");
+                    if !ft_arr.is_null() {
+                        let ft_base = ft_arr as *const u8;
+                        let ft_len = std::ptr::read_unaligned::<usize>(ft_base.add(0x18) as *const usize);
+                        if ft_len > 0 && ft_len < 100 {
+                            let ft_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingTurnInfo");
+                            let ft_elements = if !ft_class.is_null() {
+                                read_array_element_details(ft_arr, ft_class, &["get_Turn", "get_FeelingType"], &[])
+                            } else {
+                                (0..ft_len).map(|_| "{}".to_string()).collect()
+                            };
+                            result_parts.push(format!(r#""feeling_turn_info":[{}]"#, ft_elements.join(",")));
+                        }
+                    }
+
+                    // CommandFeelingInfoArray: which trainings get Kakushimi boost
+                    let cf_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandFeelingInfoArray");
+                    if !cf_arr.is_null() {
+                        let cf_base = cf_arr as *const u8;
+                        let cf_len = std::ptr::read_unaligned::<usize>(cf_base.add(0x18) as *const usize);
+                        if cf_len > 0 && cf_len < 100 {
+                            let cf_class = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandFeelingInfo");
+                            let cf_elements = if !cf_class.is_null() {
+                                read_array_element_details(cf_arr, cf_class, &["get_CommandId", "get_FeelingType"], &[])
+                            } else {
+                                (0..cf_len).map(|_| "{}".to_string()).collect()
+                            };
+                            result_parts.push(format!(r#""command_feeling_info":[{}]"#, cf_elements.join(",")));
+                        }
+                    }
+
+                    // FeelingReduceTurnInfoArray: Kakushimi duration reduction
+                    let fr_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingReduceTurnInfoArray");
+                    if !fr_arr.is_null() {
+                        let fr_base = fr_arr as *const u8;
+                        let fr_len = std::ptr::read_unaligned::<usize>(fr_base.add(0x18) as *const usize);
+                        if fr_len > 0 && fr_len < 100 {
+                            let fr_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingReduceTurnInfo");
+                            let fr_elements = if !fr_class.is_null() {
+                                read_array_element_details(fr_arr, fr_class, &["get_Turn", "get_FeelingType"], &[])
+                            } else {
+                                (0..fr_len).map(|_| "{}".to_string()).collect()
+                            };
+                            result_parts.push(format!(r#""feeling_reduce_turn_info":[{}]"#, fr_elements.join(",")));
+                        }
                     }
                 }
 
@@ -1905,11 +1973,11 @@ fn evaluate_ai(
     // === Evaluate each training ===
     for &(cmd_id, ref gains, skill_pt, vital_cost, fail_rate, is_enable, shining, heads) in trainings {
         let name = match cmd_id {
-            101 => "Speed",
-            102 => "Stamina",
-            103 => "Guts",
-            105 => "Power",
-            106 => "Wisdom",
+            101 => "Speed", 102 => "Stamina", 103 => "Guts",
+            105 => "Power", 106 => "Wisdom",
+            601 => "Speed", 602 => "Stamina", 603 => "Guts",
+            604 => "Power", 605 => "Wisdom",
+            304 => "Kakushimi",
             _ => "Unknown",
         };
 
@@ -2205,6 +2273,9 @@ unsafe fn read_summary_inner() -> String {
                         let cname = match cid {
                             101=>"Speed", 102=>"Stamina", 103=>"Guts",
                             105=>"Power", 106=>"Wiz",
+                            601=>"Speed", 602=>"Stamina", 603=>"Guts",
+                            604=>"Power", 605=>"Wiz",
+                            304=>"Kakushimi",
                             301=>"Outing", 390=>"Rest", 401=>"Outing2",
                             701=>"Outing3", 801=>"Outing4", _=>"Unknown"
                         };
@@ -2603,7 +2674,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.18.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
+        r#"{{"version":"3.18.3","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json
     )
 }
@@ -2778,7 +2849,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.18.1","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.18.3","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3820,7 +3891,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.1","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.3","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -3892,7 +3963,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.1","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.3","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4048,7 +4119,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.1","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.3","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
