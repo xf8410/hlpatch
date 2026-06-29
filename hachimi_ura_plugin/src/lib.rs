@@ -895,6 +895,93 @@ unsafe fn read_scenario_detail() -> String {
                     }
                 }
 
+
+                // ★ Ramen scenario (scenario_id == 14) specific data
+                if scenario_id == 14 {
+                    // Read Ramen-specific ObscuredInt fields
+                    let ramen_int_getters = [
+                        "get_CheckPointPt", "get_ExpectedCheckPointPt",
+                        "get_SpecialFeelingNum", "get_RecommendType",
+                    ];
+                    let mut ramen_ints = Vec::new();
+                    for getter in &ramen_int_getters {
+                        let val = call_getter_obscured_int(dataset_class, dataset_obj, getter);
+                        if val >= 0 {
+                            ramen_ints.push(format!(r#""{}":{}"#, getter, val));
+                        }
+                    }
+                    if !ramen_ints.is_empty() {
+                        result_parts.push(format!(r#""ramen_values":{{{}}}"#, ramen_ints.join(",")));
+                    }
+
+                    // Read Ramen-specific bool fields
+                    let ramen_bool_getters = [
+                        "get_IsGaugeGained", "get_IsUrafEffectSelectEventChecked",
+                        "get_IsNotGainSpecialFeeling",
+                    ];
+                    let mut ramen_bools = Vec::new();
+                    for getter in &ramen_bool_getters {
+                        let val = call_getter_bool(dataset_class, dataset_obj, getter);
+                        ramen_bools.push(format!(r#""{}":{}"#, getter, val));
+                    }
+                    if !ramen_bools.is_empty() {
+                        result_parts.push(format!(r#""ramen_bools":{{{}}}"#, ramen_bools.join(",")));
+                    }
+
+                    // Read ActiveEffectArray (Ramen current buffs)
+                    // Element: ObscuredSingleModeRamenActiveEffectInfo
+                    // ObscuredInt getters: EffectCategory, EffectId, EffectValue
+                    let ae_class = find_class_by_short_name(image, "ObscuredSingleModeRamenActiveEffectInfo");
+                    if !ae_class.is_null() {
+                        let ae_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_ActiveEffectArray");
+                        if !ae_arr.is_null() {
+                            let ae_base = ae_arr as *const u8;
+                            let ae_len = std::ptr::read_unaligned::<usize>(ae_base.add(0x18) as *const usize);
+                            if ae_len > 0 && ae_len < 100 {
+                                let mut effects = Vec::new();
+                                for i in 0..ae_len {
+                                    let ep = std::ptr::read_unaligned::<*mut c_void>(ae_base.add(0x20 + i * 8) as *const *mut c_void);
+                                    if ep.is_null() { continue; }
+                                    let cat = call_getter_obscured_int(ae_class, ep, "get_EffectCategory");
+                                    let eid = call_getter_obscured_int(ae_class, ep, "get_EffectId");
+                                    let val = call_getter_obscured_int(ae_class, ep, "get_EffectValue");
+                                    effects.push(format!(
+                                        r#"{{"EffectCategory":{},"EffectId":{},"EffectValue":{}}}"#,
+                                        cat, eid, val
+                                    ));
+                                }
+                                result_parts.push(format!(r#""active_effects":[{}]"#, effects.join(",")));
+                            }
+                        }
+                    }
+
+                    // Read UrafEffectInfo (Ramen uraf effect)
+                    // Class: ObscuredSingleModeRamenUrafEffectInfo
+                    // ObscuredInt getters: UrafEffectType, UrafEffectState
+                    let uraf_class = find_class_by_short_name(image, "ObscuredSingleModeRamenUrafEffectInfo");
+                    if !uraf_class.is_null() {
+                        let uraf_obj = call_getter_on_instance(dataset_class, dataset_obj, "get_UrafEffectInfo");
+                        if !uraf_obj.is_null() {
+                            let ut = call_getter_obscured_int(uraf_class, uraf_obj, "get_UrafEffectType");
+                            let us = call_getter_obscured_int(uraf_class, uraf_obj, "get_UrafEffectState");
+                            result_parts.push(format!(
+                                r#""uraf_effect":{{"UrafEffectType":{},"UrafEffectState":{}}}"#,
+                                ut, us
+                            ));
+                        }
+                    }
+
+                    // Read SelectedRegionIdArray using read_obscured_int_array
+                    let region_ids = read_obscured_int_array(dataset_class, dataset_obj, "get_SelectedRegionIdArray");
+                    if !region_ids.is_empty() {
+                        result_parts.push(format!(r#""selected_region_ids":[{}]"#, region_ids.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")));
+                    }
+                    let all_region_ids = read_obscured_int_array(dataset_class, dataset_obj, "get_AllSelectedRegionIdArray");
+                    if !all_region_ids.is_empty() {
+                        result_parts.push(format!(r#""all_selected_region_ids":[{}]"#, all_region_ids.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")));
+                    }
+                }
+
                 // ★ Read object-type DataSet getters
                 let obj_getters = [
                     "get_TeamSpTrainingInfo", "get_NotUpParameterInfo",
@@ -2309,6 +2396,63 @@ unsafe fn read_summary_inner() -> String {
                                             let (gtn, desc) = breeders_buff_desc(gt, lv);
                                             buffs.push(format!(r#"{{"name":"{}","level":{},"desc":"{}","type":"Breeders"}}"#, gtn, lv, desc));
                                         }
+                        // ★ Ramen ActiveEffects (scenario_id == 14) → override chara_effect_ids buffs
+                        if sid == 14 {
+                            let ae_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenActiveEffectInfo");
+                            if !ae_cls.is_null() {
+                                let ae_arr = call_getter_on_instance(ds_class, ds_obj, "get_ActiveEffectArray");
+                                if !ae_arr.is_null() {
+                                    let ab = ae_arr as *const u8;
+                                    let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+                                    if al > 0 && al < 100 {
+                                        let mut buffs = Vec::new();
+                                        for i in 0..al {
+                                            let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                                            if ep.is_null() { continue; }
+                                            let cat = call_getter_obscured_int(ae_cls, ep, "get_EffectCategory");
+                                            let eid = call_getter_obscured_int(ae_cls, ep, "get_EffectId");
+                                            let val = call_getter_obscured_int(ae_cls, ep, "get_EffectValue");
+                                            let cat_name = match cat {
+                                                1 => "出汁", 2 => "醤油", 3 => "味噌", 4 => "塩",
+                                                5 => "豚骨", 6 => "辛", _ => "?",
+                                            };
+                                            buffs.push(format!(
+                                                r#"{{"name":"{}","EffectId":{},"EffectValue":{},"type":"Ramen"}}"#,
+                                                cat_name, eid, val
+                                            ));
+                                        }
+                                        if !buffs.is_empty() {
+                                            buff_json = format!("[{}]", buffs.join(","));
+                                        }
+                                    }
+                                }
+                            }
+                            // Also read UrafEffect
+                            let uraf_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenUrafEffectInfo");
+                            if !uraf_cls.is_null() {
+                                let uraf_obj = call_getter_on_instance(ds_class, ds_obj, "get_UrafEffectInfo");
+                                if !uraf_obj.is_null() {
+                                    let ut = call_getter_obscured_int(uraf_cls, uraf_obj, "get_UrafEffectType");
+                                    let us_ = call_getter_obscured_int(uraf_cls, uraf_obj, "get_UrafEffectState");
+                                    let ut_name = match ut {
+                                        1 => "出汁", 2 => "醤油", 3 => "味噌", 4 => "塩",
+                                        5 => "豚骨", 6 => "辛", _ => "?",
+                                    };
+                                    let state_name = match us_ {
+                                        0 => "無効", 1 => "有効", _ => "?",
+                                    };
+                                    // Append uraf to existing buffs
+                                    if buff_json.starts_with('[') && buff_json.ends_with(']') {
+                                        let inner = &buff_json[1..buff_json.len()-1];
+                                        buff_json = format!("[{},{},{}]", inner,
+                                            format!(r#"{{"name":"裏風:{}","UrafEffectType":{},"type":"Ramen"}}"#, ut_name, ut),
+                                            format!(r#"{{"name":"裏風状態","state":"{}","UrafEffectState":{},"type":"Ramen"}}"#, state_name, us_)
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                                         if !buffs.is_empty() {
                                             buff_json = format!("[{}]", buffs.join(","));
                                         }
@@ -2354,7 +2498,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.17.2","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
+        r#"{{"version":"3.18.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json
     )
 }
@@ -2529,7 +2673,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.17.2","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.18.0","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3571,7 +3715,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.17.2","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.0","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -3643,7 +3787,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.17.2","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.0","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -3799,7 +3943,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.17.2","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.18.0","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
