@@ -3253,6 +3253,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         read_skilldata()
     } else if path == "/hall" {
         unsafe { read_hall_data() }
+    } else if path == "/ranking" {
+        unsafe { read_ranking_data() }
     } else if path == "/saddles-dl" {
         read_saddles()
     } else if path == "/saddles" {
@@ -4529,4 +4531,144 @@ unsafe fn read_hall_data() -> String {
     }
     
     format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+}
+
+// ★ v3.19.0: /ranking - Read current ranking screen data
+// When the user is viewing a ranking/sprint screen, data is in IL2CPP memory
+unsafe fn read_ranking_data() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+    
+    let mut found_classes: Vec<String> = Vec::new();
+    let mut entries = Vec::new();
+    
+    // Strategy 1: Try to find ranking-related classes by name
+    let candidate_classes = [
+        "SingleModeSprintInfo",
+        "SingleModeRankingInfo", 
+        "SingleModeRatingInfo",
+        "SprintRankingInfo",
+        "EventRankingInfo",
+        "TrainingResultRankingInfo",
+        "CharaEvaluationInfo",
+        "SingleModeResultInfo",
+        "HomeCharaRatingInfo",
+        "SingleModeCharaRatingInfo",
+    ];
+    
+    for class_name in &candidate_classes {
+        let cls = find_class_by_short_name(image, class_name);
+        if !cls.is_null() {
+            found_classes.push(class_name.to_string());
+            ura_log(2, &format!("/ranking: found class {}", class_name));
+        }
+    }
+    
+    // Strategy 2: Try to get ranking data from WorkDataManager
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if !wdm_class.is_null() {
+        let wdm_inst = get_singleton(wdm_class);
+        if !wdm_inst.is_null() {
+            // Try various getter methods that might return ranking data
+            for method in &[
+                "get_SingleModeSprintInfoArray",
+                "get_SprintInfoArray", 
+                "get_RankingInfoArray",
+                "get_RatingInfoArray",
+                "get_TrainingResultArray",
+                "get_SingleModeResultArray",
+                "get_CharaRatingInfoArray",
+                "get_SprintRankingArray",
+            ] {
+                let arr = call_getter_on_instance(wdm_class, wdm_inst, method);
+                if arr.is_null() { continue; }
+                let ab = arr as *const u8;
+                let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+                if al == 0 || al > 10000 { continue; }
+                
+                ura_log(2, &format!("/ranking: {} returned {} entries", method, al));
+                
+                // Read entries - try to extract meaningful data
+                for i in 0..std::cmp::min(al, 100) {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                    if ep.is_null() { continue; }
+                    let b = ep as *const u8;
+                    
+                    // Try to find the evaluation score by scanning offsets
+                    // We're looking for a value in the range 30000-200000 (typical 評価点)
+                    // Read multiple int32 positions and identify likely score fields
+                    let mut fields = Vec::new();
+                    for offset in (0x10..0x80).step_by(4) {
+                        let val = std::ptr::read_unaligned::<i32>(b.add(offset) as *const i32);
+                        if val > 10000 && val < 300000 {
+                            fields.push(format!(r#""0x{:02x}":{}"#, offset, val));
+                        }
+                    }
+                    
+                    if !fields.is_empty() {
+                        entries.push(format!(r#"{{"idx":{},"fields":{{{}}}}}"#, i, fields.join(",")));
+                    }
+                }
+                if !entries.is_empty() { break; }
+            }
+        }
+    }
+    
+    // Strategy 3: Try to find ranking data from scene objects
+    if entries.is_empty() {
+        for scene_class in &["RatingScene", "RankingScene", "SprintScene", "SingleModeResultScene"] {
+            let cls = find_class_by_short_name(image, scene_class);
+            if !cls.is_null() {
+                found_classes.push(format!("{} (scene)", scene_class));
+                // Try to get instance and read data
+                let inst = get_singleton(cls);
+                if !inst.is_null() {
+                    // Try common array getters
+                    for arr_method in &["get_RankingArray", "get_InfoArray", "get_ResultArray", "get_DataArray"] {
+                        let arr = call_getter_on_instance(cls, inst, arr_method);
+                        if arr.is_null() { continue; }
+                        let ab = arr as *const u8;
+                        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+                        if al == 0 || al > 10000 { continue; }
+                        
+                        for i in 0..std::cmp::min(al, 100) {
+                            let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                            if ep.is_null() { continue; }
+                            let b = ep as *const u8;
+                            
+                            let mut fields = Vec::new();
+                            for offset in (0x10..0x80).step_by(4) {
+                                let val = std::ptr::read_unaligned::<i32>(b.add(offset) as *const i32);
+                                if val > 10000 && val < 300000 {
+                                    fields.push(format!(r#""0x{:02x}":{}"#, offset, val));
+                                }
+                            }
+                            
+                            if !fields.is_empty() {
+                                entries.push(format!(r#"{{"idx":{},"fields":{{{}}}}}"#, i, fields.join(",")));
+                            }
+                        }
+                        if !entries.is_empty() { break; }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Build result
+    let classes_json = if found_classes.is_empty() {
+        "[]".to_string()
+    } else {
+        let items: Vec<String> = found_classes.iter().map(|c| format!(r#""{}""#, c)).collect();
+        format!("[{}]", items.join(","))
+    };
+    
+    if entries.is_empty() {
+        format!(r#"{{"found_classes":{},"entries":[],"hint":"open_ranking_screen_first"}}"#, classes_json)
+    } else {
+        format!(r#"{{"found_classes":{},"count":{},"entries":[{}]}}"#, classes_json, entries.len(), entries.join(","))
+    }
 }
