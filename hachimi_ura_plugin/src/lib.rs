@@ -1,4 +1,4 @@
-//! URA Plugin v3.18.7
+//! URA Plugin v3.19.0
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -1913,7 +1913,9 @@ fn cmd_id_to_train_idx(cmd_id: i32) -> Option<usize> {
 
 /// AI evaluation result
 struct AiResult {
-    score: i32,           // Current evaluation score
+    score: i32,           // Current evaluation score (attribute + skill)
+    skill_eval: i32,      // Skill evaluation value
+    skill_count: i32,     // Number of learned skills
     total_stats: i32,     // Total revised stats
     best_action: String,  // Recommended action name
     best_value: f64,      // Best action value
@@ -1936,6 +1938,8 @@ fn evaluate_ai(
     // Buff effects
     _has_ai_jiao: bool,    // 愛嬌 buff (TODO: implement buff effect)
     _has_renshou_jouzu: bool, // 練習上手 buff (TODO: implement buff effect)
+    skill_eval: i32,      // ★ v3.19.0: skill evaluation value
+    skill_count: i32,     // ★ v3.19.0: learned skill count
 ) -> AiResult {
     // Total turns per scenario
     let total_turn: i32 = match scenario_id {
@@ -1947,7 +1951,8 @@ fn evaluate_ai(
     let remain_turn = if remain_turn < 0 { 0 } else { remain_turn };
 
     // === Current Score ===
-    let score = compute_score(stats[0], stats[1], stats[2], stats[3], stats[4]);
+    let attr_score = compute_score(stats[0], stats[1], stats[2], stats[3], stats[4]);
+    let score = attr_score + skill_eval;  // ★ v3.19.0: attribute + skill evaluation
     let total_stats = revise_over_1200(stats[0]) + revise_over_1200(stats[1])
                     + revise_over_1200(stats[2]) + revise_over_1200(stats[3])
                     + revise_over_1200(stats[4]);
@@ -2088,6 +2093,8 @@ fn evaluate_ai(
 
     AiResult {
         score,
+        skill_eval,
+        skill_count,
         total_stats,
         best_action,
         best_value,
@@ -2103,8 +2110,10 @@ fn ai_result_to_json(r: &AiResult) -> String {
         .map(|(n, v)| format!(r#""{}":{}"#, n, (v * 10.0).round() / 10.0))
         .collect();
     format!(
-        r#"{{"score":{},"total_stats":{},"best":"{}","best_v":{},"train":{{{}}},"rest":{},"outgoing":{}}}"#,
+        r#"{{"score":{},"skill_eval":{},"skill_count":{},"total_stats":{},"best":"{}","best_v":{},"train":{{{}}},"rest":{},"outgoing":{}}}"#,
         r.score,
+        r.skill_eval,
+        r.skill_count,
         r.total_stats,
         r.best_action,
         (r.best_value * 10.0).round() / 10.0,
@@ -2112,6 +2121,145 @@ fn ai_result_to_json(r: &AiResult) -> String {
         (r.rest_value * 10.0).round() / 10.0,
         (r.outgoing_value * 10.0).round() / 10.0,
     )
+}
+
+// ★ v3.19.0: Skill Evaluation — read learned skills from game + MasterDB
+
+/// Read learned skill IDs and levels from Character object
+/// Returns Vec<(skill_id, level)> where level is 1=normal, 2=evolved
+unsafe fn read_chara_skills(chara_class: *mut c_void, chara_obj: *const c_void, image: *const c_void) -> Vec<(i32, i32)> {
+    let mut skills = Vec::new();
+    
+    // Approach 1: Try get_SkillDataArray() -> SingleModeSkillData[]
+    let arr = call_getter_on_instance(chara_class, chara_obj, "get_SkillDataArray");
+    if !arr.is_null() {
+        let ab = arr as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+        if al > 0 && al < 500 {
+            let skill_elem_class = find_class_by_short_name(image, "SingleModeSkillData");
+            for i in 0..al {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                if ep.is_null() { continue; }
+                let skill_id = if !skill_elem_class.is_null() {
+                    call_getter_int(skill_elem_class, ep, "get_SkillId")
+                } else {
+                    std::ptr::read_unaligned::<i32>((ep as *const u8).add(0x10) as *const i32)
+                };
+                let level = if !skill_elem_class.is_null() {
+                    call_getter_int(skill_elem_class, ep, "get_Level")
+                } else { 1 };
+                if skill_id > 0 {
+                    skills.push((skill_id, if level > 0 { level } else { 1 }));
+                }
+            }
+            if !skills.is_empty() { return skills; }
+        }
+    }
+    
+    // Approach 2: Try get_PossessSkillIdArray() -> int[]
+    for method_name in &["get_PossessSkillIdArray", "get_SkillIdArray"] {
+        let arr2 = call_getter_on_instance(chara_class, chara_obj, method_name);
+        if arr2.is_null() { continue; }
+        let ab = arr2 as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+        if al > 0 && al < 500 {
+            for i in 0..al {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                if ep.is_null() { continue; }
+                let sid = std::ptr::read_unaligned::<i32>(ep as *const i32);
+                if sid > 0 { skills.push((sid, 1)); }
+            }
+        }
+        if !skills.is_empty() { return skills; }
+    }
+    
+    // Approach 3: Try reading skill_data_array field directly
+    let field_arr = read_field_value(chara_class, chara_obj, "skill_data_array");
+    if !field_arr.is_null() {
+        let ab = field_arr as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+        if al > 0 && al < 500 {
+            let skill_elem_class = find_class_by_short_name(image, "SingleModeSkillData");
+            for i in 0..al {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+                if ep.is_null() { continue; }
+                let skill_id = if !skill_elem_class.is_null() {
+                    call_getter_int(skill_elem_class, ep, "get_SkillId")
+                } else {
+                    std::ptr::read_unaligned::<i32>((ep as *const u8).add(0x10) as *const i32)
+                };
+                let level = if !skill_elem_class.is_null() {
+                    call_getter_int(skill_elem_class, ep, "get_Level")
+                } else { 1 };
+                if skill_id > 0 {
+                    skills.push((skill_id, if level > 0 { level } else { 1 }));
+                }
+            }
+        }
+    }
+    
+    skills
+}
+
+/// Compute skill evaluation from learned skills using MasterDB
+/// Returns (total_skill_eval, skill_count, skills_breakdown_json)
+fn compute_skill_eval(skills: &[(i32, i32)]) -> (i32, i32, String) {
+    if skills.is_empty() {
+        return (0, 0, "[]".to_string());
+    }
+    
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return (0, skills.len() as i32, "[]".to_string()),
+    };
+    
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(_) => return (0, skills.len() as i32, "[]".to_string()),
+    };
+    
+    // Build a map of skill_id -> grade_value from MasterDB
+    let mut grade_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    let _ = conn.prepare("SELECT id, grade_value FROM skill_data").map(|mut stmt| {
+        let _ = stmt.query_map([], |row| {
+            Ok((row.get::<_, i32>(0).unwrap_or(0), row.get::<_, i32>(1).unwrap_or(0)))
+        }).map(|rows| {
+            rows.filter_map(|r| r.ok()).for_each(|(id, gv)| {
+                grade_map.insert(id, gv);
+            });
+        });
+    });
+    
+    // Also get skill names
+    let mut name_map: std::collections::HashMap<i32, String> = std::collections::HashMap::new();
+    let _ = conn.prepare("SELECT id, text FROM text_data WHERE category=47").map(|mut stmt| {
+        let _ = stmt.query_map([], |row| {
+            let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
+            Ok((row.get::<_, i32>(0).unwrap_or(0), text))
+        }).map(|rows| {
+            rows.filter_map(|r| r.ok()).for_each(|(id, name)| {
+                name_map.insert(id, name);
+            });
+        });
+    });
+    
+    // Compute skill_eval for each learned skill
+    let mut total_eval = 0i32;
+    let mut breakdown = Vec::new();
+    for &(skill_id, level) in skills {
+        let grade_value = *grade_map.get(&skill_id).unwrap_or(&0);
+        // Level multiplier: level 1 = 1.0x, level 2 (evolved) = 1.2x
+        let level_mult = if level >= 2 { 1.2f64 } else { 1.0f64 };
+        let eval = (grade_value as f64 * level_mult) as i32;
+        total_eval += eval;
+        let name = name_map.get(&skill_id).cloned().unwrap_or_else(|| format!("id:{}", skill_id));
+        breakdown.push(format!(
+            r#"{{"id":{},"name":"{}","gv":{},"lv":{},"ev":{}}}"#,
+            skill_id, json_escape(&name), grade_value, level, eval
+        ));
+    }
+    
+    (total_eval, skills.len() as i32, format!("[{}]", breakdown.join(",")))
 }
 
 fn read_summary() -> String {
@@ -2166,6 +2314,14 @@ unsafe fn read_summary_inner() -> String {
     let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
     let chara_effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
     let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
+
+    // ★ v3.19.0: Read learned skills and compute skill evaluation
+    ura_log(3, "★ read_summary phase1b: skill eval");
+    let (skill_eval, skill_count, skills_json) = {
+        let learned_skills = read_chara_skills(chara_class, chara_obj, image);
+        compute_skill_eval(&learned_skills)
+    };
+    ura_log(2, &format!("skill_eval={} count={}", skill_eval, skill_count));
 
     let mot_s = match mot { 5=>"Best", 4=>"Good", 3=>"Normal", 2=>"Bad", 1=>"Worst", _=>"?" };
     let scn_s = match sid {
@@ -2816,6 +2972,7 @@ unsafe fn read_summary_inner() -> String {
         let result = evaluate_ai(
             turn, stats, vit, mvit, mot, sid,
             &eval_trainings, has_ai_jiao, has_renshou_jouzu,
+            skill_eval, skill_count,  // ★ v3.19.0
         );
         ai_result_to_json(&result)
     };
@@ -2840,8 +2997,8 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.18.9","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"ai":{}{}{}}}"#,
-        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), ai_json, team_json, ramen_json
+        r#"{{"version":"3.19.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
 
@@ -3020,7 +3177,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.18.9","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.19.0","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3094,6 +3251,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         read_carddb()
     } else if path == "/skilldata" {
         read_skilldata()
+    } else if path == "/hall" {
+        unsafe { read_hall_data() }
     } else if path == "/saddles-dl" {
         read_saddles()
     } else if path == "/saddles" {
@@ -3133,7 +3292,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         };
         unsafe { enumerate_all_classes(search) }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/debug/breeders","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/classes/search/keyword"]}}"#, path)
     };
 
     if path == "/saddles-dl" {
@@ -3175,7 +3334,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.18.7").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.19.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -3380,10 +3539,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.18.7 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.19.0 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.18.7 Loaded!").as_ptr());
+        f(to_cstr("URA v3.19.0 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -4062,7 +4221,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.9","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.19.0","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4134,7 +4293,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.9","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.19.0","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4290,7 +4449,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.18.9","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.19.0","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -4298,4 +4457,76 @@ fn read_saddles() -> String {
         relations.join(","), relation_members.join(","),
         race_instances.join(","),
     )
+}
+
+/// /hall - Read 殿堂 (Hall of Fame) data for score verification
+/// Tries to read SingleModeHistoryInfo from the game
+unsafe fn read_hall_data() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+    
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    
+    // Try to get history data - try multiple class/method names
+    // The殿堂 data might be in:
+    // 1. WorkDataManager.get_SingleModeHistoryInfoArray()
+    // 2. Or a separate class like SingleModeHistoryInfo
+    let mut entries = Vec::new();
+    
+    // Approach 1: Try get_SingleModeHistoryInfoArray on WDM
+    for method in &["get_SingleModeHistoryInfoArray", "get_HistoryInfoArray", "get_TrainingResultArray"] {
+        let arr = call_getter_on_instance(wdm_class, wdm_inst, method);
+        if arr.is_null() { continue; }
+        let ab = arr as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
+        if al == 0 || al > 1000 { continue; }
+        
+        for i in 0..std::cmp::min(al, 50) {  // limit to 50 entries
+            let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
+            if ep.is_null() { continue; }
+            let b = ep as *const u8;
+            
+            // Try to read common fields from history entries
+            // Typical layout: 
+            //   0x10: CharacterId (int)
+            //   0x14: ScenarioId (int) 
+            //   0x18: EvaluationScore (int) - THE GOLD STANDARD
+            // But offsets may vary, so we read several positions and report what we find
+            let chara_id = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
+            let scenario_id = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
+            let eval_score = std::ptr::read_unaligned::<i32>(b.add(0x18) as *const i32);
+            // Also try a few more offsets for the score
+            let eval_score2 = std::ptr::read_unaligned::<i32>(b.add(0x1C) as *const i32);
+            
+            // Read five status if available (5 ints starting at offset 0x20 or 0x28)
+            let speed = std::ptr::read_unaligned::<i32>(b.add(0x20) as *const i32);
+            let stamina = std::ptr::read_unaligned::<i32>(b.add(0x24) as *const i32);
+            let power = std::ptr::read_unaligned::<i32>(b.add(0x28) as *const i32);
+            let guts = std::ptr::read_unaligned::<i32>(b.add(0x2C) as *const i32);
+            let wiz = std::ptr::read_unaligned::<i32>(b.add(0x30) as *const i32);
+            
+            entries.push(format!(
+                r#"{{"idx":{},"chara_id":{},"scenario_id":{},"eval_score":{},"eval_score2":{},"stats":[{},{},{},{},{}]}}"#,
+                i, chara_id, scenario_id, eval_score, eval_score2, speed, stamina, power, guts, wiz
+            ));
+        }
+        if !entries.is_empty() { break; }
+    }
+    
+    if entries.is_empty() {
+        // Approach 2: Try to find SingleModeHistoryInfo class directly
+        let hist_class = find_class_by_short_name(image, "SingleModeHistoryInfo");
+        if !hist_class.is_null() {
+            return format!(r#"{{"found_class":true,"note":"class_found_but_no_instances","method":"try_getter_on_WDM"}}"#);
+        }
+        return format!(r#"{{"error":"no_history_data","hint":"殿堂_data_not_accessible_via_IL2CPP"}}"#);
+    }
+    
+    format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
 }
