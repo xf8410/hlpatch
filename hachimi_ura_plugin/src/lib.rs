@@ -1,4 +1,4 @@
-//! URA Plugin v3.21.0
+//! URA Plugin v3.22.0
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -548,7 +548,7 @@ unsafe fn read_obscured_int_array(
     // +0x18: max_length (8 bytes on 64-bit)
     // +0x20: data start
     let base = arr_obj as *const u8;
-    let length = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    let length = std::ptr::read_unaligned::<i32>(base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
     if length == 0 || length > 1000 { return result; } // sanity check
 
     // ObscuredInt struct (unboxed) layout:
@@ -558,7 +558,7 @@ unsafe fn read_obscured_int_array(
     // offset 0x0C: fakeValue (Int32)
     // offset 0x10: fakeValueActive (Boolean, padded to 4)
     // struct size = 0x14 (20 bytes), aligned to 4
-    let struct_size: usize = IL2CPP_OBSCURED_INT_HIDDEN_OFF + IL2CPP_LIST_ITEM_SIZE;  // ObscuredInt unboxed: 5 fields x 4 bytes = 20 bytes (key+hidden+inited+fake+fakeActive)
+    let struct_size: usize = 0x14;  // ObscuredInt unboxed: 5 fields × 4 bytes = 20 bytes (key+hidden+inited+fake+fakeActive) — fixed: was IL2CPP_OBSCURED_INT_HIDDEN_OFF + IL2CPP_LIST_ITEM_SIZE = 0x1C (wrong, mixed boxed offset with unboxed)
     let data_start = base.add(IL2CPP_LIST_ITEMS_OFF);
 
     for i in 0..length {
@@ -588,7 +588,7 @@ unsafe fn read_array_element_details(
     if array_obj.is_null() || element_class.is_null() { return results; }
 
     let base = array_obj as *const u8;
-    let length = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    let length = std::ptr::read_unaligned::<i32>(base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
     if length == 0 || length > 100 { return results; }
 
     for i in 0..length {
@@ -778,7 +778,7 @@ unsafe fn read_scenario_detail() -> String {
                     let arr_obj = call_getter_on_instance(dataset_class, dataset_obj, getter);
                     if !arr_obj.is_null() {
                         let base = arr_obj as *const u8;
-                        let length = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let length = std::ptr::read_unaligned::<i32>(base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         ds_arrays.push(format!(r#""{}":{{"len":{},"ptr":"{:p}"}}"#, getter, length, arr_obj));
                     }
                 }
@@ -827,7 +827,7 @@ unsafe fn read_scenario_detail() -> String {
                             //    NO auto-detection needed — hardcode to avoid class lookup crashes
 
                             let base = cmd_arr as *const u8;
-                            let cmd_len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            let cmd_len = std::ptr::read_unaligned::<i32>(base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                             let mut cmd_details = Vec::new();
                             for i in 0..cmd_len {
                                 let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -856,7 +856,7 @@ unsafe fn read_scenario_detail() -> String {
                                     let mut params_items = Vec::new();
                                     if !params_arr.is_null() {
                                         let p_base = params_arr as *const u8;
-                                        let p_len = std::ptr::read_unaligned::<usize>(p_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                                        let p_len = std::ptr::read_unaligned::<i32>(p_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                                         for j in 0..p_len {
                                             let p_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                             if p_elem.is_null() { continue; }
@@ -884,7 +884,7 @@ unsafe fn read_scenario_detail() -> String {
                                     let member_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_TeamMemberInfoArray");
                                     let member_len = if !member_arr.is_null() {
                                         let mbase = member_arr as *const u8;
-                                        std::ptr::read_unaligned::<usize>(mbase.add(IL2CPP_LIST_COUNT_OFF) as *const usize)
+                                        std::ptr::read_unaligned::<i32>(mbase.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize
                                     } else { 0 };
                                     // Trim trailing } and add new fields
                                     if detail.ends_with('}') { detail.pop(); }
@@ -939,7 +939,7 @@ unsafe fn read_scenario_detail() -> String {
                         let ae_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_ActiveEffectArray");
                         if !ae_arr.is_null() {
                             let ae_base = ae_arr as *const u8;
-                            let ae_len = std::ptr::read_unaligned::<usize>(ae_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            let ae_len = std::ptr::read_unaligned::<i32>(ae_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                             if ae_len > 0 && ae_len < 100 {
                                 let mut effects = Vec::new();
                                 for i in 0..ae_len {
@@ -989,7 +989,7 @@ unsafe fn read_scenario_detail() -> String {
                     let fi_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingInfoArray");
                     if !fi_arr.is_null() {
                         let fi_base = fi_arr as *const u8;
-                        let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let fi_len = std::ptr::read_unaligned::<i32>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         if fi_len > 0 && fi_len < 100 {
                             // Try multiple class name patterns for FeelingInfo
                             let fi_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingInfo");
@@ -1019,7 +1019,7 @@ unsafe fn read_scenario_detail() -> String {
                     let ft_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingTurnInfoArray");
                     if !ft_arr.is_null() {
                         let ft_base = ft_arr as *const u8;
-                        let ft_len = std::ptr::read_unaligned::<usize>(ft_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let ft_len = std::ptr::read_unaligned::<i32>(ft_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         if ft_len > 0 && ft_len < 100 {
                             let ft_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingTurnInfo");
                             let ft_elements = if !ft_class.is_null() {
@@ -1035,7 +1035,7 @@ unsafe fn read_scenario_detail() -> String {
                     let cf_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandFeelingInfoArray");
                     if !cf_arr.is_null() {
                         let cf_base = cf_arr as *const u8;
-                        let cf_len = std::ptr::read_unaligned::<usize>(cf_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let cf_len = std::ptr::read_unaligned::<i32>(cf_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         if cf_len > 0 && cf_len < 100 {
                             let cf_class = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandFeelingInfo");
                             let cf_elements = if !cf_class.is_null() {
@@ -1051,7 +1051,7 @@ unsafe fn read_scenario_detail() -> String {
                     let fr_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingReduceTurnInfoArray");
                     if !fr_arr.is_null() {
                         let fr_base = fr_arr as *const u8;
-                        let fr_len = std::ptr::read_unaligned::<usize>(fr_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let fr_len = std::ptr::read_unaligned::<i32>(fr_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         if fr_len > 0 && fr_len < 100 {
                             let fr_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingReduceTurnInfo");
                             let fr_elements = if !fr_class.is_null() {
@@ -2125,8 +2125,8 @@ fn evaluate_ai(
     // Buff effects
     _has_ai_jiao: bool,    // 愛嬌 buff (TODO: implement buff effect)
     _has_renshou_jouzu: bool, // 練習上手 buff (TODO: implement buff effect)
-    skill_eval: i32,      // ★ v3.19.2: skill evaluation value
-    skill_count: i32,     // ★ v3.19.2: learned skill count
+    skill_eval: i32,      // ★ v3.22.0: skill evaluation value
+    skill_count: i32,     // ★ v3.22.0: learned skill count
 ) -> AiResult {
     // Total turns per scenario
     let total_turn: i32 = match scenario_id {
@@ -2139,7 +2139,7 @@ fn evaluate_ai(
 
     // === Current Score ===
     let attr_score = compute_score(stats[0], stats[1], stats[2], stats[3], stats[4]);
-    let score = attr_score + skill_eval;  // ★ v3.19.2: attribute + skill evaluation
+    let score = attr_score + skill_eval;  // ★ v3.22.0: attribute + skill evaluation
     let total_stats = stats[0] + stats[1] + stats[2] + stats[3] + stats[4];
 
     // === Evaluation Parameters ===
@@ -2308,7 +2308,7 @@ fn ai_result_to_json(r: &AiResult) -> String {
     )
 }
 
-// ★ v3.19.2: Skill Evaluation — read learned skills from game + MasterDB
+// ★ v3.22.0: Skill Evaluation — read learned skills from game + MasterDB
 
 /// Read learned skill IDs and levels from Character object
 /// Returns Vec<(skill_id, level)> where level is 1=normal, 2=evolved
@@ -2319,7 +2319,7 @@ unsafe fn read_chara_skills(chara_class: *mut c_void, chara_obj: *const c_void, 
     let arr = call_getter_on_instance(chara_class, chara_obj, "get_SkillDataArray");
     if !arr.is_null() {
         let ab = arr as *const u8;
-        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if al > 0 && al < 500 {
             let skill_elem_class = find_class_by_short_name(image, "SingleModeSkillData");
             for i in 0..al {
@@ -2346,7 +2346,7 @@ unsafe fn read_chara_skills(chara_class: *mut c_void, chara_obj: *const c_void, 
         let arr2 = call_getter_on_instance(chara_class, chara_obj, method_name);
         if arr2.is_null() { continue; }
         let ab = arr2 as *const u8;
-        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if al > 0 && al < 500 {
             for i in 0..al {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -2362,7 +2362,7 @@ unsafe fn read_chara_skills(chara_class: *mut c_void, chara_obj: *const c_void, 
     let field_arr = read_field_value(chara_class, chara_obj, "skill_data_array");
     if !field_arr.is_null() {
         let ab = field_arr as *const u8;
-        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if al > 0 && al < 500 {
             let skill_elem_class = find_class_by_short_name(image, "SingleModeSkillData");
             for i in 0..al {
@@ -2500,7 +2500,7 @@ unsafe fn read_summary_inner() -> String {
     let chara_effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
     let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
 
-    // ★ v3.19.2: Read learned skills and compute skill evaluation
+    // ★ v3.22.0: Read learned skills and compute skill evaluation
     ura_log(3, "★ read_summary phase1b: skill eval");
     let (skill_eval, skill_count, skills_json) = {
         let learned_skills = read_chara_skills(chara_class, chara_obj, image);
@@ -2546,7 +2546,7 @@ unsafe fn read_summary_inner() -> String {
                         let ramen_cmd_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_CommandInfoArray");
                         if !ramen_cmd_arr.is_null() {
                             let ramen_cmd_base = ramen_cmd_arr as *const u8;
-                            let ramen_cmd_len = std::ptr::read_unaligned::<usize>(ramen_cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            let ramen_cmd_len = std::ptr::read_unaligned::<i32>(ramen_cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                             if ramen_cmd_len > 0 && ramen_cmd_len < 50 {
                                 let ramen_cmd_elem_class = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandInfo");
                                 for ri in 0..ramen_cmd_len {
@@ -2565,7 +2565,7 @@ unsafe fn read_summary_inner() -> String {
                                     } else { std::ptr::null_mut() };
                                     if !r_params_arr.is_null() {
                                         let r_pb = r_params_arr as *const u8;
-                                        let r_pl = std::ptr::read_unaligned::<usize>(r_pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                                        let r_pl = std::ptr::read_unaligned::<i32>(r_pb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                                         if r_pl > 0 && r_pl < 100 {
                                             for rj in 0..r_pl {
                                                 let r_pe = std::ptr::read_unaligned::<*mut c_void>(r_pb.add(IL2CPP_LIST_ITEMS_OFF + rj * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -2624,7 +2624,7 @@ unsafe fn read_summary_inner() -> String {
                     let fi_arr = call_getter_on_instance(rds_cls2, rds_obj2, "get_FeelingInfoArray");
                     if !fi_arr.is_null() {
                         let fi_base = fi_arr as *const u8;
-                        let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let fi_len = std::ptr::read_unaligned::<i32>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         if fi_len > 0 && fi_len < 100 {
                             let fi_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingInfo");
                             let fi_cls = if fi_cls.is_null() { find_class_by_short_name(image, "SingleModeRamenFeelingInfo") } else { fi_cls };
@@ -2652,7 +2652,7 @@ unsafe fn read_summary_inner() -> String {
                     let sr_arr = call_getter_on_instance(rds_cls2, rds_obj2, "get_SelectedRegionIdArray");
                     if !sr_arr.is_null() {
                         let sr_base = sr_arr as *const u8;
-                        let sr_len = std::ptr::read_unaligned::<usize>(sr_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let sr_len = std::ptr::read_unaligned::<i32>(sr_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         if sr_len > 0 && sr_len < 50 {
                             let mut sr_ids = Vec::new();
                             for si in 0..sr_len {
@@ -2668,7 +2668,7 @@ unsafe fn read_summary_inner() -> String {
                     let ae_arr2 = call_getter_on_instance(rds_cls2, rds_obj2, "get_ActiveEffectArray");
                     if !ae_arr2.is_null() {
                         let ae_base2 = ae_arr2 as *const u8;
-                        let ae_len2 = std::ptr::read_unaligned::<usize>(ae_base2.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let ae_len2 = std::ptr::read_unaligned::<i32>(ae_base2.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         if ae_len2 > 0 && ae_len2 < 100 {
                             let ae_cls2 = find_class_by_short_name(image, "ObscuredSingleModeRamenActiveEffectInfo");
                             if !ae_cls2.is_null() {
@@ -2717,7 +2717,7 @@ unsafe fn read_summary_inner() -> String {
             let cmd_arr = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
             if !cmd_arr.is_null() {
                 let cmd_base = cmd_arr as *const u8;
-                let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                let cmd_len = std::ptr::read_unaligned::<i32>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                 if cmd_len > 0 && cmd_len < 100 {
                     let cmd_elem_class = find_class_by_short_name(image, "SingleModeCommandInfoData");
                     let mut trs = Vec::new();
@@ -2749,7 +2749,7 @@ unsafe fn read_summary_inner() -> String {
                             let arr = call_getter_on_instance(cmd_elem_class, ep, "get_TrainingPartnerArray");
                             if !arr.is_null() {
                                 let ab = arr as *const u8;
-                                let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                                let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                                 al as i32
                             } else { -1 }
                         } else { -1 };
@@ -2759,7 +2759,7 @@ unsafe fn read_summary_inner() -> String {
                             let arr = call_getter_on_instance(cmd_elem_class, ep, "get_TipsEventPartnerArray");
                             if !arr.is_null() {
                                 let ab = arr as *const u8;
-                                let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                                let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                                 al as i32
                             } else { -1 }
                         } else { -1 };
@@ -2774,7 +2774,7 @@ unsafe fn read_summary_inner() -> String {
                             let pa = call_getter_on_instance(cmd_elem_class, ep, "get_ParamsIncDecInfoArray");
                             if !pa.is_null() {
                                 let pb = pa as *const u8;
-                                let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                                let pl = std::ptr::read_unaligned::<i32>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                                 if pl > 0 && pl < 100 {
                                     let pid_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
                                     for j in 0..pl {
@@ -2850,7 +2850,7 @@ unsafe fn read_summary_inner() -> String {
         let arr = call_getter_on_instance(chara_class, chara_obj, "get_SupportCardArray");
         if !arr.is_null() {
             let ab = arr as *const u8;
-            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
             if al > 0 && al < 100 {
                 let mut scs = Vec::new();
                 for i in 0..al {
@@ -2871,7 +2871,7 @@ unsafe fn read_summary_inner() -> String {
         }
     } else {
         let ab = sc_arr as *const u8;
-        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if al > 0 && al < 100 {
             let mut scs = Vec::new();
             for i in 0..al {
@@ -2898,7 +2898,7 @@ unsafe fn read_summary_inner() -> String {
             let arr3 = call_getter_on_instance(sm_class, sm_obj, "get_SupportCardArray");
             if !arr3.is_null() {
                 let ab = arr3 as *const u8;
-                let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                 if al > 0 && al < 100 {
                     let mut scs = Vec::new();
                     for i in 0..al {
@@ -2922,7 +2922,7 @@ unsafe fn read_summary_inner() -> String {
             }
         } else {
             let ab = arr2 as *const u8;
-            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
             if al > 0 && al < 100 {
                 let mut scs = Vec::new();
                 for i in 0..al {
@@ -2954,7 +2954,7 @@ unsafe fn read_summary_inner() -> String {
         let arr = call_getter_on_instance(chara_class, chara_obj, "get_EvaluationInfoArray");
         if !arr.is_null() {
             let ab = arr as *const u8;
-            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
             if al > 0 && al < 1000 {
                 let mut evs = Vec::new();
                 for i in 0..al {
@@ -2974,7 +2974,7 @@ unsafe fn read_summary_inner() -> String {
         }
     } else {
         let ab = ev_arr as *const u8;
-        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if al > 0 && al < 1000 {
             let mut evs = Vec::new();
             for i in 0..al {
@@ -3001,7 +3001,7 @@ unsafe fn read_summary_inner() -> String {
         let arr = call_getter_on_instance(chara_class, chara_obj, "get_TrainingLevelInfoArray");
         if !arr.is_null() {
             let ab = arr as *const u8;
-            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
             if al > 0 && al < 100 {
                 let mut tls = Vec::new();
                 for i in 0..al {
@@ -3020,7 +3020,7 @@ unsafe fn read_summary_inner() -> String {
         }
     } else {
         let ab = tl_arr as *const u8;
-        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if al > 0 && al < 100 {
             let mut tls = Vec::new();
             for i in 0..al {
@@ -3069,7 +3069,7 @@ unsafe fn read_summary_inner() -> String {
                                 let enhance_arr = call_getter_on_instance(ds_class, ds_obj, "get_EnhanceGroupArray");
                                 if !enhance_arr.is_null() {
                                     let eb = enhance_arr as *const u8;
-                                    let el = std::ptr::read_unaligned::<usize>(eb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                                    let el = std::ptr::read_unaligned::<i32>(eb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                                     if el > 0 && el < 20 {
                                         let mut buffs = Vec::new();
                                         for i in 0..el {
@@ -3157,7 +3157,7 @@ unsafe fn read_summary_inner() -> String {
         let result = evaluate_ai(
             turn, stats, vit, mvit, mot, sid,
             &eval_trainings, has_ai_jiao, has_renshou_jouzu,
-            skill_eval, skill_count,  // ★ v3.19.2
+            skill_eval, skill_count,  // ★ v3.22.0
         );
         ai_result_to_json(&result)
     };
@@ -3182,7 +3182,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.19.2","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3362,7 +3362,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.21.0","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.0","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3535,7 +3535,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.19.2").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -3740,10 +3740,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.19.2 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.0 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.19.2 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.0 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -3827,7 +3827,7 @@ unsafe fn debug_params_inc_dec() -> String {
     if cmd_arr.is_null() { return r#"{"error":"cmd_arr_null"}"#.to_string(); }
 
     let cmd_base = cmd_arr as *const u8;
-    let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    let cmd_len = std::ptr::read_unaligned::<i32>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
     if cmd_len == 0 { return r#"{"error":"cmd_arr_empty"}"#.to_string(); }
 
     // ★ Safe element type detection: read klass pointer from first element,
@@ -3845,7 +3845,7 @@ unsafe fn debug_params_inc_dec() -> String {
         let params_arr = call_getter_on_instance(cmd_elem_class, elem_ptr, "get_ParamsIncDecInfoArray");
         if params_arr.is_null() { continue; }
         let p_base = params_arr as *const u8;
-        let p_len = std::ptr::read_unaligned::<usize>(p_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let p_len = std::ptr::read_unaligned::<i32>(p_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if p_len == 0 { continue; }
         // Read first element's klass pointer
         let first_elem = std::ptr::read_unaligned::<*mut c_void>(p_base.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void);
@@ -3885,7 +3885,7 @@ unsafe fn debug_params_inc_dec() -> String {
         if params_arr.is_null() { continue; }
 
         let p_base = params_arr as *const u8;
-        let p_len = std::ptr::read_unaligned::<usize>(p_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let p_len = std::ptr::read_unaligned::<i32>(p_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if p_len == 0 || p_len > 20 { continue; }
 
         // Only first 3 params per command
@@ -3988,7 +3988,7 @@ unsafe fn read_breeders_team() -> String {
         let enhance_arr = call_getter_on_instance(ds_class, ds_obj, "get_EnhanceGroupArray");
         if !enhance_arr.is_null() {
             let ebase = enhance_arr as *const u8;
-            let elen = std::ptr::read_unaligned::<usize>(ebase.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            let elen = std::ptr::read_unaligned::<i32>(ebase.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
             for i in 0..elen {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ebase.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                 if ep.is_null() { continue; }
@@ -4026,7 +4026,7 @@ unsafe fn read_breeders_team() -> String {
     }
 
     let mb = member_arr as *const u8;
-    let ml = std::ptr::read_unaligned::<usize>(mb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    let ml = std::ptr::read_unaligned::<i32>(mb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
 
     if ml == 0 || ml > 10 {
         return format!(
@@ -4244,7 +4244,7 @@ unsafe fn debug_breeders_team() -> String {
                     let arr = call_getter_on_instance(ds_cls, ds_obj, "get_TeamMemberInfoArray");
                     if !arr.is_null() {
                         let ab = arr as *const u8;
-                        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                         if al > 0 {
                             let first_ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void);
                             if !first_ep.is_null() {
@@ -4398,18 +4398,20 @@ fn read_mdb_tables() -> String {
     // Now get row counts separately (no active stmt borrowing conn)
     let mut tables_json: Vec<String> = Vec::new();
     for name in &single_mode_names {
+        let safe_name = name.replace("]", "]]");
         let count: i32 = conn.query_row(
-            &format!("SELECT COUNT(*) FROM [{}]", name), [], |r| r.get(0)
+            &format!("SELECT COUNT(*) FROM [{}]", safe_name), [], |r| r.get(0)
         ).unwrap_or(0);
-        tables_json.push(format!(r#"{{"name":"{}","rows":{}}}"#, name, count));
+        tables_json.push(format!(r#"{{"name":"{}","rows":{}}}"#, json_escape(name), count));
     }
 
     let mut event_json: Vec<String> = Vec::new();
     for name in &event_names {
+        let safe_name = name.replace("]", "]]");
         let count: i32 = conn.query_row(
-            &format!("SELECT COUNT(*) FROM [{}]", name), [], |r| r.get(0)
+            &format!("SELECT COUNT(*) FROM [{}]", safe_name), [], |r| r.get(0)
         ).unwrap_or(0);
-        event_json.push(format!(r#"{{"name":"{}","rows":{}}}"#, name, count));
+        event_json.push(format!(r#"{{"name":"{}","rows":{}}}"#, json_escape(name), count));
     }
 
     drop(conn);
@@ -4513,7 +4515,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.20.0","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.0","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -4578,7 +4580,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.19.2","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.0","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4650,7 +4652,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.19.2","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.0","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4806,7 +4808,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.19.2","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.0","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -4876,7 +4878,7 @@ unsafe fn read_hall_data() -> String {
     // 7. Read array elements from List._items
     // Il2CppArray layout: +0x18: max_length (usize), +0x20: data[0]
     let arr_base = items_arr as *const u8;
-    let arr_len = std::ptr::read_unaligned::<usize>(arr_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    let arr_len = std::ptr::read_unaligned::<i32>(arr_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
 
     let mut entries = Vec::new();
     let count = std::cmp::min(list_size as usize, std::cmp::min(arr_len, 200));
@@ -4922,7 +4924,7 @@ unsafe fn read_ranking_data() -> String {
 }
 
 // ============================================================
-// ★ v3.21.0: 4 new endpoints for training prediction, event recommendation,
+// ★ v3.22.0: 4 new endpoints for training prediction, event recommendation,
 //   inheritance compatibility, and turn log
 // ============================================================
 
@@ -4975,7 +4977,7 @@ unsafe fn read_training_predict() -> String {
     if cmd_arr.is_null() { return r#"{"error":"no_cmd_arr"}"#.to_string(); }
 
     let cmd_base = cmd_arr as *const u8;
-    let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    let cmd_len = std::ptr::read_unaligned::<i32>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
     if cmd_len == 0 || cmd_len > 100 {
         return format!(r#"{{"error":"cmd_len_invalid","len":{}}}"#, cmd_len);
     }
@@ -5036,7 +5038,7 @@ unsafe fn read_training_predict() -> String {
             let pa = call_getter_on_instance(cmd_elem_class, ep, "get_TrainingPartnerArray");
             if !pa.is_null() {
                 let pb = pa as *const u8;
-                let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                let pl = std::ptr::read_unaligned::<i32>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                 if pl > 0 && pl < 50 {
                     for j in 0..pl {
                         let pp = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -5091,7 +5093,7 @@ unsafe fn read_training_predict() -> String {
             let arr = call_getter_on_instance(cmd_elem_class, ep, "get_TipsEventPartnerArray");
             if !arr.is_null() {
                 let ab = arr as *const u8;
-                let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                 al as i32
             } else { 0 }
         } else { 0 };
@@ -5106,7 +5108,7 @@ unsafe fn read_training_predict() -> String {
             let pa = call_getter_on_instance(cmd_elem_class, ep, "get_ParamsIncDecInfoArray");
             if !pa.is_null() {
                 let pb = pa as *const u8;
-                let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                let pl = std::ptr::read_unaligned::<i32>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                 if pl > 0 && pl < 100 {
                     for j in 0..pl {
                         let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -5169,7 +5171,7 @@ unsafe fn read_training_predict() -> String {
                         let tei_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_TrainingExecInfoArray");
                         if !tei_arr.is_null() {
                             let tei_base = tei_arr as *const u8;
-                            let tei_len = std::ptr::read_unaligned::<usize>(tei_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            let tei_len = std::ptr::read_unaligned::<i32>(tei_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                             if tei_len > 0 && tei_len < 50 {
                                 let tei_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenTrainingExecInfo");
                                 if !tei_cls.is_null() {
@@ -5189,7 +5191,7 @@ unsafe fn read_training_predict() -> String {
                         let fi_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_FeelingInfoArray");
                         if !fi_arr.is_null() {
                             let fi_base = fi_arr as *const u8;
-                            let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            let fi_len = std::ptr::read_unaligned::<i32>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                             if fi_len > 0 && fi_len < 100 {
                                 let fi_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenFeeling");
                                 if !fi_cls.is_null() {
@@ -5209,7 +5211,7 @@ unsafe fn read_training_predict() -> String {
                         let cf_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_CommandFeelingInfoArray");
                         if !cf_arr.is_null() {
                             let cf_base = cf_arr as *const u8;
-                            let cf_len = std::ptr::read_unaligned::<usize>(cf_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            let cf_len = std::ptr::read_unaligned::<i32>(cf_base.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
                             if cf_len > 0 && cf_len < 100 {
                                 let cf_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandFeelingInfo");
                                 if !cf_cls.is_null() {
@@ -5236,7 +5238,7 @@ unsafe fn read_training_predict() -> String {
     }
 
     format!(
-        r#"{{"version":"3.21.0","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.0","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -5293,7 +5295,7 @@ unsafe fn read_inherit_compat() -> String {
     let mut factor_count: i32 = 0;
     if !factor_arr.is_null() {
         let fb = factor_arr as *const u8;
-        factor_count = std::ptr::read_unaligned::<usize>(fb.add(IL2CPP_LIST_COUNT_OFF) as *const usize) as i32;
+        factor_count = std::ptr::read_unaligned::<i32>(fb.add(IL2CPP_LIST_COUNT_OFF) as *const i32);
     }
 
     // 3. Read relation data from mdb
@@ -5344,7 +5346,7 @@ unsafe fn read_inherit_compat() -> String {
     let tr_arr = call_getter_on_instance(chara_class, chara_obj, "get_TargetRaceArray");
     if !tr_arr.is_null() {
         let trb = tr_arr as *const u8;
-        let trl = std::ptr::read_unaligned::<usize>(trb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let trl = std::ptr::read_unaligned::<i32>(trb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if trl > 0 && trl < 50 {
             for ti in 0..trl {
                 let tp = std::ptr::read_unaligned::<*mut c_void>(trb.add(IL2CPP_LIST_ITEMS_OFF + ti * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -5376,7 +5378,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.21.0","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.0","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -5459,7 +5461,7 @@ unsafe fn read_turn_log() -> String {
     let tl_arr = call_getter_on_instance(chara_class, chara_obj, "get_TrainingLevelInfoArray");
     if !tl_arr.is_null() {
         let tb = tl_arr as *const u8;
-        let tl = std::ptr::read_unaligned::<usize>(tb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let tl = std::ptr::read_unaligned::<i32>(tb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if tl > 0 && tl < 50 {
             let mut tls = Vec::new();
             for i in 0..tl {
@@ -5476,7 +5478,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.21.0","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.0","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -5527,7 +5529,7 @@ unsafe fn read_event_recommend() -> String {
         let arr = call_getter_on_instance(chara_class, chara_obj, "get_SupportCardArray");
         if !arr.is_null() {
             let ab = arr as *const u8;
-            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
             if al > 0 && al < 100 {
                 for i in 0..al {
                     let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -5540,7 +5542,7 @@ unsafe fn read_event_recommend() -> String {
         }
     } else {
         let ab = sc_arr as *const u8;
-        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let al = std::ptr::read_unaligned::<i32>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if al > 0 && al < 100 {
             for i in 0..al {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -5557,7 +5559,7 @@ unsafe fn read_event_recommend() -> String {
     let eval_arr = call_getter_on_instance(chara_class, chara_obj, "get_EvaluationList");
     if !eval_arr.is_null() {
         let eb = eval_arr as *const u8;
-        let el = std::ptr::read_unaligned::<usize>(eb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let el = std::ptr::read_unaligned::<i32>(eb.add(IL2CPP_LIST_COUNT_OFF) as *const i32) as usize;
         if el > 0 && el < 200 {
             let eval_class = find_class_by_short_name(image, "Evaluation");
             if !eval_class.is_null() {
@@ -5636,7 +5638,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.21.0","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.0","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -5646,13 +5648,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.21.0","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.0","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.21.0","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.0","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
