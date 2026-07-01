@@ -1,4 +1,4 @@
-//! URA Plugin v3.19.0
+//! URA Plugin v3.19.1
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -1938,8 +1938,8 @@ fn evaluate_ai(
     // Buff effects
     _has_ai_jiao: bool,    // 愛嬌 buff (TODO: implement buff effect)
     _has_renshou_jouzu: bool, // 練習上手 buff (TODO: implement buff effect)
-    skill_eval: i32,      // ★ v3.19.0: skill evaluation value
-    skill_count: i32,     // ★ v3.19.0: learned skill count
+    skill_eval: i32,      // ★ v3.19.1: skill evaluation value
+    skill_count: i32,     // ★ v3.19.1: learned skill count
 ) -> AiResult {
     // Total turns per scenario
     let total_turn: i32 = match scenario_id {
@@ -1952,7 +1952,7 @@ fn evaluate_ai(
 
     // === Current Score ===
     let attr_score = compute_score(stats[0], stats[1], stats[2], stats[3], stats[4]);
-    let score = attr_score + skill_eval;  // ★ v3.19.0: attribute + skill evaluation
+    let score = attr_score + skill_eval;  // ★ v3.19.1: attribute + skill evaluation
     let total_stats = revise_over_1200(stats[0]) + revise_over_1200(stats[1])
                     + revise_over_1200(stats[2]) + revise_over_1200(stats[3])
                     + revise_over_1200(stats[4]);
@@ -2123,7 +2123,7 @@ fn ai_result_to_json(r: &AiResult) -> String {
     )
 }
 
-// ★ v3.19.0: Skill Evaluation — read learned skills from game + MasterDB
+// ★ v3.19.1: Skill Evaluation — read learned skills from game + MasterDB
 
 /// Read learned skill IDs and levels from Character object
 /// Returns Vec<(skill_id, level)> where level is 1=normal, 2=evolved
@@ -2315,7 +2315,7 @@ unsafe fn read_summary_inner() -> String {
     let chara_effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
     let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
 
-    // ★ v3.19.0: Read learned skills and compute skill evaluation
+    // ★ v3.19.1: Read learned skills and compute skill evaluation
     ura_log(3, "★ read_summary phase1b: skill eval");
     let (skill_eval, skill_count, skills_json) = {
         let learned_skills = read_chara_skills(chara_class, chara_obj, image);
@@ -2972,7 +2972,7 @@ unsafe fn read_summary_inner() -> String {
         let result = evaluate_ai(
             turn, stats, vit, mvit, mot, sid,
             &eval_trainings, has_ai_jiao, has_renshou_jouzu,
-            skill_eval, skill_count,  // ★ v3.19.0
+            skill_eval, skill_count,  // ★ v3.19.1
         );
         ai_result_to_json(&result)
     };
@@ -2997,7 +2997,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.19.0","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.19.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3177,7 +3177,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.19.0","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.19.1","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3336,7 +3336,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.19.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.19.1").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -3541,10 +3541,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.19.0 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.19.1 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.19.0 Loaded!").as_ptr());
+        f(to_cstr("URA v3.19.1 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -4223,7 +4223,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.19.0","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.19.1","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4295,7 +4295,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.19.0","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.19.1","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4451,7 +4451,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.19.0","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.19.1","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -4461,214 +4461,107 @@ fn read_saddles() -> String {
     )
 }
 
-/// /hall - Read 殿堂 (Hall of Fame) data for score verification
-/// Tries to read SingleModeHistoryInfo from the game
+/// /hall - Read 殿堂 (Hall of Fame) data via TrainedCharaData
+/// Path: WDM -> get_TrainedCharaData -> WorkTrainedCharaData -> get_List -> List<TrainedCharaData>
+/// Each TrainedCharaData has get_RankScore (評価点), get_Speed/Stamina/Power/Guts/Wiz, etc.
+/// _rankScore is the game's own calculated評価点 (gold standard for verification)
 unsafe fn read_hall_data() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
         img if !img.is_null() => img,
         _ => return r#"{"error":"image_null"}"#.to_string(),
     };
-    
+
+    // 1. Get WDM singleton
     let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    
-    // Try to get history data - try multiple class/method names
-    // The殿堂 data might be in:
-    // 1. WorkDataManager.get_SingleModeHistoryInfoArray()
-    // 2. Or a separate class like SingleModeHistoryInfo
+
+    // 2. Get WorkTrainedCharaData from WDM
+    let wtcd_inst = call_getter_ref(wdm_class, wdm_inst, "get_TrainedCharaData");
+    if wtcd_inst.is_null() {
+        ura_log(1, "/hall: get_TrainedCharaData returned null");
+        return r#"{"error":"no_trained_chara_data"}"#.to_string();
+    }
+    ura_log(2, "/hall: got WorkTrainedCharaData instance");
+
+    // 3. Find WorkTrainedCharaData class for calling get_List
+    let wtcd_class = find_class_by_short_name(image, "WorkTrainedCharaData");
+
+    // 4. Get List<TrainedCharaData> from WorkTrainedCharaData
+    let list_obj = call_getter_ref(wtcd_class, wtcd_inst, "get_List");
+    if list_obj.is_null() {
+        ura_log(1, "/hall: get_List returned null");
+        return r#"{"error":"no_list"}"#.to_string();
+    }
+
+    // 5. Read List<TrainedCharaData> internals
+    // List<T> IL2CPP layout (64-bit):
+    //   +0x00: Il2CppObject header (16 bytes)
+    //   +0x10: _items (Il2CppArray* pointer, 8 bytes)
+    //   +0x18: _size (int32, 4 bytes)
+    let list_base = list_obj as *const u8;
+    let items_arr = std::ptr::read_unaligned::<*mut c_void>(list_base.add(0x10) as *const *mut c_void);
+    let list_size = std::ptr::read_unaligned::<i32>(list_base.add(0x18) as *const i32);
+
+    if items_arr.is_null() || list_size <= 0 {
+        ura_log(1, &format!("/hall: List null or empty, size={}", list_size));
+        return format!(r#"{{"error":"empty_list","list_size":{}}}"#, list_size);
+    }
+    ura_log(2, &format!("/hall: List has {} entries", list_size));
+
+    // 6. Find TrainedCharaData class
+    let tcd_class = find_class_by_short_name(image, "TrainedCharaData");
+    if tcd_class.is_null() {
+        ura_log(1, "/hall: TrainedCharaData class not found");
+        return r#"{"error":"no_tcd_class"}"#.to_string();
+    }
+
+    // 7. Read array elements from List._items
+    // Il2CppArray layout: +0x18: max_length (usize), +0x20: data[0]
+    let arr_base = items_arr as *const u8;
+    let arr_len = std::ptr::read_unaligned::<usize>(arr_base.add(0x18) as *const usize);
+
     let mut entries = Vec::new();
-    
-    // Approach 1: Try get_SingleModeHistoryInfoArray on WDM
-    for method in &["get_SingleModeHistoryInfoArray", "get_HistoryInfoArray", "get_TrainingResultArray"] {
-        let arr = call_getter_on_instance(wdm_class, wdm_inst, method);
-        if arr.is_null() { continue; }
-        let ab = arr as *const u8;
-        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
-        if al == 0 || al > 1000 { continue; }
-        
-        for i in 0..std::cmp::min(al, 50) {  // limit to 50 entries
-            let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
-            if ep.is_null() { continue; }
-            let b = ep as *const u8;
-            
-            // Try to read common fields from history entries
-            // Typical layout: 
-            //   0x10: CharacterId (int)
-            //   0x14: ScenarioId (int) 
-            //   0x18: EvaluationScore (int) - THE GOLD STANDARD
-            // But offsets may vary, so we read several positions and report what we find
-            let chara_id = std::ptr::read_unaligned::<i32>(b.add(0x10) as *const i32);
-            let scenario_id = std::ptr::read_unaligned::<i32>(b.add(0x14) as *const i32);
-            let eval_score = std::ptr::read_unaligned::<i32>(b.add(0x18) as *const i32);
-            // Also try a few more offsets for the score
-            let eval_score2 = std::ptr::read_unaligned::<i32>(b.add(0x1C) as *const i32);
-            
-            // Read five status if available (5 ints starting at offset 0x20 or 0x28)
-            let speed = std::ptr::read_unaligned::<i32>(b.add(0x20) as *const i32);
-            let stamina = std::ptr::read_unaligned::<i32>(b.add(0x24) as *const i32);
-            let power = std::ptr::read_unaligned::<i32>(b.add(0x28) as *const i32);
-            let guts = std::ptr::read_unaligned::<i32>(b.add(0x2C) as *const i32);
-            let wiz = std::ptr::read_unaligned::<i32>(b.add(0x30) as *const i32);
-            
-            entries.push(format!(
-                r#"{{"idx":{},"chara_id":{},"scenario_id":{},"eval_score":{},"eval_score2":{},"stats":[{},{},{},{},{}]}}"#,
-                i, chara_id, scenario_id, eval_score, eval_score2, speed, stamina, power, guts, wiz
-            ));
-        }
-        if !entries.is_empty() { break; }
+    let count = std::cmp::min(list_size as usize, std::cmp::min(arr_len, 200));
+
+    for i in 0..count {
+        let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(arr_base.add(0x20 + i * 8) as *const *mut c_void);
+        if elem_ptr.is_null() { continue; }
+
+        // Read fields via getter methods
+        let card_id = call_getter_int(tcd_class, elem_ptr, "get_CardId");
+        let speed = call_getter_int(tcd_class, elem_ptr, "get_Speed");
+        let stamina = call_getter_int(tcd_class, elem_ptr, "get_Stamina");
+        let power = call_getter_int(tcd_class, elem_ptr, "get_Power");
+        let guts = call_getter_int(tcd_class, elem_ptr, "get_Guts");
+        let wiz = call_getter_int(tcd_class, elem_ptr, "get_Wiz");
+        let rank_score = call_getter_int(tcd_class, elem_ptr, "get_RankScore");
+        let rank = call_getter_int(tcd_class, elem_ptr, "get_Rank");
+        let scenario_id = call_getter_int(tcd_class, elem_ptr, "get_ScenarioId");
+        let fans = call_getter_int(tcd_class, elem_ptr, "get_Fans");
+        let rarity = call_getter_int(tcd_class, elem_ptr, "get_Rarity");
+
+        // Skip entries with no meaningful data
+        if speed <= 0 && stamina <= 0 && rank_score <= 0 { continue; }
+
+        entries.push(format!(
+            r#"{{"idx":{},"card_id":{},"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"rank_score":{},"rank":{},"scenario_id":{},"fans":{},"rarity":{}}}"#,
+            i, card_id, speed, stamina, power, guts, wiz, rank_score, rank, scenario_id, fans, rarity
+        ));
     }
-    
+
     if entries.is_empty() {
-        // Approach 2: Try to find SingleModeHistoryInfo class directly
-        let hist_class = find_class_by_short_name(image, "SingleModeHistoryInfo");
-        if !hist_class.is_null() {
-            return format!(r#"{{"found_class":true,"note":"class_found_but_no_instances","method":"try_getter_on_WDM"}}"#);
-        }
-        return format!(r#"{{"error":"no_history_data","hint":"殿堂_data_not_accessible_via_IL2CPP"}}"#);
+        return r#"{"error":"no_valid_entries"}"#.to_string();
     }
-    
+
+    ura_log(2, &format!("/hall: {} valid entries", entries.len()));
     format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
 }
 
-// ★ v3.19.0: /ranking - Read current ranking screen data
-// When the user is viewing a ranking/sprint screen, data is in IL2CPP memory
+/// /ranking - Ranking data is server-side (not in local IL2CPP memory)
+/// Verified: Sprint class doesn't exist (search=0 results), ranking fetched from game server API
 unsafe fn read_ranking_data() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-    
-    let mut found_classes: Vec<String> = Vec::new();
-    let mut entries = Vec::new();
-    
-    // Strategy 1: Try to find ranking-related classes by name
-    let candidate_classes = [
-        "SingleModeSprintInfo",
-        "SingleModeRankingInfo", 
-        "SingleModeRatingInfo",
-        "SprintRankingInfo",
-        "EventRankingInfo",
-        "TrainingResultRankingInfo",
-        "CharaEvaluationInfo",
-        "SingleModeResultInfo",
-        "HomeCharaRatingInfo",
-        "SingleModeCharaRatingInfo",
-    ];
-    
-    for class_name in &candidate_classes {
-        let cls = find_class_by_short_name(image, class_name);
-        if !cls.is_null() {
-            found_classes.push(class_name.to_string());
-            ura_log(2, &format!("/ranking: found class {}", class_name));
-        }
-    }
-    
-    // Strategy 2: Try to get ranking data from WorkDataManager
-    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
-    if !wdm_class.is_null() {
-        let wdm_inst = get_singleton(wdm_class);
-        if !wdm_inst.is_null() {
-            // Try various getter methods that might return ranking data
-            for method in &[
-                "get_SingleModeSprintInfoArray",
-                "get_SprintInfoArray", 
-                "get_RankingInfoArray",
-                "get_RatingInfoArray",
-                "get_TrainingResultArray",
-                "get_SingleModeResultArray",
-                "get_CharaRatingInfoArray",
-                "get_SprintRankingArray",
-            ] {
-                let arr = call_getter_on_instance(wdm_class, wdm_inst, method);
-                if arr.is_null() { continue; }
-                let ab = arr as *const u8;
-                let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
-                if al == 0 || al > 10000 { continue; }
-                
-                ura_log(2, &format!("/ranking: {} returned {} entries", method, al));
-                
-                // Read entries - try to extract meaningful data
-                for i in 0..std::cmp::min(al, 100) {
-                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
-                    if ep.is_null() { continue; }
-                    let b = ep as *const u8;
-                    
-                    // Try to find the evaluation score by scanning offsets
-                    // We're looking for a value in the range 30000-200000 (typical 評価点)
-                    // Read multiple int32 positions and identify likely score fields
-                    let mut fields = Vec::new();
-                    for offset in (0x10..0x80).step_by(4) {
-                        let val = std::ptr::read_unaligned::<i32>(b.add(offset) as *const i32);
-                        if val > 10000 && val < 300000 {
-                            fields.push(format!(r#""0x{:02x}":{}"#, offset, val));
-                        }
-                    }
-                    
-                    if !fields.is_empty() {
-                        entries.push(format!(r#"{{"idx":{},"fields":{{{}}}}}"#, i, fields.join(",")));
-                    }
-                }
-                if !entries.is_empty() { break; }
-            }
-        }
-    }
-    
-    // Strategy 3: Try to find ranking data from scene objects
-    if entries.is_empty() {
-        for scene_class in &["RatingScene", "RankingScene", "SprintScene", "SingleModeResultScene"] {
-            let cls = find_class_by_short_name(image, scene_class);
-            if !cls.is_null() {
-                found_classes.push(format!("{} (scene)", scene_class));
-                // Try to get instance and read data
-                let inst = get_singleton(cls);
-                if !inst.is_null() {
-                    // Try common array getters
-                    for arr_method in &["get_RankingArray", "get_InfoArray", "get_ResultArray", "get_DataArray"] {
-                        let arr = call_getter_on_instance(cls, inst, arr_method);
-                        if arr.is_null() { continue; }
-                        let ab = arr as *const u8;
-                        let al = std::ptr::read_unaligned::<usize>(ab.add(0x18) as *const usize);
-                        if al == 0 || al > 10000 { continue; }
-                        
-                        for i in 0..std::cmp::min(al, 100) {
-                            let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(0x20 + i * 8) as *const *mut c_void);
-                            if ep.is_null() { continue; }
-                            let b = ep as *const u8;
-                            
-                            let mut fields = Vec::new();
-                            for offset in (0x10..0x80).step_by(4) {
-                                let val = std::ptr::read_unaligned::<i32>(b.add(offset) as *const i32);
-                                if val > 10000 && val < 300000 {
-                                    fields.push(format!(r#""0x{:02x}":{}"#, offset, val));
-                                }
-                            }
-                            
-                            if !fields.is_empty() {
-                                entries.push(format!(r#"{{"idx":{},"fields":{{{}}}}}"#, i, fields.join(",")));
-                            }
-                        }
-                        if !entries.is_empty() { break; }
-                    }
-                }
-            }
-        }
-    }
-    
-    // Build result
-    let classes_json = if found_classes.is_empty() {
-        "[]".to_string()
-    } else {
-        let items: Vec<String> = found_classes.iter().map(|c| format!(r#""{}""#, c)).collect();
-        format!("[{}]", items.join(","))
-    };
-    
-    if entries.is_empty() {
-        format!(r#"{{"found_classes":{},"entries":[],"hint":"open_ranking_screen_first"}}"#, classes_json)
-    } else {
-        format!(r#"{{"found_classes":{},"count":{},"entries":[{}]}}"#, classes_json, entries.len(), entries.join(","))
-    }
+    r#"{"error":"server_side_data","hint":"ランキング data is fetched from game server, not stored locally"}"#.to_string()
 }
