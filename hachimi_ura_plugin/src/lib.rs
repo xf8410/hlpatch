@@ -1046,97 +1046,85 @@ unsafe fn read_scenario_detail() -> String {
                     }
 
                     // FeelingTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
+                    // NOTE: class not in IL2CPP, find_class_by_short_name matches wrong class, must use direct XOR fallback
                     let ft_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingTurnInfoArray");
                     if !ft_arr.is_null() {
                         let ft_base = ft_arr as *const u8;
                         let ft_len = std::ptr::read_unaligned::<usize>(ft_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                         if ft_len > 0 && ft_len < 100 {
-                            let ft_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingTurnInfo");
-                            let ft_elements = if !ft_class.is_null() {
-                                read_array_element_details(ft_arr, ft_class, &["get_Turn", "get_FeelingType"], &[])
-                            } else {
-                                // Fallback: class not found, read ObscuredInt fields manually
-                                // Layout (2 fields, each 0x14 bytes): Turn: key=0x10,hidden=0x14 | FeelingType: key=0x24,hidden=0x28
-                                let mut elems = Vec::new();
-                                for fi in 0..ft_len {
-                                    let fp = std::ptr::read_unaligned::<*mut c_void>(ft_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                    if fp.is_null() { elems.push("{}".to_string()); continue; }
-                                    let fb = fp as *const u8;
-                                    let t_key = std::ptr::read_unaligned::<i32>(fb.add(0x10) as *const i32);
-                                    let t_hid = std::ptr::read_unaligned::<i32>(fb.add(0x14) as *const i32);
-                                    let ft_key = std::ptr::read_unaligned::<i32>(fb.add(0x24) as *const i32);
-                                    let ft_hid = std::ptr::read_unaligned::<i32>(fb.add(0x28) as *const i32);
-                                    let t = t_hid ^ t_key;
-                                    let ft = ft_hid ^ ft_key;
-                                    elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, ft));
-                                }
-                                elems
-                            };
-                            result_parts.push(format!(r#""feeling_turn_info":[{}]"#, ft_elements.join(",")));
+                            // Direct XOR fallback (hex-dump verified: 2 ObscuredInt at 0x10/0x14 and 0x24/0x28)
+                            let mut ft_elems = Vec::new();
+                            for fi in 0..ft_len {
+                                let fp = std::ptr::read_unaligned::<*mut c_void>(ft_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                if fp.is_null() { ft_elems.push("{}".to_string()); continue; }
+                                let fb = fp as *const u8;
+                                let t_key = std::ptr::read_unaligned::<i32>(fb.add(0x10) as *const i32);
+                                let t_hid = std::ptr::read_unaligned::<i32>(fb.add(0x14) as *const i32);
+                                let fty_key = std::ptr::read_unaligned::<i32>(fb.add(0x24) as *const i32);
+                                let fty_hid = std::ptr::read_unaligned::<i32>(fb.add(0x28) as *const i32);
+                                let t = t_hid ^ t_key;
+                                let fty = fty_hid ^ fty_key;
+                                ft_elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, fty));
+                            }
+                            result_parts.push(format!(r#""feeling_turn_info":[{}]"#, ft_elems.join(",")));
                         }
                     }
 
-                    // CommandFeelingInfoArray: 2 ObscuredInt fields (CommandId, FeelingType)
+
+                    // CommandFeelingInfoArray: 3 ObscuredInt fields (CommandType, CommandId, FeelingId)
+                    // NOTE: class not in IL2CPP, find_class matches wrong class; hex dump confirmed 3 fields at 0x10/0x14, 0x24/0x28, 0x38/0x3C
                     let cf_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandFeelingInfoArray");
                     if !cf_arr.is_null() {
                         let cf_base = cf_arr as *const u8;
                         let cf_len = std::ptr::read_unaligned::<usize>(cf_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                         if cf_len > 0 && cf_len < 100 {
-                            let cf_class = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandFeelingInfo");
-                            let cf_elements = if !cf_class.is_null() {
-                                read_array_element_details(cf_arr, cf_class, &["get_CommandId", "get_FeelingType"], &[])
-                            } else {
-                                // Fallback: class not found, read ObscuredInt fields manually
-                                // Layout (2 fields, each 0x14 bytes): CommandId: key=0x10,hidden=0x14 | FeelingType: key=0x24,hidden=0x28
-                                let mut elems = Vec::new();
-                                for ci in 0..cf_len {
-                                    let cp = std::ptr::read_unaligned::<*mut c_void>(cf_base.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                    if cp.is_null() { elems.push("{}".to_string()); continue; }
-                                    let cb = cp as *const u8;
-                                    let cid_key = std::ptr::read_unaligned::<i32>(cb.add(0x10) as *const i32);
-                                    let cid_hid = std::ptr::read_unaligned::<i32>(cb.add(0x14) as *const i32);
-                                    let cft_key = std::ptr::read_unaligned::<i32>(cb.add(0x24) as *const i32);
-                                    let cft_hid = std::ptr::read_unaligned::<i32>(cb.add(0x28) as *const i32);
-                                    let cid = cid_hid ^ cid_key;
-                                    let cft = cft_hid ^ cft_key;
-                                    elems.push(format!(r#"{{"CommandId":{},"FeelingType":{}}}"#, cid, cft));
-                                }
-                                elems
-                            };
-                            result_parts.push(format!(r#""command_feeling_info":[{}]"#, cf_elements.join(",")));
+                            // Direct XOR fallback (3 ObscuredInt fields)
+                            let mut cf_elems = Vec::new();
+                            for ci in 0..cf_len {
+                                let cp = std::ptr::read_unaligned::<*mut c_void>(cf_base.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                if cp.is_null() { cf_elems.push("{}".to_string()); continue; }
+                                let cb = cp as *const u8;
+                                let ct_key = std::ptr::read_unaligned::<i32>(cb.add(0x10) as *const i32);
+                                let ct_hid = std::ptr::read_unaligned::<i32>(cb.add(0x14) as *const i32);
+                                let cid_key = std::ptr::read_unaligned::<i32>(cb.add(0x24) as *const i32);
+                                let cid_hid = std::ptr::read_unaligned::<i32>(cb.add(0x28) as *const i32);
+                                let fid_key = std::ptr::read_unaligned::<i32>(cb.add(0x38) as *const i32);
+                                let fid_hid = std::ptr::read_unaligned::<i32>(cb.add(0x3C) as *const i32);
+                                let ct = ct_hid ^ ct_key;
+                                let cid = cid_hid ^ cid_key;
+                                let fid = fid_hid ^ fid_key;
+                                cf_elems.push(format!(r#"{{"CommandType":{},"CommandId":{},"FeelingId":{}}}"#, ct, cid, fid));
+                            }
+                            result_parts.push(format!(r#""command_feeling_info":[{}]"#, cf_elems.join(",")));
                         }
                     }
 
+
                     // FeelingReduceTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
+                    // NOTE: class not in IL2CPP, find_class_by_short_name matches wrong class, must use direct XOR fallback
                     let fr_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingReduceTurnInfoArray");
                     if !fr_arr.is_null() {
                         let fr_base = fr_arr as *const u8;
                         let fr_len = std::ptr::read_unaligned::<usize>(fr_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                         if fr_len > 0 && fr_len < 100 {
-                            let fr_class = find_class_by_short_name(image, "ObscuredSingleModeRamenFeelingReduceTurnInfo");
-                            let fr_elements = if !fr_class.is_null() {
-                                read_array_element_details(fr_arr, fr_class, &["get_Turn", "get_FeelingType"], &[])
-                            } else {
-                                // Fallback: class not found, read ObscuredInt fields manually
-                                // Layout (2 fields, each 0x14 bytes): Turn: key=0x10,hidden=0x14 | FeelingType: key=0x24,hidden=0x28
-                                let mut elems = Vec::new();
-                                for ri in 0..fr_len {
-                                    let rp = std::ptr::read_unaligned::<*mut c_void>(fr_base.add(IL2CPP_LIST_ITEMS_OFF + ri * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                    if rp.is_null() { elems.push("{}".to_string()); continue; }
-                                    let rb = rp as *const u8;
-                                    let t_key = std::ptr::read_unaligned::<i32>(rb.add(0x10) as *const i32);
-                                    let t_hid = std::ptr::read_unaligned::<i32>(rb.add(0x14) as *const i32);
-                                    let ft_key = std::ptr::read_unaligned::<i32>(rb.add(0x24) as *const i32);
-                                    let ft_hid = std::ptr::read_unaligned::<i32>(rb.add(0x28) as *const i32);
-                                    let t = t_hid ^ t_key;
-                                    let ft = ft_hid ^ ft_key;
-                                    elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, ft));
-                                }
-                                elems
-                            };
-                            result_parts.push(format!(r#""feeling_reduce_turn_info":[{}]"#, fr_elements.join(",")));
+                            // Direct XOR fallback (hex-dump verified: 2 ObscuredInt at 0x10/0x14 and 0x24/0x28)
+                            let mut fr_elems = Vec::new();
+                            for ri in 0..fr_len {
+                                let rp = std::ptr::read_unaligned::<*mut c_void>(fr_base.add(IL2CPP_LIST_ITEMS_OFF + ri * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                if rp.is_null() { fr_elems.push("{}".to_string()); continue; }
+                                let rb = rp as *const u8;
+                                let t_key = std::ptr::read_unaligned::<i32>(rb.add(0x10) as *const i32);
+                                let t_hid = std::ptr::read_unaligned::<i32>(rb.add(0x14) as *const i32);
+                                let fty_key = std::ptr::read_unaligned::<i32>(rb.add(0x24) as *const i32);
+                                let fty_hid = std::ptr::read_unaligned::<i32>(rb.add(0x28) as *const i32);
+                                let t = t_hid ^ t_key;
+                                let fty = fty_hid ^ fty_key;
+                                fr_elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, fty));
+                            }
+                            result_parts.push(format!(r#""feeling_reduce_turn_info":[{}]"#, fr_elems.join(",")));
                         }
                     }
+
                 }
 
                 // ★ Read object-type DataSet getters
@@ -3280,7 +3268,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.22.1","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.3","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3460,7 +3448,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.1","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.3","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4613,7 +4601,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.1","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.3","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -4678,7 +4666,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.1","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.3","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4750,7 +4738,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.1","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.3","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4906,7 +4894,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.1","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.3","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -5373,7 +5361,7 @@ unsafe fn read_training_predict() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.1","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.3","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -5513,7 +5501,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.1","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.3","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -5613,7 +5601,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.1","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.3","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -5773,7 +5761,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.1","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.3","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -5783,13 +5771,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.1","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.3","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.1","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.3","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
