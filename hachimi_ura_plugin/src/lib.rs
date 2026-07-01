@@ -3339,7 +3339,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.19.2","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.20.0","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3409,7 +3409,13 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { debug_params_inc_dec() }
     } else if path == "/debug/breeders" {
         unsafe { debug_breeders_team() }
+
+    } else if path == "/events" {
+        read_events_data()
+    } else if path == "/tables" {
+        read_mdb_tables()
     } else if path == "/carddb" {
+
         read_carddb()
     } else if path == "/skilldata" {
         read_skilldata()
@@ -4323,6 +4329,154 @@ fn find_mdb_path() -> Option<String> {
 
 fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
+}
+
+
+/// /tables - List all tables in MasterDB for discovery
+fn read_mdb_tables() -> String {
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
+    };
+
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
+    };
+
+    // List all tables with row counts for event-related ones
+    let tables: Vec<String> = match conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%single_mode%' ORDER BY name"
+    ) {
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            let name: String = row.get::<_, String>(0).unwrap_or_default();
+            // Get row count for context
+            let count: i32 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM "{}"", name), [], |r| r.get(0)
+            ).unwrap_or(0);
+            Ok(format!(r#"{{"name":"{}","rows":{}}}"#, name, count))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
+        Err(e) => return format!(r#"{{"error":"table_list_failed","detail":"{}"}}"#, e),
+    };
+
+    // Also get event-related tables
+    let event_tables: Vec<String> = match conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%event%' OR name LIKE '%story%' OR name LIKE '%choice%' OR name LIKE '%gain%' OR name LIKE '%condition%') ORDER BY name"
+    ) {
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            let name: String = row.get::<_, String>(0).unwrap_or_default();
+            let count: i32 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM "{}"", name), [], |r| r.get(0)
+            ).unwrap_or(0);
+            Ok(format!(r#"{{"name":"{}","rows":{}}}"#, name, count))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
+        Err(_) => Vec::new(),
+    };
+
+    drop(conn);
+
+    format!(
+        r#"{{"ok":true,"single_mode_tables":{},"event_tables":{}}}"#,
+        tables.join(","), event_tables.join(","),
+    )
+}
+
+/// /events - Read event data from MasterDB
+/// Supports: ?card_id=XXX (filter by support_card_id)
+fn read_events_data() -> String {
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
+    };
+
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
+    };
+
+    // 1. Read single_mode_story_data (event metadata)
+    let stories: Vec<String> = match conn.prepare(
+        "SELECT id, story_id, short_story_id, card_id, card_chara_id, support_card_id, support_chara_id, show_progress1, show_progress2, show_progress3, show_clear, show_succession, ending_type, race_event_flag, event_category FROM single_mode_story_data ORDER BY id"
+    ) {
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            Ok(format!(
+                r#"{{"id":{},"story_id":{},"short_story_id":{},"card_id":{},"card_chara_id":{},"support_card_id":{},"support_chara_id":{},"show_progress1":{},"show_progress2":{},"show_progress3":{},"show_clear":{},"show_succession":{},"ending_type":{},"race_event_flag":{},"event_category":{}}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                row.get::<_, i32>(1).unwrap_or(0),
+                row.get::<_, i32>(2).unwrap_or(0),
+                row.get::<_, i32>(3).unwrap_or(0),
+                row.get::<_, i32>(4).unwrap_or(0),
+                row.get::<_, i32>(5).unwrap_or(0),
+                row.get::<_, i32>(6).unwrap_or(0),
+                row.get::<_, i32>(7).unwrap_or(0),
+                row.get::<_, i32>(8).unwrap_or(0),
+                row.get::<_, i32>(9).unwrap_or(0),
+                row.get::<_, i32>(10).unwrap_or(0),
+                row.get::<_, i32>(11).unwrap_or(0),
+                row.get::<_, i32>(12).unwrap_or(0),
+                row.get::<_, i32>(13).unwrap_or(0),
+                row.get::<_, i32>(14).unwrap_or(0),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
+        Err(e) => return format!(r#"{{"error":"story_query_failed","detail":"{}"}}"#, e),
+    };
+
+    // 2. Read single_mode_event_choice_reward (choice rewards)
+    let choices: Vec<String> = match conn.prepare(
+        "SELECT id, disp_type, effect_value_type0, effect_value_type1, effect_value_type2 FROM single_mode_event_choice_reward ORDER BY id"
+    ) {
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            Ok(format!(
+                r#"{{"id":{},"disp_type":{},"evt0":{},"evt1":{},"evt2":{}}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                row.get::<_, i32>(1).unwrap_or(0),
+                row.get::<_, i32>(2).unwrap_or(0),
+                row.get::<_, i32>(3).unwrap_or(0),
+                row.get::<_, i32>(4).unwrap_or(0),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
+        Err(e) => return format!(r#"{{"error":"choice_query_failed","detail":"{}"}}"#, e),
+    };
+
+    // 3. Read event_choice_reward_gain_param (actual stat gains - decrypted from ObscuredInt)
+    let gains: Vec<String> = match conn.prepare(
+        "SELECT id, display_id, effect_value0, effect_value1, effect_value2 FROM event_choice_reward_gain_param ORDER BY id"
+    ) {
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            Ok(format!(
+                r#"{{"id":{},"display_id":{},"ev0":{},"ev1":{},"ev2":{}}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                row.get::<_, i32>(1).unwrap_or(0),
+                row.get::<_, i32>(2).unwrap_or(0),
+                row.get::<_, i32>(3).unwrap_or(0),
+                row.get::<_, i32>(4).unwrap_or(0),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
+        Err(e) => return format!(r#"{{"error":"gain_query_failed","detail":"{}"}}"#, e),
+    };
+
+    // 4. Read event titles from text_data
+    // Category 45 = single mode story title (guessed, verified via /tables)
+    let titles: Vec<String> = match conn.prepare(
+        "SELECT "index", text FROM text_data WHERE category=45 ORDER BY "index""
+    ) {
+        Ok(mut stmt) => stmt.query_map([], |row| {
+            let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
+            Ok(format!(r#"{{"id":{},"title":"{}"}}"#,
+                row.get::<_, i32>(0).unwrap_or(0),
+                json_escape(&text),
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect(),
+        Err(_) => Vec::new(),
+    };
+
+    drop(conn);
+
+    format!(
+        r#"{{"ok":true,"version":"3.19.2","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        stories.len(), choices.len(), gains.len(), titles.len(),
+        stories.join(","), choices.join(","), gains.join(","), titles.join(","),
+    )
 }
 
 /// /carddb - Read support card data from MasterDB via rusqlite
