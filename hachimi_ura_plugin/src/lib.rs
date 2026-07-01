@@ -933,44 +933,68 @@ unsafe fn read_scenario_detail() -> String {
 
                     // Read ActiveEffectArray (Ramen current buffs)
                     // Element: ObscuredSingleModeRamenActiveEffectInfo
-                    // ObscuredInt getters: EffectCategory, EffectId, EffectValue
-                    let ae_class = find_class_by_short_name(image, "ObscuredSingleModeRamenActiveEffectInfo");
-                    if !ae_class.is_null() {
-                        let ae_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_ActiveEffectArray");
-                        if !ae_arr.is_null() {
-                            let ae_base = ae_arr as *const u8;
-                            let ae_len = std::ptr::read_unaligned::<usize>(ae_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-                            if ae_len > 0 && ae_len < 100 {
-                                let mut effects = Vec::new();
-                                for i in 0..ae_len {
-                                    let ep = std::ptr::read_unaligned::<*mut c_void>(ae_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                    if ep.is_null() { continue; }
+                    // ObscuredInt fields: EffectCategory, EffectId, EffectValue
+                    let ae_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_ActiveEffectArray");
+                    if !ae_arr.is_null() {
+                        let ae_base = ae_arr as *const u8;
+                        let ae_len = std::ptr::read_unaligned::<usize>(ae_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                        if ae_len > 0 && ae_len < 100 {
+                            let ae_class = find_class_by_short_name(image, "ObscuredSingleModeRamenActiveEffectInfo");
+                            let mut effects = Vec::new();
+                            for i in 0..ae_len {
+                                let ep = std::ptr::read_unaligned::<*mut c_void>(ae_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                if ep.is_null() { continue; }
+                                if !ae_class.is_null() {
                                     let cat = call_getter_obscured_int(ae_class, ep, "get_EffectCategory");
                                     let eid = call_getter_obscured_int(ae_class, ep, "get_EffectId");
                                     let val = call_getter_obscured_int(ae_class, ep, "get_EffectValue");
-                                    effects.push(format!(
-                                        r#"{{"EffectCategory":{},"EffectId":{},"EffectValue":{}}}"#,
-                                        cat, eid, val
-                                    ));
+                                    effects.push(format!(r#"{{"EffectCategory":{},"EffectId":{},"EffectValue":{}}}"#, cat, eid, val));
+                                } else {
+                                    // Fallback: class not found in IL2CPP, read ObscuredInt fields manually
+                                    // Layout (3 ObscuredInt fields, each 0x14 bytes, like CommandInfo):
+                                    // EffectCategory: key=0x10, hidden=0x14
+                                    // EffectId:       key=0x24, hidden=0x28
+                                    // EffectValue:    key=0x38, hidden=0x3C
+                                    let eb = ep as *const u8;
+                                    let cat_key = std::ptr::read_unaligned::<i32>(eb.add(0x10) as *const i32);
+                                    let cat_hid = std::ptr::read_unaligned::<i32>(eb.add(0x14) as *const i32);
+                                    let eid_key = std::ptr::read_unaligned::<i32>(eb.add(0x24) as *const i32);
+                                    let eid_hid = std::ptr::read_unaligned::<i32>(eb.add(0x28) as *const i32);
+                                    let val_key = std::ptr::read_unaligned::<i32>(eb.add(0x38) as *const i32);
+                                    let val_hid = std::ptr::read_unaligned::<i32>(eb.add(0x3C) as *const i32);
+                                    let cat = cat_hid ^ cat_key;
+                                    let eid = eid_hid ^ eid_key;
+                                    let val = val_hid ^ val_key;
+                                    effects.push(format!(r#"{{"EffectCategory":{},"EffectId":{},"EffectValue":{}}}"#, cat, eid, val));
                                 }
-                                result_parts.push(format!(r#""active_effects":[{}]"#, effects.join(",")));
                             }
+                            result_parts.push(format!(r#""active_effects":[{}]"#, effects.join(",")));
                         }
                     }
 
                     // Read UrafEffectInfo (Ramen uraf effect)
                     // Class: ObscuredSingleModeRamenUrafEffectInfo
-                    // ObscuredInt getters: UrafEffectType, UrafEffectState
-                    let uraf_class = find_class_by_short_name(image, "ObscuredSingleModeRamenUrafEffectInfo");
-                    if !uraf_class.is_null() {
-                        let uraf_obj = call_getter_on_instance(dataset_class, dataset_obj, "get_UrafEffectInfo");
-                        if !uraf_obj.is_null() {
+                    // ObscuredInt fields: UrafEffectType, UrafEffectState
+                    let uraf_obj = call_getter_on_instance(dataset_class, dataset_obj, "get_UrafEffectInfo");
+                    if !uraf_obj.is_null() {
+                        let uraf_class = find_class_by_short_name(image, "ObscuredSingleModeRamenUrafEffectInfo");
+                        if !uraf_class.is_null() {
                             let ut = call_getter_obscured_int(uraf_class, uraf_obj, "get_UrafEffectType");
                             let us = call_getter_obscured_int(uraf_class, uraf_obj, "get_UrafEffectState");
-                            result_parts.push(format!(
-                                r#""uraf_effect":{{"UrafEffectType":{},"UrafEffectState":{}}}"#,
-                                ut, us
-                            ));
+                            result_parts.push(format!(r#""uraf_effect":{{"UrafEffectType":{},"UrafEffectState":{}}}"#, ut, us));
+                        } else {
+                            // Fallback: class not found in IL2CPP, read ObscuredInt fields manually
+                            // Layout (2 ObscuredInt fields, each 0x14 bytes):
+                            // UrafEffectType:  key=0x10, hidden=0x14
+                            // UrafEffectState: key=0x24, hidden=0x28
+                            let ub = uraf_obj as *const u8;
+                            let ut_key = std::ptr::read_unaligned::<i32>(ub.add(0x10) as *const i32);
+                            let ut_hid = std::ptr::read_unaligned::<i32>(ub.add(0x14) as *const i32);
+                            let us_key = std::ptr::read_unaligned::<i32>(ub.add(0x24) as *const i32);
+                            let us_hid = std::ptr::read_unaligned::<i32>(ub.add(0x28) as *const i32);
+                            let ut = ut_hid ^ ut_key;
+                            let us = us_hid ^ us_key;
+                            result_parts.push(format!(r#""uraf_effect":{{"UrafEffectType":{},"UrafEffectState":{}}}"#, ut, us));
                         }
                     }
 
@@ -2671,28 +2695,57 @@ unsafe fn read_summary_inner() -> String {
                         let ae_len2 = std::ptr::read_unaligned::<usize>(ae_base2.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                         if ae_len2 > 0 && ae_len2 < 100 {
                             let ae_cls2 = find_class_by_short_name(image, "ObscuredSingleModeRamenActiveEffectInfo");
-                            if !ae_cls2.is_null() {
-                                let mut ae_elems2 = Vec::new();
-                                for ai2 in 0..ae_len2 {
-                                    let ae_ptr2 = std::ptr::read_unaligned::<*mut c_void>(ae_base2.add(IL2CPP_LIST_ITEMS_OFF + ai2 * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                    if ae_ptr2.is_null() { continue; }
+                            let mut ae_elems2 = Vec::new();
+                            for ai2 in 0..ae_len2 {
+                                let ae_ptr2 = std::ptr::read_unaligned::<*mut c_void>(ae_base2.add(IL2CPP_LIST_ITEMS_OFF + ai2 * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                if ae_ptr2.is_null() { continue; }
+                                if !ae_cls2.is_null() {
                                     let cat2 = call_getter_obscured_int(ae_cls2, ae_ptr2, "get_EffectCategory");
                                     let eid2 = call_getter_obscured_int(ae_cls2, ae_ptr2, "get_EffectId");
                                     let val2 = call_getter_obscured_int(ae_cls2, ae_ptr2, "get_EffectValue");
                                     ae_elems2.push(format!(r#"{{"category":{},"id":{},"value":{}}}"#, cat2, eid2, val2));
+                                } else {
+                                    // Fallback: class not found in IL2CPP, read ObscuredInt fields manually
+                                    // Layout (3 ObscuredInt fields, each 0x14 bytes):
+                                    // EffectCategory: key=0x10, hidden=0x14
+                                    // EffectId:       key=0x24, hidden=0x28
+                                    // EffectValue:    key=0x38, hidden=0x3C
+                                    let eb2 = ae_ptr2 as *const u8;
+                                    let cat2_key = std::ptr::read_unaligned::<i32>(eb2.add(0x10) as *const i32);
+                                    let cat2_hid = std::ptr::read_unaligned::<i32>(eb2.add(0x14) as *const i32);
+                                    let eid2_key = std::ptr::read_unaligned::<i32>(eb2.add(0x24) as *const i32);
+                                    let eid2_hid = std::ptr::read_unaligned::<i32>(eb2.add(0x28) as *const i32);
+                                    let val2_key = std::ptr::read_unaligned::<i32>(eb2.add(0x38) as *const i32);
+                                    let val2_hid = std::ptr::read_unaligned::<i32>(eb2.add(0x3C) as *const i32);
+                                    let cat2 = cat2_hid ^ cat2_key;
+                                    let eid2 = eid2_hid ^ eid2_key;
+                                    let val2 = val2_hid ^ val2_key;
+                                    ae_elems2.push(format!(r#"{{"category":{},"id":{},"value":{}}}"#, cat2, eid2, val2));
                                 }
-                                ramen_active_effects_raw_json = ae_elems2.join(",");
                             }
+                            ramen_active_effects_raw_json = ae_elems2.join(",");
                         }
                     }
 
                     // ★ UrafEffectInfo pre-read (Ramen裏風) for buffs generation
-                    let uraf_cls2 = find_class_by_short_name(image, "ObscuredSingleModeRamenUrafEffectInfo");
-                    if !uraf_cls2.is_null() {
-                        let uraf_obj2 = call_getter_on_instance(rds_cls2, rds_obj2, "get_UrafEffectInfo");
-                        if !uraf_obj2.is_null() {
+                    let uraf_obj2 = call_getter_on_instance(rds_cls2, rds_obj2, "get_UrafEffectInfo");
+                    if !uraf_obj2.is_null() {
+                        let uraf_cls2 = find_class_by_short_name(image, "ObscuredSingleModeRamenUrafEffectInfo");
+                        if !uraf_cls2.is_null() {
                             ramen_uraf_type = call_getter_obscured_int(uraf_cls2, uraf_obj2, "get_UrafEffectType");
                             ramen_uraf_state = call_getter_obscured_int(uraf_cls2, uraf_obj2, "get_UrafEffectState");
+                        } else {
+                            // Fallback: class not found in IL2CPP, read ObscuredInt fields manually
+                            // Layout (2 ObscuredInt fields, each 0x14 bytes):
+                            // UrafEffectType:  key=0x10, hidden=0x14
+                            // UrafEffectState: key=0x24, hidden=0x28
+                            let ub2 = uraf_obj2 as *const u8;
+                            let ut2_key = std::ptr::read_unaligned::<i32>(ub2.add(0x10) as *const i32);
+                            let ut2_hid = std::ptr::read_unaligned::<i32>(ub2.add(0x14) as *const i32);
+                            let us2_key = std::ptr::read_unaligned::<i32>(ub2.add(0x24) as *const i32);
+                            let us2_hid = std::ptr::read_unaligned::<i32>(ub2.add(0x28) as *const i32);
+                            ramen_uraf_type = ut2_hid ^ ut2_key;
+                            ramen_uraf_state = us2_hid ^ us2_key;
                         }
                     }
                     ura_log(3, &format!("★ Ramen summary fields: cppt={} sfn={} rt={} fi=[{}] regions=[{}] effects=[{}] uraf={}/{}",
