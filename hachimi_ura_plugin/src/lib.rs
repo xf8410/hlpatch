@@ -3268,7 +3268,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.22.3","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.4","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3448,7 +3448,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.3","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.4","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4601,7 +4601,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.3","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.4","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -4666,7 +4666,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.3","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.4","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4738,7 +4738,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.3","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.4","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4894,7 +4894,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.3","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.4","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -4982,9 +4982,9 @@ unsafe fn read_hall_data() -> String {
         let wiz = call_getter_int(tcd_class, elem_ptr, "get_Wiz");
         let rank_score = call_getter_int(tcd_class, elem_ptr, "get_RankScore");
         let rank = call_getter_int(tcd_class, elem_ptr, "get_Rank");
-        let scenario_id = call_getter_int(tcd_class, elem_ptr, "get_ScenarioId");
+        let scenario_id = call_getter_obscured_int(tcd_class, elem_ptr, "get_ScenarioId");
         let fans = call_getter_int(tcd_class, elem_ptr, "get_Fans");
-        let rarity = call_getter_int(tcd_class, elem_ptr, "get_Rarity");
+        let rarity = call_getter_obscured_int(tcd_class, elem_ptr, "get_Rarity");
 
         // Skip entries with no meaningful data
         if speed <= 0 && stamina <= 0 && rank_score <= 0 { continue; }
@@ -5260,26 +5260,19 @@ unsafe fn read_training_predict() -> String {
                             let tei_base = tei_arr as *const u8;
                             let tei_len = std::ptr::read_unaligned::<usize>(tei_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                             if tei_len > 0 && tei_len < 50 {
-                                let tei_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenTrainingExecInfo");
                                 for ti in 0..tei_len {
                                     let te_ptr = std::ptr::read_unaligned::<*mut c_void>(tei_base.add(IL2CPP_LIST_ITEMS_OFF + ti * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                     if te_ptr.is_null() { continue; }
-                                    if !tei_cls.is_null() {
-                                        let bcmd = call_getter_obscured_int(tei_cls, te_ptr, "get_BaseCommandId");
-                                        let ecnt = call_getter_obscured_int(tei_cls, te_ptr, "get_ExecCount");
-                                        exec_json.push(format!(r#"{{"base_command_id":{},"exec_count":{}}}"#, bcmd, ecnt));
-                                    } else {
-                                        // Fallback: class not found, read ObscuredInt fields manually
-                                        // Layout (2 fields, each 0x14 bytes): BaseCommandId: key=0x10,hidden=0x14 | ExecCount: key=0x24,hidden=0x28
-                                        let tb = te_ptr as *const u8;
-                                        let bcmd_key = std::ptr::read_unaligned::<i32>(tb.add(0x10) as *const i32);
-                                        let bcmd_hid = std::ptr::read_unaligned::<i32>(tb.add(0x14) as *const i32);
-                                        let ecnt_key = std::ptr::read_unaligned::<i32>(tb.add(0x24) as *const i32);
-                                        let ecnt_hid = std::ptr::read_unaligned::<i32>(tb.add(0x28) as *const i32);
-                                        let bcmd = bcmd_hid ^ bcmd_key;
-                                        let ecnt = ecnt_hid ^ ecnt_key;
-                                        exec_json.push(format!(r#"{{"base_command_id":{},"exec_count":{}}}"#, bcmd, ecnt));
-                                    }
+                                    // Skip class lookup — find_class_by_short_name matches wrong class
+                                    // Read ObscuredInt fields directly: BaseCommandId: key=0x10,hidden=0x14 | ExecCount: key=0x24,hidden=0x28
+                                    let tb = te_ptr as *const u8;
+                                    let bcmd_key = std::ptr::read_unaligned::<i32>(tb.add(0x10) as *const i32);
+                                    let bcmd_hid = std::ptr::read_unaligned::<i32>(tb.add(0x14) as *const i32);
+                                    let ecnt_key = std::ptr::read_unaligned::<i32>(tb.add(0x24) as *const i32);
+                                    let ecnt_hid = std::ptr::read_unaligned::<i32>(tb.add(0x28) as *const i32);
+                                    let bcmd = bcmd_hid ^ bcmd_key;
+                                    let ecnt = ecnt_hid ^ ecnt_key;
+                                    exec_json.push(format!(r#"{{"base_command_id":{},"exec_count":{}}}"#, bcmd, ecnt));
                                 }
                             }
                         }
@@ -5291,26 +5284,19 @@ unsafe fn read_training_predict() -> String {
                             let fi_base = fi_arr as *const u8;
                             let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                             if fi_len > 0 && fi_len < 100 {
-                                let fi_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenFeeling");
                                 for fi in 0..fi_len {
                                     let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                     if fe_ptr.is_null() { continue; }
-                                    if !fi_cls.is_null() {
-                                        let fidx = call_getter_obscured_int(fi_cls, fe_ptr, "get_FeelingIndex");
-                                        let fid = call_getter_obscured_int(fi_cls, fe_ptr, "get_FeelingId");
-                                        feeling_json.push(format!(r#"{{"index":{},"feeling_id":{}}}"#, fidx, fid));
-                                    } else {
-                                        // Fallback: class not found, read ObscuredInt fields manually
-                                        // Layout (2 fields, each 0x14 bytes): FeelingIndex: key=0x10,hidden=0x14 | FeelingId: key=0x24,hidden=0x28
-                                        let fb = fe_ptr as *const u8;
-                                        let fidx_key = std::ptr::read_unaligned::<i32>(fb.add(0x10) as *const i32);
-                                        let fidx_hid = std::ptr::read_unaligned::<i32>(fb.add(0x14) as *const i32);
-                                        let fid_key = std::ptr::read_unaligned::<i32>(fb.add(0x24) as *const i32);
-                                        let fid_hid = std::ptr::read_unaligned::<i32>(fb.add(0x28) as *const i32);
-                                        let fidx = fidx_hid ^ fidx_key;
-                                        let fid = fid_hid ^ fid_key;
-                                        feeling_json.push(format!(r#"{{"index":{},"feeling_id":{}}}"#, fidx, fid));
-                                    }
+                                    // Skip class lookup — find_class_by_short_name matches wrong class
+                                    // Read ObscuredInt fields directly: FeelingIndex: key=0x10,hidden=0x14 | FeelingId: key=0x24,hidden=0x28
+                                    let fb = fe_ptr as *const u8;
+                                    let fidx_key = std::ptr::read_unaligned::<i32>(fb.add(0x10) as *const i32);
+                                    let fidx_hid = std::ptr::read_unaligned::<i32>(fb.add(0x14) as *const i32);
+                                    let fid_key = std::ptr::read_unaligned::<i32>(fb.add(0x24) as *const i32);
+                                    let fid_hid = std::ptr::read_unaligned::<i32>(fb.add(0x28) as *const i32);
+                                    let fidx = fidx_hid ^ fidx_key;
+                                    let fid = fid_hid ^ fid_key;
+                                    feeling_json.push(format!(r#"{{"index":{},"feeling_id":{}}}"#, fidx, fid));
                                 }
                             }
                         }
@@ -5322,30 +5308,22 @@ unsafe fn read_training_predict() -> String {
                             let cf_base = cf_arr as *const u8;
                             let cf_len = std::ptr::read_unaligned::<usize>(cf_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                             if cf_len > 0 && cf_len < 100 {
-                                let cf_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandFeelingInfo");
                                 for ci in 0..cf_len {
                                     let ce_ptr = std::ptr::read_unaligned::<*mut c_void>(cf_base.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                     if ce_ptr.is_null() { continue; }
-                                    if !cf_cls.is_null() {
-                                        let cct = call_getter_obscured_int(cf_cls, ce_ptr, "get_CommandType");
-                                        let ccid = call_getter_obscured_int(cf_cls, ce_ptr, "get_CommandId");
-                                        let cfi = call_getter_obscured_int(cf_cls, ce_ptr, "get_FeelingId");
-                                        cmd_feeling_json.push(format!(r#"{{"command_type":{},"command_id":{},"feeling_id":{}}}"#, cct, ccid, cfi));
-                                    } else {
-                                        // Fallback: class not found, read ObscuredInt fields manually
-                                        // Layout (3 fields, each 0x14 bytes): CommandType: key=0x10,hidden=0x14 | CommandId: key=0x24,hidden=0x28 | FeelingId: key=0x38,hidden=0x3C
-                                        let cb = ce_ptr as *const u8;
-                                        let cct_key = std::ptr::read_unaligned::<i32>(cb.add(0x10) as *const i32);
-                                        let cct_hid = std::ptr::read_unaligned::<i32>(cb.add(0x14) as *const i32);
-                                        let ccid_key = std::ptr::read_unaligned::<i32>(cb.add(0x24) as *const i32);
-                                        let ccid_hid = std::ptr::read_unaligned::<i32>(cb.add(0x28) as *const i32);
-                                        let cfi_key = std::ptr::read_unaligned::<i32>(cb.add(0x38) as *const i32);
-                                        let cfi_hid = std::ptr::read_unaligned::<i32>(cb.add(0x3C) as *const i32);
-                                        let cct = cct_hid ^ cct_key;
-                                        let ccid = ccid_hid ^ ccid_key;
-                                        let cfi = cfi_hid ^ cfi_key;
-                                        cmd_feeling_json.push(format!(r#"{{"command_type":{},"command_id":{},"feeling_id":{}}}"#, cct, ccid, cfi));
-                                    }
+                                    // Skip class lookup — find_class_by_short_name matches wrong class
+                                    // Read ObscuredInt fields directly: CommandType: key=0x10,hidden=0x14 | CommandId: key=0x24,hidden=0x28 | FeelingId: key=0x38,hidden=0x3C
+                                    let cb = ce_ptr as *const u8;
+                                    let cct_key = std::ptr::read_unaligned::<i32>(cb.add(0x10) as *const i32);
+                                    let cct_hid = std::ptr::read_unaligned::<i32>(cb.add(0x14) as *const i32);
+                                    let ccid_key = std::ptr::read_unaligned::<i32>(cb.add(0x24) as *const i32);
+                                    let ccid_hid = std::ptr::read_unaligned::<i32>(cb.add(0x28) as *const i32);
+                                    let cfi_key = std::ptr::read_unaligned::<i32>(cb.add(0x38) as *const i32);
+                                    let cfi_hid = std::ptr::read_unaligned::<i32>(cb.add(0x3C) as *const i32);
+                                    let cct = cct_hid ^ cct_key;
+                                    let ccid = ccid_hid ^ ccid_key;
+                                    let cfi = cfi_hid ^ cfi_key;
+                                    cmd_feeling_json.push(format!(r#"{{"command_type":{},"command_id":{},"feeling_id":{}}}"#, cct, ccid, cfi));
                                 }
                             }
                         }
@@ -5361,7 +5339,7 @@ unsafe fn read_training_predict() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.3","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.4","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -5501,7 +5479,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.3","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.4","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -5601,7 +5579,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.3","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.4","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -5761,7 +5739,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.3","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.4","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -5771,13 +5749,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.3","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.4","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.3","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.4","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
