@@ -999,14 +999,20 @@ unsafe fn read_scenario_detail() -> String {
                             let fi_elements = if !fi_class.is_null() {
                                 read_array_element_details(fi_arr, fi_class, &["get_FeelingType", "get_FeelingValue"], &[])
                             } else {
-                                // Fallback: read raw Int32 pairs from memory (FeelingType at 0x10, FeelingValue at 0x14)
+                                // Fallback: read ObscuredInt fields from FeelingInfo struct
+                                // Layout: FeelingType(key=0x10,hidden=0x14), FeelingValue(key=0x24,hidden=0x28)
+                                // Each ObscuredInt occupies 0x14 bytes (5×i32: key+hidden+inited+fake+fakeActive)
                                 let mut elems = Vec::new();
                                 for fi in 0..fi_len {
                                     let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                     if fe_ptr.is_null() { elems.push("{}".to_string()); continue; }
                                     let fe_bytes = fe_ptr as *const u8;
-                                    let ft = std::ptr::read_unaligned::<i32>(fe_bytes.add(IL2CPP_OBSCURED_INT_KEY_OFF) as *const i32);
-                                    let fv = std::ptr::read_unaligned::<i32>(fe_bytes.add(IL2CPP_OBSCURED_INT_HIDDEN_OFF) as *const i32);
+                                    let ft_key = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x10) as *const i32);
+                                    let ft_hid = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x14) as *const i32);
+                                    let fv_key = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x24) as *const i32);
+                                    let fv_hid = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x28) as *const i32);
+                                    let ft = ft_hid ^ ft_key;
+                                    let fv = fv_hid ^ fv_key;
                                     elems.push(format!(r#"{{"FeelingType":{},"FeelingValue":{}}}"#, ft, fv));
                                 }
                                 elems
@@ -2632,14 +2638,18 @@ unsafe fn read_summary_inner() -> String {
                             let fi_elems = if !fi_cls.is_null() {
                                 read_array_element_details(fi_arr, fi_cls, &["get_FeelingType", "get_FeelingValue"], &[])
                             } else {
-                                // Fallback: read raw Int32 pairs from memory
+                                // Fallback: read ObscuredInt fields from FeelingInfo struct (same layout as /scenario)
                                 let mut elems = Vec::new();
                                 for fi in 0..fi_len {
                                     let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                     if fe_ptr.is_null() { elems.push("{}".to_string()); continue; }
                                     let fe_bytes = fe_ptr as *const u8;
-                                    let ft = std::ptr::read_unaligned::<i32>(fe_bytes.add(IL2CPP_OBSCURED_INT_KEY_OFF) as *const i32);
-                                    let fv = std::ptr::read_unaligned::<i32>(fe_bytes.add(IL2CPP_OBSCURED_INT_HIDDEN_OFF) as *const i32);
+                                    let ft_key = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x10) as *const i32);
+                                    let ft_hid = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x14) as *const i32);
+                                    let fv_key = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x24) as *const i32);
+                                    let fv_hid = std::ptr::read_unaligned::<i32>(fe_bytes.add(0x28) as *const i32);
+                                    let ft = ft_hid ^ ft_key;
+                                    let fv = fv_hid ^ fv_key;
                                     elems.push(format!(r#"{{"FeelingType":{},"FeelingValue":{}}}"#, ft, fv));
                                 }
                                 elems
@@ -2648,20 +2658,10 @@ unsafe fn read_summary_inner() -> String {
                         }
                     }
 
-                    // SelectedRegionIdArray
-                    let sr_arr = call_getter_on_instance(rds_cls2, rds_obj2, "get_SelectedRegionIdArray");
-                    if !sr_arr.is_null() {
-                        let sr_base = sr_arr as *const u8;
-                        let sr_len = std::ptr::read_unaligned::<usize>(sr_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-                        if sr_len > 0 && sr_len < 50 {
-                            let mut sr_ids = Vec::new();
-                            for si in 0..sr_len {
-                                // Int32 array: each element is 4 bytes
-                                let sr_val = std::ptr::read_unaligned::<i32>(sr_base.add(IL2CPP_LIST_ITEMS_OFF + si * 4) as *const i32);
-                                sr_ids.push(sr_val.to_string());
-                            }
-                            ramen_selected_region_ids_json = sr_ids.join(",");
-                        }
+                    // SelectedRegionIdArray: ObscuredInt[] (not plain int32)
+                    let region_ids = read_obscured_int_array(rds_cls2, rds_obj2, "get_SelectedRegionIdArray");
+                    if !region_ids.is_empty() {
+                        ramen_selected_region_ids_json = region_ids.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
                     }
 
                     // ActiveEffectArray (raw data for training)
