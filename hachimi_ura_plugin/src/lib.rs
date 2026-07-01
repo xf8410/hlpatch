@@ -5644,6 +5644,11 @@ unsafe fn read_event_recommend() -> String {
                 matching_events.join(","),
                 choice_rewards.join(",")
             )
+        } else {
+            format!(
+                r#"{{"version":"3.21.0","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                card_id, sid
+            )
         }
     } else {
         format!(
