@@ -1045,7 +1045,7 @@ unsafe fn read_scenario_detail() -> String {
                         }
                     }
 
-                    // FeelingTurnInfoArray: turn-based Kakushimi schedule
+                    // FeelingTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
                     let ft_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingTurnInfoArray");
                     if !ft_arr.is_null() {
                         let ft_base = ft_arr as *const u8;
@@ -1055,13 +1055,28 @@ unsafe fn read_scenario_detail() -> String {
                             let ft_elements = if !ft_class.is_null() {
                                 read_array_element_details(ft_arr, ft_class, &["get_Turn", "get_FeelingType"], &[])
                             } else {
-                                (0..ft_len).map(|_| "{}".to_string()).collect()
+                                // Fallback: class not found, read ObscuredInt fields manually
+                                // Layout (2 fields, each 0x14 bytes): Turn: key=0x10,hidden=0x14 | FeelingType: key=0x24,hidden=0x28
+                                let mut elems = Vec::new();
+                                for fi in 0..ft_len {
+                                    let fp = std::ptr::read_unaligned::<*mut c_void>(ft_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                    if fp.is_null() { elems.push("{}".to_string()); continue; }
+                                    let fb = fp as *const u8;
+                                    let t_key = std::ptr::read_unaligned::<i32>(fb.add(0x10) as *const i32);
+                                    let t_hid = std::ptr::read_unaligned::<i32>(fb.add(0x14) as *const i32);
+                                    let ft_key = std::ptr::read_unaligned::<i32>(fb.add(0x24) as *const i32);
+                                    let ft_hid = std::ptr::read_unaligned::<i32>(fb.add(0x28) as *const i32);
+                                    let t = t_hid ^ t_key;
+                                    let ft = ft_hid ^ ft_key;
+                                    elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, ft));
+                                }
+                                elems
                             };
                             result_parts.push(format!(r#""feeling_turn_info":[{}]"#, ft_elements.join(",")));
                         }
                     }
 
-                    // CommandFeelingInfoArray: which trainings get Kakushimi boost
+                    // CommandFeelingInfoArray: 2 ObscuredInt fields (CommandId, FeelingType)
                     let cf_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandFeelingInfoArray");
                     if !cf_arr.is_null() {
                         let cf_base = cf_arr as *const u8;
@@ -1071,13 +1086,28 @@ unsafe fn read_scenario_detail() -> String {
                             let cf_elements = if !cf_class.is_null() {
                                 read_array_element_details(cf_arr, cf_class, &["get_CommandId", "get_FeelingType"], &[])
                             } else {
-                                (0..cf_len).map(|_| "{}".to_string()).collect()
+                                // Fallback: class not found, read ObscuredInt fields manually
+                                // Layout (2 fields, each 0x14 bytes): CommandId: key=0x10,hidden=0x14 | FeelingType: key=0x24,hidden=0x28
+                                let mut elems = Vec::new();
+                                for ci in 0..cf_len {
+                                    let cp = std::ptr::read_unaligned::<*mut c_void>(cf_base.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                    if cp.is_null() { elems.push("{}".to_string()); continue; }
+                                    let cb = cp as *const u8;
+                                    let cid_key = std::ptr::read_unaligned::<i32>(cb.add(0x10) as *const i32);
+                                    let cid_hid = std::ptr::read_unaligned::<i32>(cb.add(0x14) as *const i32);
+                                    let cft_key = std::ptr::read_unaligned::<i32>(cb.add(0x24) as *const i32);
+                                    let cft_hid = std::ptr::read_unaligned::<i32>(cb.add(0x28) as *const i32);
+                                    let cid = cid_hid ^ cid_key;
+                                    let cft = cft_hid ^ cft_key;
+                                    elems.push(format!(r#"{{"CommandId":{},"FeelingType":{}}}"#, cid, cft));
+                                }
+                                elems
                             };
                             result_parts.push(format!(r#""command_feeling_info":[{}]"#, cf_elements.join(",")));
                         }
                     }
 
-                    // FeelingReduceTurnInfoArray: Kakushimi duration reduction
+                    // FeelingReduceTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
                     let fr_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingReduceTurnInfoArray");
                     if !fr_arr.is_null() {
                         let fr_base = fr_arr as *const u8;
@@ -1087,7 +1117,22 @@ unsafe fn read_scenario_detail() -> String {
                             let fr_elements = if !fr_class.is_null() {
                                 read_array_element_details(fr_arr, fr_class, &["get_Turn", "get_FeelingType"], &[])
                             } else {
-                                (0..fr_len).map(|_| "{}".to_string()).collect()
+                                // Fallback: class not found, read ObscuredInt fields manually
+                                // Layout (2 fields, each 0x14 bytes): Turn: key=0x10,hidden=0x14 | FeelingType: key=0x24,hidden=0x28
+                                let mut elems = Vec::new();
+                                for ri in 0..fr_len {
+                                    let rp = std::ptr::read_unaligned::<*mut c_void>(fr_base.add(IL2CPP_LIST_ITEMS_OFF + ri * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                    if rp.is_null() { elems.push("{}".to_string()); continue; }
+                                    let rb = rp as *const u8;
+                                    let t_key = std::ptr::read_unaligned::<i32>(rb.add(0x10) as *const i32);
+                                    let t_hid = std::ptr::read_unaligned::<i32>(rb.add(0x14) as *const i32);
+                                    let ft_key = std::ptr::read_unaligned::<i32>(rb.add(0x24) as *const i32);
+                                    let ft_hid = std::ptr::read_unaligned::<i32>(rb.add(0x28) as *const i32);
+                                    let t = t_hid ^ t_key;
+                                    let ft = ft_hid ^ ft_key;
+                                    elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, ft));
+                                }
+                                elems
                             };
                             result_parts.push(format!(r#""feeling_reduce_turn_info":[{}]"#, fr_elements.join(",")));
                         }
@@ -5220,6 +5265,7 @@ unsafe fn read_training_predict() -> String {
                         let rt = call_getter_obscured_int(ramen_ds_class, ramen_ds_obj, "get_RecommendType");
 
                         // TrainingExecInfoArray — per-command training count
+                        // 2 ObscuredInt fields: BaseCommandId, ExecCount
                         let mut exec_json: Vec<String> = Vec::new();
                         let tei_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_TrainingExecInfoArray");
                         if !tei_arr.is_null() {
@@ -5227,19 +5273,30 @@ unsafe fn read_training_predict() -> String {
                             let tei_len = std::ptr::read_unaligned::<usize>(tei_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                             if tei_len > 0 && tei_len < 50 {
                                 let tei_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenTrainingExecInfo");
-                                if !tei_cls.is_null() {
-                                    for ti in 0..tei_len {
-                                        let te_ptr = std::ptr::read_unaligned::<*mut c_void>(tei_base.add(IL2CPP_LIST_ITEMS_OFF + ti * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                        if te_ptr.is_null() { continue; }
+                                for ti in 0..tei_len {
+                                    let te_ptr = std::ptr::read_unaligned::<*mut c_void>(tei_base.add(IL2CPP_LIST_ITEMS_OFF + ti * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                    if te_ptr.is_null() { continue; }
+                                    if !tei_cls.is_null() {
                                         let bcmd = call_getter_obscured_int(tei_cls, te_ptr, "get_BaseCommandId");
                                         let ecnt = call_getter_obscured_int(tei_cls, te_ptr, "get_ExecCount");
+                                        exec_json.push(format!(r#"{{"base_command_id":{},"exec_count":{}}}"#, bcmd, ecnt));
+                                    } else {
+                                        // Fallback: class not found, read ObscuredInt fields manually
+                                        // Layout (2 fields, each 0x14 bytes): BaseCommandId: key=0x10,hidden=0x14 | ExecCount: key=0x24,hidden=0x28
+                                        let tb = te_ptr as *const u8;
+                                        let bcmd_key = std::ptr::read_unaligned::<i32>(tb.add(0x10) as *const i32);
+                                        let bcmd_hid = std::ptr::read_unaligned::<i32>(tb.add(0x14) as *const i32);
+                                        let ecnt_key = std::ptr::read_unaligned::<i32>(tb.add(0x24) as *const i32);
+                                        let ecnt_hid = std::ptr::read_unaligned::<i32>(tb.add(0x28) as *const i32);
+                                        let bcmd = bcmd_hid ^ bcmd_key;
+                                        let ecnt = ecnt_hid ^ ecnt_key;
                                         exec_json.push(format!(r#"{{"base_command_id":{},"exec_count":{}}}"#, bcmd, ecnt));
                                     }
                                 }
                             }
                         }
 
-                        // FeelingInfoArray
+                        // FeelingInfoArray — 2 ObscuredInt fields: FeelingIndex, FeelingId
                         let mut feeling_json: Vec<String> = Vec::new();
                         let fi_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_FeelingInfoArray");
                         if !fi_arr.is_null() {
@@ -5247,19 +5304,30 @@ unsafe fn read_training_predict() -> String {
                             let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                             if fi_len > 0 && fi_len < 100 {
                                 let fi_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenFeeling");
-                                if !fi_cls.is_null() {
-                                    for fi in 0..fi_len {
-                                        let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                        if fe_ptr.is_null() { continue; }
+                                for fi in 0..fi_len {
+                                    let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                    if fe_ptr.is_null() { continue; }
+                                    if !fi_cls.is_null() {
                                         let fidx = call_getter_obscured_int(fi_cls, fe_ptr, "get_FeelingIndex");
                                         let fid = call_getter_obscured_int(fi_cls, fe_ptr, "get_FeelingId");
+                                        feeling_json.push(format!(r#"{{"index":{},"feeling_id":{}}}"#, fidx, fid));
+                                    } else {
+                                        // Fallback: class not found, read ObscuredInt fields manually
+                                        // Layout (2 fields, each 0x14 bytes): FeelingIndex: key=0x10,hidden=0x14 | FeelingId: key=0x24,hidden=0x28
+                                        let fb = fe_ptr as *const u8;
+                                        let fidx_key = std::ptr::read_unaligned::<i32>(fb.add(0x10) as *const i32);
+                                        let fidx_hid = std::ptr::read_unaligned::<i32>(fb.add(0x14) as *const i32);
+                                        let fid_key = std::ptr::read_unaligned::<i32>(fb.add(0x24) as *const i32);
+                                        let fid_hid = std::ptr::read_unaligned::<i32>(fb.add(0x28) as *const i32);
+                                        let fidx = fidx_hid ^ fidx_key;
+                                        let fid = fid_hid ^ fid_key;
                                         feeling_json.push(format!(r#"{{"index":{},"feeling_id":{}}}"#, fidx, fid));
                                     }
                                 }
                             }
                         }
 
-                        // CommandFeelingInfoArray — which command gives which feeling
+                        // CommandFeelingInfoArray — 3 ObscuredInt fields: CommandType, CommandId, FeelingId
                         let mut cmd_feeling_json: Vec<String> = Vec::new();
                         let cf_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_CommandFeelingInfoArray");
                         if !cf_arr.is_null() {
@@ -5267,13 +5335,27 @@ unsafe fn read_training_predict() -> String {
                             let cf_len = std::ptr::read_unaligned::<usize>(cf_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                             if cf_len > 0 && cf_len < 100 {
                                 let cf_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandFeelingInfo");
-                                if !cf_cls.is_null() {
-                                    for ci in 0..cf_len {
-                                        let ce_ptr = std::ptr::read_unaligned::<*mut c_void>(cf_base.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                        if ce_ptr.is_null() { continue; }
+                                for ci in 0..cf_len {
+                                    let ce_ptr = std::ptr::read_unaligned::<*mut c_void>(cf_base.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                    if ce_ptr.is_null() { continue; }
+                                    if !cf_cls.is_null() {
                                         let cct = call_getter_obscured_int(cf_cls, ce_ptr, "get_CommandType");
                                         let ccid = call_getter_obscured_int(cf_cls, ce_ptr, "get_CommandId");
                                         let cfi = call_getter_obscured_int(cf_cls, ce_ptr, "get_FeelingId");
+                                        cmd_feeling_json.push(format!(r#"{{"command_type":{},"command_id":{},"feeling_id":{}}}"#, cct, ccid, cfi));
+                                    } else {
+                                        // Fallback: class not found, read ObscuredInt fields manually
+                                        // Layout (3 fields, each 0x14 bytes): CommandType: key=0x10,hidden=0x14 | CommandId: key=0x24,hidden=0x28 | FeelingId: key=0x38,hidden=0x3C
+                                        let cb = ce_ptr as *const u8;
+                                        let cct_key = std::ptr::read_unaligned::<i32>(cb.add(0x10) as *const i32);
+                                        let cct_hid = std::ptr::read_unaligned::<i32>(cb.add(0x14) as *const i32);
+                                        let ccid_key = std::ptr::read_unaligned::<i32>(cb.add(0x24) as *const i32);
+                                        let ccid_hid = std::ptr::read_unaligned::<i32>(cb.add(0x28) as *const i32);
+                                        let cfi_key = std::ptr::read_unaligned::<i32>(cb.add(0x38) as *const i32);
+                                        let cfi_hid = std::ptr::read_unaligned::<i32>(cb.add(0x3C) as *const i32);
+                                        let cct = cct_hid ^ cct_key;
+                                        let ccid = ccid_hid ^ ccid_key;
+                                        let cfi = cfi_hid ^ cfi_key;
                                         cmd_feeling_json.push(format!(r#"{{"command_type":{},"command_id":{},"feeling_id":{}}}"#, cct, ccid, cfi));
                                     }
                                 }
