@@ -841,11 +841,11 @@ unsafe fn read_scenario_detail() -> String {
                                             .unwrap_or(-1)
                                     } else { -1 };
                                     let cmd_name = match cmd_id_val {
-                                        101 => "Speed", 102 => "Stamina", 103 => "Guts",
-                                        105 => "Power", 106 => "Wiz",
-                                        601 => "Speed", 602 => "Stamina", 603 => "Guts",
-                                        604 => "Power", 605 => "Wiz",
-                                        304 => "Kakushimi",
+                                        CMD_SPEED => "Speed", CMD_STAMINA => "Stamina", CMD_GUTS => "Guts",
+                                        CMD_POWER => "Power", CMD_WISDOM => "Wiz",
+                                        CMD_URA_SPEED => "Speed", CMD_URA_STAMINA => "Stamina", CMD_URA_GUTS => "Guts",
+                                        CMD_URA_POWER => "Power", CMD_URA_WISDOM => "Wiz",
+                                        CMD_KAKUSHIMI => "Kakushimi",
                                         _ => "Unknown"
                                     };
                                     if detail.ends_with('}') { detail.pop(); }
@@ -1939,6 +1939,85 @@ const STAT_EVAL_SCORE: [i32; 2301] = [
 ];
 
 const BASIC_FIVE_STATUS_LIMIT: [i32; 5] = [2300, 2200, 1800, 1400, 1400];
+// === AI Evaluation Named Constants ===
+// Vital evaluation piecewise: slopes and breakpoints
+const VITAL_EVAL_LOW_SLOPE: f64 = 2.0;     // vital ≤50: steep slope
+const VITAL_EVAL_MID_SLOPE: f64 = 1.5;     // vital 50-70: moderate slope
+const VITAL_EVAL_HIGH_SLOPE: f64 = 1.0;    // vital >70: flat slope
+const VITAL_EVAL_LOW_THRESH: i32 = 50;     // low→mid breakpoint
+const VITAL_EVAL_MID_THRESH: i32 = 70;     // mid→high breakpoint
+// Derived intercepts (precomputed to avoid recomputation)
+const VITAL_EVAL_MID_INTERCEPT: f64 = 100.0;   // VITAL_EVAL_LOW_SLOPE * VITAL_EVAL_LOW_THRESH = 2.0*50
+const VITAL_EVAL_HIGH_INTERCEPT: f64 = 130.0;  // 100.0 + 1.5*(70-50) = mid_intercept + mid_slope*(mid_thresh-low_thresh)
+
+// Vital factor: controls how much we value vitality
+const VITAL_FACTOR_BASE: f64 = 3.5;        // starting vital factor
+const VITAL_FACTOR_RANGE: f64 = 3.5;       // added over full game (base→7.0 at end)
+
+// Soft constraint: reserve multiplier for stat overflow penalty
+const RESERVE_MULTIPLIER: f64 = 40.0;
+const RESERVE_MIN: f64 = 0.1;             // avoid division by zero
+
+// URA event final bonus (stats gained from non-training events)
+const URA3_BONUS: i32 = 45;               // URA scenario 3rd event
+const URA_FINAL_EVENT_BONUS: i32 = 30;    // final event after training
+const URA_EVENT_BONUS: i32 = 20;          // URA1/URA2 event bonus
+
+// Training evaluation parameters
+const STATUS_WEIGHT: f64 = 6.0;           // per-stat weight (uniform for all 5)
+const SMALL_FAIL_VALUE: f64 = -150.0;     // minor failure penalty
+const BIG_FAIL_VALUE: f64 = -500.0;       // major failure (大失敗) penalty
+const PT_SCORE_RATE: f64 = 2.0;           // skill point → evaluation value rate
+const FAIL_RATE_TO_PROB: f64 = 0.01;      // convert percentage (0-100) to probability
+const BIG_FAIL_THRESHOLD: i32 = 20;       // fail_rate below this → no 大失敗
+
+// Shining (彩圈) and heads (相伴) bonus
+const SHINING_BONUS_PER: f64 = 200.0;     // expected value per 彩圈 partner
+const HEADS_BONUS_PER: f64 = 20.0;        // small bonus per extra partner
+
+// Rest/Outgoing vital gain
+const REST_VITAL_GAIN: i32 = 50;          // vital gained from rest
+const OUTGOING_VITAL_GAIN: i32 = 50;      // vital gained from outgoing
+
+// Motivation factor: scales training value by current mood
+// 1=絶不調, 2=不調, 3=普通, 4=好調, 5=絶好調
+const MOT_FACTOR_WORST: f64 = 0.6;        // motivation 1
+const MOT_FACTOR_BAD: f64 = 0.75;         // motivation 2
+const MOT_FACTOR_NORMAL: f64 = 0.9;       // motivation 3
+const MOT_FACTOR_GOOD: f64 = 1.0;         // motivation 4
+const MOT_FACTOR_BEST: f64 = 1.1;         // motivation 5
+
+// Outgoing motivation bonus (motivation level → value of raising it)
+const OUTGOING_BONUS_MOT1: f64 = 80.0;    // 絶不調→不調: urgent
+const OUTGOING_BONUS_MOT2: f64 = 50.0;    // 不調→普通: important
+const OUTGOING_BONUS_MOT3: f64 = 25.0;    // 普通→好調: moderate
+const OUTGOING_BONUS_MOT4: f64 = 10.0;    // 好調→絶好調: minor
+
+// Game scenario total turns
+const URA_TOTAL_TURNS: i32 = 78;           // URA scenario has 78 training turns
+const DEFAULT_TOTAL_TURNS: i32 = 72;       // Standard scenarios have 72 turns
+
+// Game CommandId constants (IL2CPP method identifiers)
+const CMD_SPEED: i32 = 101;
+const CMD_STAMINA: i32 = 102;
+const CMD_GUTS: i32 = 103;
+const CMD_POWER: i32 = 105;
+const CMD_WISDOM: i32 = 106;
+const CMD_URA_SPEED: i32 = 601;
+const CMD_URA_STAMINA: i32 = 602;
+const CMD_URA_GUTS: i32 = 603;
+const CMD_URA_POWER: i32 = 604;
+const CMD_URA_WISDOM: i32 = 605;
+const CMD_KAKUSHIMI: i32 = 304;
+
+// URA turn thresholds for max vital equivalent calculation
+const URA_LAST_TURN: i32 = 76;            // URA finals: no vital needed
+const URA_PRE_FINAL_TURN: i32 = 71;       // just before URA: minimal vital
+const URA_PRE_FINAL_VITAL: i32 = 10;      // vital needed at pre-final turn
+const URA_FINAL_VITAL: i32 = 30;          // vital needed at final training turn
+const URA_MAX_NON_RACE_TURNS: i32 = 6;    // max non-race turns before URA
+const URA_VITAL_PER_NON_RACE: i32 = 15;   // vital equivalent per non-race turn
+
 
 /// Compute current evaluation score from five stats (per-stat lookup then sum)
 /// 評価点 = STAT_EVAL_SCORE[speed] + STAT_EVAL_SCORE[stamina] + ... + STAT_EVAL_SCORE[wiz]
@@ -1961,38 +2040,37 @@ fn status_soft_function(x: f64, reserve: f64) -> f64 {
 }
 
 /// Vital evaluation: low vital is very valuable, high vital less so
-/// ≤50: 2.0x, 50-70: 1.5x, 70+: 1.0x
+/// ≤VITAL_EVAL_LOW_THRESH: steep, LOW_THRESH-MID_THRESH: moderate, >MID_THRESH: flat
 fn vital_evaluation(vital: i32, max_vital: i32) -> f64 {
     let v = if vital > max_vital { max_vital } else { vital };
-    if v <= 50 {
-        2.0 * v as f64
-    } else if v <= 70 {
-        1.5 * (v - 50) as f64 + 100.0  // 2.0 * 50 = 100
+    if v <= VITAL_EVAL_LOW_THRESH {
+        VITAL_EVAL_LOW_SLOPE * v as f64
+    } else if v <= VITAL_EVAL_MID_THRESH {
+        VITAL_EVAL_MID_SLOPE * (v - VITAL_EVAL_LOW_THRESH) as f64 + VITAL_EVAL_MID_INTERCEPT
     } else {
-        1.0 * (v - 70) as f64 + 130.0   // 100 + 1.5*20 = 130
+        VITAL_EVAL_HIGH_SLOPE * (v - VITAL_EVAL_MID_THRESH) as f64 + VITAL_EVAL_HIGH_INTERCEPT
     }
 }
 
 /// Calculate max vital equivalent for vital evaluation
 /// Late game: less vital needed (fewer turns remain)
 fn calculate_max_vital_eq(turn: i32, max_vital: i32) -> i32 {
-    if turn >= 76 { return 0; }
-    if turn > 71 { return 10; }
-    if turn == 71 { return 30; }
-    // Assume max 6 non-race turns before URA
-    let non_race_turns = std::cmp::min(6, 71 - turn);
-    let eq = 30 + 15 * non_race_turns;
+    if turn >= URA_LAST_TURN { return 0; }
+    if turn > URA_PRE_FINAL_TURN { return URA_PRE_FINAL_VITAL; }
+    if turn == URA_PRE_FINAL_TURN { return URA_FINAL_VITAL; }
+    let non_race_turns = std::cmp::min(URA_MAX_NON_RACE_TURNS, URA_PRE_FINAL_TURN - turn);
+    let eq = URA_FINAL_VITAL + URA_VITAL_PER_NON_RACE * non_race_turns;
     if eq > max_vital { max_vital } else { eq }
 }
 
 /// CommandId → training index (0=Speed, 1=Stamina, 2=Power, 3=Guts, 4=Wisdom)
 fn cmd_id_to_train_idx(cmd_id: i32) -> Option<usize> {
     match cmd_id {
-        101 => Some(0), // Speed
-        102 => Some(1), // Stamina
-        105 => Some(2), // Power
-        103 => Some(3), // Guts
-        106 => Some(4), // Wisdom
+        CMD_SPEED => Some(0),
+        CMD_STAMINA => Some(1),
+        CMD_POWER => Some(2),
+        CMD_GUTS => Some(3),
+        CMD_WISDOM => Some(4),
         _ => None,
     }
 }
@@ -2029,8 +2107,8 @@ fn evaluate_ai(
 ) -> AiResult {
     // Total turns per scenario
     let total_turn: i32 = match scenario_id {
-        1 => 78,  // URA
-        _ => 72,
+        1 => URA_TOTAL_TURNS,
+        _ => DEFAULT_TOTAL_TURNS,
     };
 
     let remain_turn = total_turn - turn - 1;
@@ -2042,22 +2120,22 @@ fn evaluate_ai(
     let total_stats = stats[0] + stats[1] + stats[2] + stats[3] + stats[4];
 
     // === Evaluation Parameters ===
-    let status_weights = [6.0, 6.0, 6.0, 6.0, 6.0];
-    let small_fail_value = -150.0;
-    let big_fail_value = -500.0;
-    let pt_score_rate = 2.0;
+    let status_weights = [STATUS_WEIGHT, STATUS_WEIGHT, STATUS_WEIGHT, STATUS_WEIGHT, STATUS_WEIGHT];
+    let small_fail_value = SMALL_FAIL_VALUE;
+    let big_fail_value = BIG_FAIL_VALUE;
+    let pt_score_rate = PT_SCORE_RATE;
 
     // Vital factor: increases from 3.5 to 7.0 as game progresses
-    let vital_factor = 3.5 + (turn as f64 / total_turn as f64) * 3.5;
+    let vital_factor = VITAL_FACTOR_BASE + (turn as f64 / total_turn as f64) * VITAL_FACTOR_RANGE;
 
     // Reserve for soft constraint: controls stat overflow penalty
-    let reserve = 40.0 * remain_turn as f64 * (1.0 - remain_turn as f64 / (total_turn as f64 * 2.0));
-    let reserve = if reserve > 0.1 { reserve } else { 0.1 }; // avoid div by zero
+    let reserve = RESERVE_MULTIPLIER * remain_turn as f64 * (1.0 - remain_turn as f64 / (total_turn as f64 * 2.0));
+    let reserve = if reserve > RESERVE_MIN { reserve } else { RESERVE_MIN };
 
     // URA final bonus (events that add stats after training)
-    let mut final_bonus = 45 + 30; // URA3 + final event
-    if remain_turn >= 1 { final_bonus += 20; } // URA2
-    if remain_turn >= 2 { final_bonus += 20; } // URA1
+    let mut final_bonus = URA3_BONUS + URA_FINAL_EVENT_BONUS;
+    if remain_turn >= 1 { final_bonus += URA_EVENT_BONUS; } // URA2
+    if remain_turn >= 2 { final_bonus += URA_EVENT_BONUS; } // URA1
 
     // Remaining space per stat
     let mut remain = [0.0f64; 5];
@@ -2076,11 +2154,11 @@ fn evaluate_ai(
     // === Evaluate each training ===
     for &(cmd_id, ref gains, skill_pt, vital_cost, fail_rate, is_enable, shining, heads) in trainings {
         let name = match cmd_id {
-            101 => "Speed", 102 => "Stamina", 103 => "Guts",
-            105 => "Power", 106 => "Wisdom",
-            601 => "Speed", 602 => "Stamina", 603 => "Guts",
-            604 => "Power", 605 => "Wisdom",
-            304 => "Kakushimi",
+            CMD_SPEED => "Speed", CMD_STAMINA => "Stamina", CMD_GUTS => "Guts",
+            CMD_POWER => "Power", CMD_WISDOM => "Wisdom",
+            CMD_URA_SPEED => "Speed", CMD_URA_STAMINA => "Stamina", CMD_URA_GUTS => "Guts",
+            CMD_URA_POWER => "Power", CMD_URA_WISDOM => "Wisdom",
+            CMD_KAKUSHIMI => "Kakushimi",
             _ => "Unknown",
         };
 
@@ -2104,11 +2182,11 @@ fn evaluate_ai(
         // Low motivation reduces effective training value; high motivation boosts it
         // mot_factor: 1=0.6, 2=0.75, 3=0.9, 4=1.0, 5=1.1
         let mot_factor = match motivation {
-            1 => 0.6,
-            2 => 0.75,
-            3 => 0.9,
-            4 => 1.0,
-            _ => 1.1,  // 5 = 絶好調
+            1 => MOT_FACTOR_WORST,
+            2 => MOT_FACTOR_BAD,
+            3 => MOT_FACTOR_NORMAL,
+            4 => MOT_FACTOR_GOOD,
+            _ => MOT_FACTOR_BEST,
         };
         value *= mot_factor;
 
@@ -2118,22 +2196,22 @@ fn evaluate_ai(
 
         // Failure penalty
         if fail_rate > 0 {
-            let big_fail_prob = if fail_rate < 20 { 0.0 } else { fail_rate as f64 };
-            let fail_value_avg = 0.01 * big_fail_prob * big_fail_value
-                               + (1.0 - 0.01 * big_fail_prob) * small_fail_value;
-            value = 0.01 * fail_rate as f64 * fail_value_avg
-                  + (1.0 - 0.01 * fail_rate as f64) * value;
+            let big_fail_prob = if fail_rate < BIG_FAIL_THRESHOLD { 0.0 } else { fail_rate as f64 };
+            let fail_value_avg = FAIL_RATE_TO_PROB * big_fail_prob * big_fail_value
+                               + (1.0 - FAIL_RATE_TO_PROB * big_fail_prob) * small_fail_value;
+            value = FAIL_RATE_TO_PROB * fail_rate as f64 * fail_value_avg
+                  + (1.0 - FAIL_RATE_TO_PROB * fail_rate as f64) * value;
         }
 
         // ★ v3.15.3: Shining (彩圈) bonus — friend/group card event expected value
         // Each 彩圈 partner gives a training event with extra stats + skill hint
         if shining > 0 {
-            let shining_bonus = 200.0 * shining as f64;  // ~200 per 彩圈 partner (stats + skill hint + friendship)
+            let shining_bonus = SHINING_BONUS_PER * shining as f64;
             value += shining_bonus;
         }
         // Heads bonus: more partners = faster relationship building
         if heads > 1 {
-            let heads_bonus = 20.0 * (heads - 1) as f64;  // small bonus for extra partners beyond first
+            let heads_bonus = HEADS_BONUS_PER * (heads - 1) as f64;
             value += heads_bonus;
         }
         train_values.push((name.to_string(), value));
@@ -2145,7 +2223,7 @@ fn evaluate_ai(
     }
 
     // === Evaluate Rest ===
-    let rest_vital_gain = 50;
+    let rest_vital_gain = REST_VITAL_GAIN;
     let vital_after_rest = std::cmp::min(max_vital_eq, vital + rest_vital_gain);
     let rest_value = vital_factor * (vital_evaluation(vital_after_rest, max_vital) - vital_before);
 
@@ -2159,13 +2237,13 @@ fn evaluate_ai(
     // Only recommend外出 when motivation is low (≤3 = 普通 or worse)
     // mot 1→2: big value (80), mot 2→3: medium (50), mot 3→4: small (25), mot 4→5: negligible (10)
     let outgoing_bonus = match motivation {
-        1 => 80.0,   // 絶不調 → 不調: urgent
-        2 => 50.0,   // 不調 → 普通: important
-        3 => 25.0,   // 普通 → 好調: moderate
-        4 => 10.0,   // 好調 → 絶好調: minor gain
-        _ => 0.0,    // already 絶好調
+        1 => OUTGOING_BONUS_MOT1,
+        2 => OUTGOING_BONUS_MOT2,
+        3 => OUTGOING_BONUS_MOT3,
+        4 => OUTGOING_BONUS_MOT4,
+        _ => 0.0,
     };
-    let outgoing_vital_gain = 50;
+    let outgoing_vital_gain = OUTGOING_VITAL_GAIN;
     let vital_after_outgoing = std::cmp::min(max_vital_eq, vital + outgoing_vital_gain);
     let outgoing_value = vital_factor * (vital_evaluation(vital_after_outgoing, max_vital) - vital_before)
                         + outgoing_bonus;
@@ -2628,11 +2706,11 @@ unsafe fn read_summary_inner() -> String {
                             call_getter_obscured_int(cmd_elem_class, ep, "get_CommandId")
                         } else { -1 };
                         let cname = match cid {
-                            101=>"Speed", 102=>"Stamina", 103=>"Guts",
-                            105=>"Power", 106=>"Wiz",
-                            601=>"Speed", 602=>"Stamina", 603=>"Guts",
-                            604=>"Power", 605=>"Wiz",
-                            304=>"Kakushimi",
+                            CMD_SPEED=>"Speed", CMD_STAMINA=>"Stamina", CMD_GUTS=>"Guts",
+                            CMD_POWER=>"Power", CMD_WISDOM=>"Wiz",
+                            CMD_URA_SPEED=>"Speed", CMD_URA_STAMINA=>"Stamina", CMD_URA_GUTS=>"Guts",
+                            CMD_URA_POWER=>"Power", CMD_URA_WISDOM=>"Wiz",
+                            CMD_KAKUSHIMI=>"Kakushimi",
                             301=>"Outing", 390=>"Rest", 401=>"Outing2",
                             701=>"Outing3", 801=>"Outing4", _=>"Unknown"
                         };
