@@ -2017,6 +2017,10 @@ const URA_PRE_FINAL_VITAL: i32 = 10;      // vital needed at pre-final turn
 const URA_FINAL_VITAL: i32 = 30;          // vital needed at final training turn
 const URA_MAX_NON_RACE_TURNS: i32 = 6;    // max non-race turns before URA
 const URA_VITAL_PER_NON_RACE: i32 = 15;   // vital equivalent per non-race turn
+const TEXT_DATA_CATEGORY_CHARA_NAME: i32 = 6;    // text_data.category=6: character name
+const TEXT_DATA_CATEGORY_RACE_NAME: i32 = 32;    // text_data.category=32: race name
+const TEXT_DATA_CATEGORY_STORY_TITLE: i32 = 45;  // text_data.category=45: single mode story title
+const TEXT_DATA_CATEGORY_SKILL_NAME: i32 = 47;   // text_data.category=47: skill name
 
 
 /// Compute current evaluation score from five stats (per-stat lookup then sum)
@@ -2394,7 +2398,7 @@ fn compute_skill_eval(skills: &[(i32, i32)]) -> (i32, i32, String) {
     
     // Also get skill names
     let mut name_map: std::collections::HashMap<i32, String> = std::collections::HashMap::new();
-    let _ = conn.prepare("SELECT id, text FROM text_data WHERE category=47").map(|mut stmt| {
+    let _ = conn.prepare(&format!("SELECT id, text FROM text_data WHERE category={}", TEXT_DATA_CATEGORY_SKILL_NAME)).map(|mut stmt| {
         let _ = stmt.query_map([], |row| {
             let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
             Ok((row.get::<_, i32>(0).unwrap_or(0), text))
@@ -4467,7 +4471,7 @@ fn read_events_data() -> String {
     // Category 45 = single mode story title (guessed, verified via /tables)
     // Use [index] instead of "index" to avoid Rust string escaping issues
     let titles: Vec<String> = match conn.prepare(
-        r#"SELECT [index], text FROM text_data WHERE category=45 ORDER BY [index]"#
+        &format!("SELECT [index], text FROM text_data WHERE category={} ORDER BY [index]", TEXT_DATA_CATEGORY_STORY_TITLE)
     ) {
         Ok(mut stmt) => stmt.query_map([], |row| {
             let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
@@ -4588,7 +4592,7 @@ fn read_skilldata() -> String {
 
     // Collect skill names (category=47)
     let names: Vec<String> = match conn.prepare(
-        "SELECT id, text FROM text_data WHERE category=47 ORDER BY id"
+        &format!("SELECT id, text FROM text_data WHERE category={} ORDER BY id", TEXT_DATA_CATEGORY_SKILL_NAME)
     ) {
         Ok(mut stmt) => stmt.query_map([], |row| {
             let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
@@ -4696,7 +4700,7 @@ fn read_saddles() -> String {
 
     // Collect race names (category=32 = race name in text_data)
     let race_names: Vec<String> = match conn.prepare(
-        "SELECT \"index\", text FROM text_data WHERE category=32 ORDER BY \"index\""
+        &format!("SELECT [index], text FROM text_data WHERE category={} ORDER BY [index]", TEXT_DATA_CATEGORY_RACE_NAME)
     ) {
         Ok(mut stmt) => stmt.query_map([], |row| {
             let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
@@ -4711,7 +4715,7 @@ fn read_saddles() -> String {
 
     // Collect chara names (category=6 = chara name in text_data)
     let chara_names: Vec<String> = match conn.prepare(
-        "SELECT \"index\", text FROM text_data WHERE category=6 ORDER BY \"index\""
+        &format!("SELECT [index], text FROM text_data WHERE category={} ORDER BY [index]", TEXT_DATA_CATEGORY_CHARA_NAME)
     ) {
         Ok(mut stmt) => stmt.query_map([], |row| {
             let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
