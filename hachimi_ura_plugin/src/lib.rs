@@ -4333,6 +4333,7 @@ fn json_escape(s: &str) -> String {
 
 
 /// /tables - List all tables in MasterDB for discovery
+/// /tables - List all tables in MasterDB for discovery
 fn read_mdb_tables() -> String {
     let mdb_path = match find_mdb_path() {
         Some(p) => p,
@@ -4344,40 +4345,47 @@ fn read_mdb_tables() -> String {
         Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
     };
 
-    // List all tables with row counts for event-related ones
-    let tables: Vec<String> = match conn.prepare(
+    // Collect table names first (can't query_row while stmt is active)
+    let single_mode_names: Vec<String> = match conn.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%single_mode%' ORDER BY name"
     ) {
         Ok(mut stmt) => stmt.query_map([], |row| {
-            let name: String = row.get::<_, String>(0).unwrap_or_default();
-            // Get row count for context
-            let count: i32 = conn.query_row(
-                &format!("SELECT COUNT(*) FROM "{}"", name), [], |r| r.get(0)
-            ).unwrap_or(0);
-            Ok(format!(r#"{{"name":"{}","rows":{}}}"#, name, count))
+            Ok(row.get::<_, String>(0).unwrap_or_default())
         }).unwrap().filter_map(|r| r.ok()).collect(),
         Err(e) => return format!(r#"{{"error":"table_list_failed","detail":"{}"}}"#, e),
     };
 
-    // Also get event-related tables
-    let event_tables: Vec<String> = match conn.prepare(
+    let event_names: Vec<String> = match conn.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%event%' OR name LIKE '%story%' OR name LIKE '%choice%' OR name LIKE '%gain%' OR name LIKE '%condition%') ORDER BY name"
     ) {
         Ok(mut stmt) => stmt.query_map([], |row| {
-            let name: String = row.get::<_, String>(0).unwrap_or_default();
-            let count: i32 = conn.query_row(
-                &format!("SELECT COUNT(*) FROM "{}"", name), [], |r| r.get(0)
-            ).unwrap_or(0);
-            Ok(format!(r#"{{"name":"{}","rows":{}}}"#, name, count))
+            Ok(row.get::<_, String>(0).unwrap_or_default())
         }).unwrap().filter_map(|r| r.ok()).collect(),
         Err(_) => Vec::new(),
     };
 
+    // Now get row counts separately (no active stmt borrowing conn)
+    let mut tables_json: Vec<String> = Vec::new();
+    for name in &single_mode_names {
+        let count: i32 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM [{}]", name), [], |r| r.get(0)
+        ).unwrap_or(0);
+        tables_json.push(format!(r#"{{"name":"{}","rows":{}}}"#, name, count));
+    }
+
+    let mut event_json: Vec<String> = Vec::new();
+    for name in &event_names {
+        let count: i32 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM [{}]", name), [], |r| r.get(0)
+        ).unwrap_or(0);
+        event_json.push(format!(r#"{{"name":"{}","rows":{}}}"#, name, count));
+    }
+
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"single_mode_tables":{},"event_tables":{}}}"#,
-        tables.join(","), event_tables.join(","),
+        r#"{{"ok":true,"single_mode_tables":[{}],"event_tables":[{}]}}"#,
+        tables_json.join(","), event_json.join(","),
     )
 }
 
@@ -4457,8 +4465,9 @@ fn read_events_data() -> String {
 
     // 4. Read event titles from text_data
     // Category 45 = single mode story title (guessed, verified via /tables)
+    // Use [index] instead of "index" to avoid Rust string escaping issues
     let titles: Vec<String> = match conn.prepare(
-        "SELECT "index", text FROM text_data WHERE category=45 ORDER BY "index""
+        r#"SELECT [index], text FROM text_data WHERE category=45 ORDER BY [index]"#
     ) {
         Ok(mut stmt) => stmt.query_map([], |row| {
             let text: String = row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default();
@@ -4473,13 +4482,12 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.19.2","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.20.0","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
 }
 
-/// /carddb - Read support card data from MasterDB via rusqlite
 fn read_carddb() -> String {
     let mdb_path = match find_mdb_path() {
         Some(p) => p,
