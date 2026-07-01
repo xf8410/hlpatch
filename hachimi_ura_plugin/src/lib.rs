@@ -5628,7 +5628,7 @@ unsafe fn read_event_recommend() -> String {
                         row.get::<_, i32>(2).unwrap_or(0),
                         row.get::<_, i32>(3).unwrap_or(0),
                         row.get::<_, i32>(4).unwrap_or(0),
-                    }))
+                    ))
                 }).unwrap().filter_map(|r| r.ok()).collect();
                 choice_rewards = rows;
             }
