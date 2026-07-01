@@ -1,4 +1,4 @@
-//! URA Plugin v3.19.2
+//! URA Plugin v3.21.0
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3362,7 +3362,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.20.0","endpoints":["/summary","/data","/scenario","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.21.0","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3444,6 +3444,14 @@ fn handle_http(mut stream: std::net::TcpStream) {
         read_skilldata()
     } else if path == "/hall" {
         unsafe { read_hall_data() }
+    } else if path == "/training/predict" {
+        unsafe { read_training_predict() }
+    } else if path == "/event/recommend" {
+        unsafe { read_event_recommend() }
+    } else if path == "/inherit/compat" {
+        unsafe { read_inherit_compat() }
+    } else if path == "/log/turn" {
+        unsafe { read_turn_log() }
     } else if path == "/ranking" {
         unsafe { read_ranking_data() }
     } else if path == "/saddles-dl" {
@@ -3485,7 +3493,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         };
         unsafe { enumerate_all_classes(search) }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/classes/search/keyword"]}}"#, path)
     };
 
     if path == "/saddles-dl" {
@@ -4911,4 +4919,735 @@ unsafe fn read_hall_data() -> String {
 /// Verified: Sprint class doesn't exist (search=0 results), ranking fetched from game server API
 unsafe fn read_ranking_data() -> String {
     r#"{"error":"server_side_data","hint":"ランキング data is fetched from game server, not stored locally"}"#.to_string()
+}
+
+// ============================================================
+// ★ v3.21.0: 4 new endpoints for training prediction, event recommendation,
+//   inheritance compatibility, and turn log
+// ============================================================
+
+/// /training/predict — Detailed training prediction with NPC partner breakdown
+/// Returns per-command: gains, partner details (support card vs NPC), buffs, failure risk
+/// Key data sources:
+///   - WorkSingleModeData -> get_HomeInfoData -> CommandInfoArray (training layout + partners)
+///   - WorkSingleModeCharaData -> CharaEffectBuffArray (active buffs)
+///   - WorkSingleModeScenarioRamenDataSet (ramen-specific data, scenario_id==14)
+unsafe fn read_training_predict() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    // 1. Get WDM -> SingleMode -> CharaData (standard path)
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    let spd = call_getter_int(chara_class, chara_obj, "get_Speed");
+    let sta = call_getter_int(chara_class, chara_obj, "get_Stamina");
+    let pow_ = call_getter_int(chara_class, chara_obj, "get_Power");
+    let gut = call_getter_int(chara_class, chara_obj, "get_Guts");
+    let wiz = call_getter_int(chara_class, chara_obj, "get_Wiz");
+    let vit = call_getter_int(chara_class, chara_obj, "get_Hp");
+    let mvit = call_getter_int(chara_class, chara_obj, "get_MaxHp");
+    let mot = call_getter_int(chara_class, chara_obj, "get_Motivation");
+    let spt = call_getter_obscured_int(chara_class, chara_obj, "get_SkillPoint");
+
+    // 2. Get HomeInfoData -> CommandInfoArray
+    let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
+    if home_info_obj.is_null() { return r#"{"error":"no_home_info"}"#.to_string(); }
+    let hi_class = find_class_by_short_name(image, "WorkSingleModeHomeInfoData");
+    if hi_class.is_null() { return r#"{"error":"no_home_info_class"}"#.to_string(); }
+
+    // CommandInfoArray is a public field at offset 0x10
+    let cmd_arr = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
+    if cmd_arr.is_null() { return r#"{"error":"no_cmd_arr"}"#.to_string(); }
+
+    let cmd_base = cmd_arr as *const u8;
+    let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if cmd_len == 0 || cmd_len > 100 {
+        return format!(r#"{{"error":"cmd_len_invalid","len":{}}}"#, cmd_len);
+    }
+
+    // 3. Read CharaEffectBuffArray for active buffs
+    // WorkSingleModeCharaData._charaEffectIdArray + EvaluationList -> CharaEffectBuff
+    let effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
+    let buffs_from_effects = effects_to_buffs_json(&effect_ids);
+
+    // Read CharaEffectBuff details from _evaluationList path
+    let mut buff_details: Vec<String> = Vec::new();
+    let eval_list = call_getter_on_instance(chara_class, chara_obj, "get_EvaluationList");
+    // Try CharaEffectBuff array from chara data
+    let ceb_class = find_class_by_short_name(image, "SingleModeCharaEffectBuff");
+    let ce_class = find_class_by_short_name(image, "SingleModeCharaEffect");
+    // Read chara_effect array (top-level effect list)
+    let effect_arr = call_getter_on_instance(chara_class, chara_obj, "get_CharaEffectIdArray");
+
+    // 4. Iterate commands
+    let cmd_elem_class = find_class_by_short_name(image, "SingleModeCommandInfoData");
+    let partner_class = find_class_by_short_name(image, "SingleModeTrainingPartnerEntity");
+    let etc_chara_class = find_class_by_short_name(image, "SingleModeTrainingPartnerEtcCharaEntity");
+    let params_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
+
+    let mut commands_json: Vec<String> = Vec::new();
+
+    for i in 0..cmd_len {
+        let ep = std::ptr::read_unaligned::<*mut c_void>(cmd_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+        if ep.is_null() { continue; }
+
+        // Read command fields
+        let cid = if !cmd_elem_class.is_null() {
+            call_getter_obscured_int(cmd_elem_class, ep, "get_CommandId")
+        } else { -1 };
+        let is_enable = if !cmd_elem_class.is_null() {
+            call_getter_obscured_int(cmd_elem_class, ep, "get_IsEnable")
+        } else { -1 };
+        let failure_rate = if !cmd_elem_class.is_null() {
+            call_getter_obscured_int(cmd_elem_class, ep, "get_FailureRate")
+        } else { -1 };
+
+        let cname = match cid {
+            CMD_SPEED=>"Speed", CMD_STAMINA=>"Stamina", CMD_GUTS=>"Guts",
+            CMD_POWER=>"Power", CMD_WISDOM=>"Wiz",
+            CMD_URA_SPEED=>"Speed", CMD_URA_STAMINA=>"Stamina", CMD_URA_GUTS=>"Guts",
+            CMD_URA_POWER=>"Power", CMD_URA_WISDOM=>"Wiz",
+            CMD_KAKUSHIMI=>"Kakushimi",
+            301=>"Outing", 390=>"Rest", 401=>"Outing2",
+            701=>"Outing3", 801=>"Outing4", _=>"Unknown"
+        };
+
+        // Read TrainingPartnerArray — distinguish support cards vs NPCs
+        let mut partners_json: Vec<String> = Vec::new();
+        let mut support_count: i32 = 0;
+        let mut npc_count: i32 = 0;
+
+        if !cmd_elem_class.is_null() {
+            let pa = call_getter_on_instance(cmd_elem_class, ep, "get_TrainingPartnerArray");
+            if !pa.is_null() {
+                let pb = pa as *const u8;
+                let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                if pl > 0 && pl < 50 {
+                    for j in 0..pl {
+                        let pp = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                        if pp.is_null() { continue; }
+
+                        // Detect type: try GetMasterSupportCardData on partner entity
+                        // Support card entity returns non-null, NPC entity returns null
+                        let obj_class_name = get_object_class_name(pp);
+                        let is_support_card = obj_class_name.contains("SingleModeTrainingPartnerEntity")
+                            && !obj_class_name.contains("EtcChara")
+                            && !obj_class_name.contains("UniqueChara")
+                            && !obj_class_name.contains("Scout");
+
+                        if is_support_card && !partner_class.is_null() {
+                            // Support card partner
+                            let partner_id = call_getter_int(partner_class, pp, "get_PartnerId");
+                            let eval_val = call_getter_int(partner_class, pp, "get_EvaluationValue");
+                            let chara_id = call_getter_int(partner_class, pp, "get_CharaId");
+                            let training_cmd_id = call_getter_int(partner_class, pp, "get_TrainingCommandId");
+                            let is_none = call_getter_int(partner_class, pp, "get_IsNoneTrainingCommand");
+                            let exp = call_getter_int(partner_class, pp, "get_Exp");
+                            let lb = call_getter_int(partner_class, pp, "get_LimitBreakCount");
+
+                            partners_json.push(format!(
+                                r#"{{"type":"support_card","partner_id":{},"chara_id":{},"evaluation":{},"training_cmd_id":{},"is_none":{},"exp":{},"limit_break":{}}}"#,
+                                partner_id, chara_id, eval_val, training_cmd_id, is_none, exp, lb
+                            ));
+                            support_count += 1;
+                        } else if !etc_chara_class.is_null() {
+                            // NPC partner (EtcCharaEntity)
+                            let partner_id = call_getter_int(etc_chara_class, pp, "get_PartnerId");
+                            let eval_val = call_getter_int(etc_chara_class, pp, "get_EvaluationValue");
+                            let chara_id = call_getter_int(etc_chara_class, pp, "get_CharaId");
+                            let training_cmd_id = call_getter_int(etc_chara_class, pp, "get_TrainingCommandId");
+
+                            partners_json.push(format!(
+                                r#"{{"type":"npc","partner_id":{},"chara_id":{},"evaluation":{},"training_cmd_id":{}}}"#,
+                                partner_id, chara_id, eval_val, training_cmd_id
+                            ));
+                            npc_count += 1;
+                        } else {
+                            // Fallback: unknown partner type
+                            partners_json.push(format!(r#"{{"type":"unknown"}}"#));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Read TipsEventPartnerArray (shining partners)
+        let shining_count = if !cmd_elem_class.is_null() {
+            let arr = call_getter_on_instance(cmd_elem_class, ep, "get_TipsEventPartnerArray");
+            if !arr.is_null() {
+                let ab = arr as *const u8;
+                let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                al as i32
+            } else { 0 }
+        } else { 0 };
+
+        // Read ParamsIncDecInfoArray (training gains)
+        let mut gains_json: Vec<String> = Vec::new();
+        let mut stat_gains = [0i32; 5]; // [Speed, Stamina, Power, Guts, Wisdom]
+        let mut skill_pt_gain: i32 = 0;
+        let mut vital_cost: i32 = 0;
+
+        if !cmd_elem_class.is_null() {
+            let pa = call_getter_on_instance(cmd_elem_class, ep, "get_ParamsIncDecInfoArray");
+            if !pa.is_null() {
+                let pb = pa as *const u8;
+                let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                if pl > 0 && pl < 100 {
+                    for j in 0..pl {
+                        let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                        if pe.is_null() { continue; }
+                        let tt = if !params_class.is_null() {
+                            call_getter_obscured_int(params_class, pe, "get_TargetType")
+                        } else { -1 };
+                        let v = if !params_class.is_null() {
+                            call_getter_obscured_int(params_class, pe, "get_Value")
+                        } else { 0 };
+                        if v == 0 { continue; }
+                        let tn = match tt {
+                            1=>"Speed", 2=>"Stamina", 3=>"Guts",
+                            4=>"Power", 5=>"Wiz", 10=>"HP",
+                            20=>"Motivation", 30=>"SkillPt", _=>"Unknown"
+                        };
+                        gains_json.push(format!(r#""{}":{}"#, tn, v));
+                        match tt {
+                            1 => stat_gains[0] += v,
+                            2 => stat_gains[1] += v,
+                            4 => stat_gains[2] += v,
+                            3 => stat_gains[3] += v,
+                            5 => stat_gains[4] += v,
+                            10 => vital_cost += v,
+                            30 => skill_pt_gain += v,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        commands_json.push(format!(
+            r#"{{"name":"{}","command_id":{},"is_enable":{},"failure_rate":{},"shining":{},"support_count":{},"npc_count":{},"partners":[{}],"gains":{{{}}},"stat_gains":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"skill_pt":{},"vital_cost":{}}}"#,
+            cname, cid, is_enable, failure_rate, shining_count, support_count, npc_count,
+            partners_json.join(","),
+            gains_json.join(","),
+            stat_gains[0], stat_gains[1], stat_gains[2], stat_gains[3], stat_gains[4],
+            skill_pt_gain, vital_cost
+        ));
+    }
+
+    // 5. Ramen scenario data (if applicable)
+    let mut ramen_json = String::new();
+    if sid == 14 {
+        let ramen_sc_class = find_class_by_short_name(image, "WorkSingleModeScenarioRamen");
+        if !ramen_sc_class.is_null() {
+            let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
+            if !ramen_sc_obj.is_null() {
+                let ramen_ds_obj = call_getter_ref(ramen_sc_class, ramen_sc_obj, "get_DataSet");
+                if !ramen_ds_obj.is_null() {
+                    let ramen_ds_class = find_class_by_short_name(image, "WorkSingleModeScenarioRamenDataSet");
+                    if !ramen_ds_class.is_null() {
+                        let cppt = call_getter_obscured_int(ramen_ds_class, ramen_ds_obj, "get_CheckPointPt");
+                        let sfn = call_getter_obscured_int(ramen_ds_class, ramen_ds_obj, "get_SpecialFeelingNum");
+                        let rt = call_getter_obscured_int(ramen_ds_class, ramen_ds_obj, "get_RecommendType");
+
+                        // TrainingExecInfoArray — per-command training count
+                        let mut exec_json: Vec<String> = Vec::new();
+                        let tei_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_TrainingExecInfoArray");
+                        if !tei_arr.is_null() {
+                            let tei_base = tei_arr as *const u8;
+                            let tei_len = std::ptr::read_unaligned::<usize>(tei_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            if tei_len > 0 && tei_len < 50 {
+                                let tei_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenTrainingExecInfo");
+                                if !tei_cls.is_null() {
+                                    for ti in 0..tei_len {
+                                        let te_ptr = std::ptr::read_unaligned::<*mut c_void>(tei_base.add(IL2CPP_LIST_ITEMS_OFF + ti * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                        if te_ptr.is_null() { continue; }
+                                        let bcmd = call_getter_obscured_int(tei_cls, te_ptr, "get_BaseCommandId");
+                                        let ecnt = call_getter_obscured_int(tei_cls, te_ptr, "get_ExecCount");
+                                        exec_json.push(format!(r#"{{"base_command_id":{},"exec_count":{}}}"#, bcmd, ecnt));
+                                    }
+                                }
+                            }
+                        }
+
+                        // FeelingInfoArray
+                        let mut feeling_json: Vec<String> = Vec::new();
+                        let fi_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_FeelingInfoArray");
+                        if !fi_arr.is_null() {
+                            let fi_base = fi_arr as *const u8;
+                            let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            if fi_len > 0 && fi_len < 100 {
+                                let fi_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenFeeling");
+                                if !fi_cls.is_null() {
+                                    for fi in 0..fi_len {
+                                        let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                        if fe_ptr.is_null() { continue; }
+                                        let fidx = call_getter_obscured_int(fi_cls, fe_ptr, "get_FeelingIndex");
+                                        let fid = call_getter_obscured_int(fi_cls, fe_ptr, "get_FeelingId");
+                                        feeling_json.push(format!(r#"{{"index":{},"feeling_id":{}}}"#, fidx, fid));
+                                    }
+                                }
+                            }
+                        }
+
+                        // CommandFeelingInfoArray — which command gives which feeling
+                        let mut cmd_feeling_json: Vec<String> = Vec::new();
+                        let cf_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_CommandFeelingInfoArray");
+                        if !cf_arr.is_null() {
+                            let cf_base = cf_arr as *const u8;
+                            let cf_len = std::ptr::read_unaligned::<usize>(cf_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            if cf_len > 0 && cf_len < 100 {
+                                let cf_cls = find_class_by_short_name(image, "ObscuredSingleModeRamenCommandFeelingInfo");
+                                if !cf_cls.is_null() {
+                                    for ci in 0..cf_len {
+                                        let ce_ptr = std::ptr::read_unaligned::<*mut c_void>(cf_base.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                                        if ce_ptr.is_null() { continue; }
+                                        let cct = call_getter_obscured_int(cf_cls, ce_ptr, "get_CommandType");
+                                        let ccid = call_getter_obscured_int(cf_cls, ce_ptr, "get_CommandId");
+                                        let cfi = call_getter_obscured_int(cf_cls, ce_ptr, "get_FeelingId");
+                                        cmd_feeling_json.push(format!(r#"{{"command_type":{},"command_id":{},"feeling_id":{}}}"#, cct, ccid, cfi));
+                                    }
+                                }
+                            }
+                        }
+
+                        ramen_json = format!(
+                            r#","ramen":{{"checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"training_exec":[{}],"feeling":[{}],"command_feeling":[{}]}}"#,
+                            cppt, sfn, rt, exec_json.join(","), feeling_json.join(","), cmd_feeling_json.join(",")
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    format!(
+        r#"{{"version":"3.21.0","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
+        commands_json.join(","),
+        ramen_json,
+        buffs_from_effects
+    )
+}
+
+/// /inherit/compat — Inheritance compatibility calculation
+/// Shows exact compatibility values (not just ○△×), split by parent gender,
+/// and detects target race overlap
+/// Data sources:
+///   - SuccessionCharaInfo (parent chara IDs)
+///   - SuccessionRelationMember + SuccessionRelation (compatibility data)
+///   - mdb succession_relation tables
+///   - SingleModeTargetRace (current target races)
+unsafe fn read_inherit_compat() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    // 1. Read succession parent info
+    // WorkSingleModeCharaData.SuccessionTrainedCharaInfoFirst (offset 0x48)
+    // WorkSingleModeCharaData.SuccessionTrainedCharaInfoSecond (offset 0x50)
+    let sci_class = find_class_by_short_name(image, "SuccessionCharaInfo");
+    let first_sci = call_getter_ref(chara_class, chara_obj, "get_SuccessionTrainedCharaInfoFirst");
+    let second_sci = call_getter_ref(chara_class, chara_obj, "get_SuccessionTrainedCharaInfoSecond");
+
+    let mut first_chara_id: i32 = -1;
+    let mut second_chara_id: i32 = -1;
+    if !first_sci.is_null() && !sci_class.is_null() {
+        first_chara_id = call_getter_int(sci_class, first_sci, "get_TrainedCharaId");
+    }
+    if !second_sci.is_null() && !sci_class.is_null() {
+        second_chara_id = call_getter_int(sci_class, second_sci, "get_TrainedCharaId");
+    }
+
+    // 2. Read SuccessionFactor (offset 0x448 on CharaData) — factor count for compatibility
+    let factor_arr = call_getter_on_instance(chara_class, chara_obj, "get_SuccessionFactor");
+    let mut factor_count: i32 = 0;
+    if !factor_arr.is_null() {
+        let fb = factor_arr as *const u8;
+        factor_count = std::ptr::read_unaligned::<usize>(fb.add(IL2CPP_LIST_COUNT_OFF) as *const usize) as i32;
+    }
+
+    // 3. Read relation data from mdb
+    let mut relations_json: Vec<String> = Vec::new();
+    let mut relation_members_json: Vec<String> = Vec::new();
+    let mut relation_ranks_json: Vec<String> = Vec::new();
+
+    if let Some(mdb_path) = find_mdb_path() {
+        if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            // succession_relation: type + point pairs
+            if let Ok(mut stmt) = conn.prepare("SELECT relation_type, relation_point FROM succession_relation ORDER BY relation_type") {
+                let rows: Vec<String> = stmt.query_map([], |row| {
+                    Ok(format!(r#"{{"type":{},"point":{}}}"#,
+                        row.get::<_, i32>(0).unwrap_or(0),
+                        row.get::<_, i32>(1).unwrap_or(0)))
+                }).unwrap().filter_map(|r| r.ok()).collect();
+                relations_json = rows;
+            }
+
+            // succession_relation_member: id + type + chara_id
+            if let Ok(mut stmt) = conn.prepare("SELECT id, relation_type, chara_id FROM succession_relation_member ORDER BY id") {
+                let rows: Vec<String> = stmt.query_map([], |row| {
+                    Ok(format!(r#"{{"id":{},"type":{},"chara_id":{}}}"#,
+                        row.get::<_, i32>(0).unwrap_or(0),
+                        row.get::<_, i32>(1).unwrap_or(0),
+                        row.get::<_, i32>(2).unwrap_or(0)))
+                }).unwrap().filter_map(|r| r.ok()).collect();
+                relation_members_json = rows;
+            }
+
+            // succession_relation_rank: rank + min + max
+            if let Ok(mut stmt) = conn.prepare("SELECT relation_rank, rank_value_min, rank_value_max FROM succession_relation_rank ORDER BY relation_rank") {
+                let rows: Vec<String> = stmt.query_map([], |row| {
+                    Ok(format!(r#"{{"rank":{},"min":{},"max":{}}}"#,
+                        row.get::<_, i32>(0).unwrap_or(0),
+                        row.get::<_, i32>(1).unwrap_or(0),
+                        row.get::<_, i32>(2).unwrap_or(0)))
+                }).unwrap().filter_map(|r| r.ok()).collect();
+                relation_ranks_json = rows;
+            }
+
+            drop(conn);
+        }
+    }
+
+    // 4. Read target races for overlap detection
+    let mut target_races_json: Vec<String> = Vec::new();
+    let tr_arr = call_getter_on_instance(chara_class, chara_obj, "get_TargetRaceArray");
+    if !tr_arr.is_null() {
+        let trb = tr_arr as *const u8;
+        let trl = std::ptr::read_unaligned::<usize>(trb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if trl > 0 && trl < 50 {
+            for ti in 0..trl {
+                let tp = std::ptr::read_unaligned::<*mut c_void>(trb.add(IL2CPP_LIST_ITEMS_OFF + ti * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                if tp.is_null() { continue; }
+                // TargetRace: targetId at offset 0x10, evaluation at 0x14
+                let bytes = tp as *const u8;
+                let tid = std::ptr::read_unaligned::<i32>(bytes.add(IL2CPP_TARGET_RACE_ID_OFF) as *const i32);
+                let teval = std::ptr::read_unaligned::<i32>(bytes.add(IL2CPP_TARGET_RACE_EVAL_OFF) as *const i32);
+                target_races_json.push(format!(r#"{{"target_id":{},"evaluation":{}}}"#, tid, teval));
+            }
+        }
+    }
+
+    // 5. Read route_race from mdb for race name resolution
+    let mut race_names_json: Vec<String> = Vec::new();
+    if let Some(mdb_path) = find_mdb_path() {
+        if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            if let Ok(mut stmt) = conn.prepare("SELECT id, race_id, race_grade FROM single_mode_route_race ORDER BY id LIMIT 200") {
+                let rows: Vec<String> = stmt.query_map([], |row| {
+                    Ok(format!(r#"{{"id":{},"race_id":{},"grade":{}}}"#,
+                        row.get::<_, i32>(0).unwrap_or(0),
+                        row.get::<_, i32>(1).unwrap_or(0),
+                        row.get::<_, i32>(2).unwrap_or(0)))
+                }).unwrap().filter_map(|r| r.ok()).collect();
+                race_names_json = rows;
+            }
+            drop(conn);
+        }
+    }
+
+    format!(
+        r#"{{"version":"3.21.0","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        first_chara_id, second_chara_id, factor_count,
+        relations_json.join(","), relation_members_json.join(","),
+        relation_ranks_json.join(","), target_races_json.join(","),
+        race_names_json.join(",")
+    )
+}
+
+/// /log/turn — Turn-by-turn game state log
+/// Returns current turn info + history from training log
+/// Data sources:
+///   - WorkSingleModeData: Month, Half, Turn
+///   - WorkSingleModeCharaData: all stats, motivation
+///   - SingleModeTurn (mdb): turn config (year, period, training set)
+///   - Training log snapshots
+unsafe fn read_turn_log() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    // Current state
+    let mon = call_getter_int(sm_class, sm_obj, "get_Month");
+    let half = call_getter_int(sm_class, sm_obj, "get_Half");
+    let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    let spd = call_getter_int(chara_class, chara_obj, "get_Speed");
+    let sta = call_getter_int(chara_class, chara_obj, "get_Stamina");
+    let pow_ = call_getter_int(chara_class, chara_obj, "get_Power");
+    let gut = call_getter_int(chara_class, chara_obj, "get_Guts");
+    let wiz = call_getter_int(chara_class, chara_obj, "get_Wiz");
+    let vit = call_getter_int(chara_class, chara_obj, "get_Hp");
+    let mvit = call_getter_int(chara_class, chara_obj, "get_MaxHp");
+    let mot = call_getter_int(chara_class, chara_obj, "get_Motivation");
+    let spt = call_getter_obscured_int(chara_class, chara_obj, "get_SkillPoint");
+    let fan = call_getter_int(chara_class, chara_obj, "get_FanCount");
+
+    // Turn config from mdb
+    let mut turn_config_json = String::new();
+    if let Some(mdb_path) = find_mdb_path() {
+        if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            if let Ok(mut stmt) = conn.prepare("SELECT id, turn, year, month, half, period, unique_command, training_set_id, race_entry_type FROM single_mode_turn ORDER BY id") {
+                let rows: Vec<String> = stmt.query_map([], |row| {
+                    Ok(format!(
+                        r#"{{"id":{},"turn":{},"year":{},"month":{},"half":{},"period":{},"unique_cmd":{},"training_set":{},"race_entry":{}}}"#,
+                        row.get::<_, i32>(0).unwrap_or(0),
+                        row.get::<_, i32>(1).unwrap_or(0),
+                        row.get::<_, i32>(2).unwrap_or(0),
+                        row.get::<_, i32>(3).unwrap_or(0),
+                        row.get::<_, i32>(4).unwrap_or(0),
+                        row.get::<_, i32>(5).unwrap_or(0),
+                        row.get::<_, i32>(6).unwrap_or(0),
+                        row.get::<_, i32>(7).unwrap_or(0),
+                        row.get::<_, i32>(8).unwrap_or(0),
+                    ))
+                }).unwrap().filter_map(|r| r.ok()).collect();
+                turn_config_json = rows.join(",");
+            }
+            drop(conn);
+        }
+    }
+
+    // Training log history
+    let log_json = get_training_log();
+
+    // Training levels
+    let mut tl_json = "[]".to_string();
+    let tl_arr = call_getter_on_instance(chara_class, chara_obj, "get_TrainingLevelInfoArray");
+    if !tl_arr.is_null() {
+        let tb = tl_arr as *const u8;
+        let tl = std::ptr::read_unaligned::<usize>(tb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if tl > 0 && tl < 50 {
+            let mut tls = Vec::new();
+            for i in 0..tl {
+                let tp = std::ptr::read_unaligned::<*mut c_void>(tb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                if tp.is_null() { continue; }
+                let bytes = tp as *const u8;
+                // TrainingLevelInfo: commandId at 0x10, level at 0x14 (IL2CPP_COMMAND_ID_OFF/IL2CPP_COMMAND_LEVEL_OFF)
+                let cmd_id = std::ptr::read_unaligned::<i32>(bytes.add(IL2CPP_COMMAND_ID_OFF) as *const i32);
+                let level = std::ptr::read_unaligned::<i32>(bytes.add(IL2CPP_COMMAND_LEVEL_OFF) as *const i32);
+                tls.push(format!(r#"{{"command_id":{},"level":{}}}"#, cmd_id, level));
+            }
+            tl_json = format!("[{}]", tls.join(","));
+        }
+    }
+
+    format!(
+        r#"{{"version":"3.21.0","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
+        tl_json, turn_config_json, log_json
+    )
+}
+
+/// /event/recommend — Event recommendation based on current game state + event data
+/// Reads mdb event data and matches against current support cards + chara
+/// Returns: matching events with choice evaluations
+unsafe fn read_event_recommend() -> String {
+    // Event data is all from mdb (like /events), plus current game state
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    // Current game state
+    let card_id = call_getter_int(chara_class, chara_obj, "get_CardId");
+    let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    let spd = call_getter_int(chara_class, chara_obj, "get_Speed");
+    let sta = call_getter_int(chara_class, chara_obj, "get_Stamina");
+    let pow_ = call_getter_int(chara_class, chara_obj, "get_Power");
+    let gut = call_getter_int(chara_class, chara_obj, "get_Guts");
+    let wiz = call_getter_int(chara_class, chara_obj, "get_Wiz");
+    let spt = call_getter_obscured_int(chara_class, chara_obj, "get_SkillPoint");
+    let vit = call_getter_int(chara_class, chara_obj, "get_Hp");
+    let mvit = call_getter_int(chara_class, chara_obj, "get_MaxHp");
+    let mon = call_getter_int(sm_class, sm_obj, "get_Month");
+    let half = call_getter_int(sm_class, sm_obj, "get_Half");
+
+    // Read equipped support cards to match events
+    let sc_arr = read_field_value(chara_class, chara_obj, "support_card_array");
+    let mut support_card_ids: Vec<i32> = Vec::new();
+    if sc_arr.is_null() {
+        let arr = call_getter_on_instance(chara_class, chara_obj, "get_SupportCardArray");
+        if !arr.is_null() {
+            let ab = arr as *const u8;
+            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            if al > 0 && al < 100 {
+                for i in 0..al {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                    if ep.is_null() { continue; }
+                    let bytes = ep as *const u8;
+                    let sc_id = std::ptr::read_unaligned::<i32>(bytes.add(IL2CPP_SUPPORT_CARD_ID_OFF) as *const i32);
+                    support_card_ids.push(sc_id);
+                }
+            }
+        }
+    } else {
+        let ab = sc_arr as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if al > 0 && al < 100 {
+            for i in 0..al {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                if ep.is_null() { continue; }
+                let bytes = ep as *const u8;
+                let sc_id = std::ptr::read_unaligned::<i32>(bytes.add(IL2CPP_SUPPORT_CARD_ID_OFF) as *const i32);
+                support_card_ids.push(sc_id);
+            }
+        }
+    }
+
+    // Read evaluation list for partner chara IDs (needed for NPC event matching)
+    let mut eval_chara_ids: Vec<i32> = Vec::new();
+    let eval_arr = call_getter_on_instance(chara_class, chara_obj, "get_EvaluationList");
+    if !eval_arr.is_null() {
+        let eb = eval_arr as *const u8;
+        let el = std::ptr::read_unaligned::<usize>(eb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if el > 0 && el < 200 {
+            let eval_class = find_class_by_short_name(image, "Evaluation");
+            if !eval_class.is_null() {
+                for ei in 0..el {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(eb.add(IL2CPP_LIST_ITEMS_OFF + ei * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                    if ep.is_null() { continue; }
+                    let tid = call_getter_int(eval_class, ep, "get_TargetId");
+                    eval_chara_ids.push(tid);
+                }
+            }
+        }
+    }
+
+    // Read events from mdb with matching support cards
+    let mut matching_events: Vec<String> = Vec::new();
+    let mut all_events_count: i32 = 0;
+    let mut matching_events_count: i32 = 0;
+
+    if let Some(mdb_path) = find_mdb_path() {
+        if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            // Read all story data, filter by current chara + support cards
+            let sc_ids_str: Vec<String> = support_card_ids.iter().map(|id| id.to_string()).collect();
+            let sc_in_clause = sc_ids_str.join(",");
+
+            // Chara events (card_id matches) + Support card events (support_card_id matches)
+            let query = if !sc_in_clause.is_empty() {
+                format!(
+                    "SELECT id, story_id, card_id, support_card_id, event_category FROM single_mode_story_data WHERE card_id={} OR support_card_id IN ({}) ORDER BY id",
+                    card_id, sc_in_clause
+                )
+            } else {
+                format!(
+                    "SELECT id, story_id, card_id, support_card_id, event_category FROM single_mode_story_data WHERE card_id={} ORDER BY id",
+                    card_id
+                )
+            };
+
+            if let Ok(mut stmt) = conn.prepare(&query) {
+                let rows: Vec<String> = stmt.query_map([], |row| {
+                    Ok(format!(
+                        r#"{{"id":{},"story_id":{},"card_id":{},"support_card_id":{},"event_category":{}}}"#,
+                        row.get::<_, i32>(0).unwrap_or(0),
+                        row.get::<_, i32>(1).unwrap_or(0),
+                        row.get::<_, i32>(2).unwrap_or(0),
+                        row.get::<_, i32>(3).unwrap_or(0),
+                        row.get::<_, i32>(4).unwrap_or(0),
+                    ))
+                }).unwrap().filter_map(|r| r.ok()).collect();
+                matching_events = rows;
+                matching_events_count = matching_events.len() as i32;
+            }
+
+            // Total events count
+            all_events_count = conn.query_row(
+                "SELECT COUNT(*) FROM single_mode_story_data", [], |r| r.get(0)
+            ).unwrap_or(0);
+
+            // Read choice rewards for matching stories
+            let mut choice_rewards: Vec<String> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT id, disp_type, effect_value_type0, effect_value_type1, effect_value_type2 FROM single_mode_event_choice_reward ORDER BY id"
+            ) {
+                let rows: Vec<String> = stmt.query_map([], |row| {
+                    Ok(format!(
+                        r#"{{"id":{},"disp_type":{},"evt0":{},"evt1":{},"evt2":{}}}"#,
+                        row.get::<_, i32>(0).unwrap_or(0),
+                        row.get::<_, i32>(1).unwrap_or(0),
+                        row.get::<_, i32>(2).unwrap_or(0),
+                        row.get::<_, i32>(3).unwrap_or(0),
+                        row.get::<_, i32>(4).unwrap_or(0),
+                }).unwrap().filter_map(|r| r.ok()).collect();
+                choice_rewards = rows;
+            }
+
+            drop(conn);
+
+            format!(
+                r#"{{"version":"3.21.0","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
+                support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
+                eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
+                all_events_count, matching_events_count,
+                matching_events.join(","),
+                choice_rewards.join(",")
+            )
+        }
+    } else {
+        format!(
+            r#"{{"version":"3.21.0","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            card_id, sid
+        )
+    }
 }
