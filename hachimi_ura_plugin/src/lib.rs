@@ -2657,7 +2657,7 @@ unsafe fn read_summary_inner() -> String {
                             let mut sr_ids = Vec::new();
                             for si in 0..sr_len {
                                 // Int32 array: each element is 4 bytes
-                                let sr_val = std::ptr::read_unaligned::<i32>(sr_base.add(IL2CPP_LIST_ITEMS_OFF + si * 4)  // int32 array, not pointers as *const i32);
+                                let sr_val = std::ptr::read_unaligned::<i32>(sr_base.add(IL2CPP_LIST_ITEMS_OFF + si * 4) as *const i32);
                                 sr_ids.push(sr_val.to_string());
                             }
                             ramen_selected_region_ids_json = sr_ids.join(",");
