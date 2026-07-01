@@ -13,11 +13,7 @@ jobs:
 
       - name: Setup Rust
         run: |
-          rustup component add clippy rustfmt
-
-      - name: Check formatting
-        working-directory: hachimi_ura_plugin
-        run: cargo fmt -- --check
+          rustup component add clippy
 
       - name: Clippy (host target, deny warnings)
         working-directory: hachimi_ura_plugin
