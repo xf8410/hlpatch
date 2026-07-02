@@ -3268,7 +3268,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.22.8","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.9","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3448,7 +3448,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.8","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.9","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4603,7 +4603,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.8","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.9","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -4668,7 +4668,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.8","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.9","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4740,7 +4740,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.8","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.9","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4896,7 +4896,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.8","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.9","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -5152,16 +5152,24 @@ unsafe fn read_training_predict() -> String {
         // Read class from object header — guaranteed correct class for this object
         let cmd_elem_class = std::ptr::read_unaligned::<*mut c_void>(ep as *const *mut c_void);
 
-        // Read command fields
-        let cid = if !cmd_elem_class.is_null() {
-            call_getter_obscured_int(cmd_elem_class, ep, "get_CommandId")
-        } else { -1 };
-        let is_enable = if !cmd_elem_class.is_null() {
-            call_getter_obscured_int(cmd_elem_class, ep, "get_IsEnable")
-        } else { -1 };
-        let failure_rate = if !cmd_elem_class.is_null() {
-            call_getter_obscured_int(cmd_elem_class, ep, "get_FailureRate")
-        } else { -1 };
+        // Read command fields directly from memory (offsets confirmed by /debug/cmdinfo)
+        // SingleModeCommandInfoData: CommandId@0x24/0x28, IsEnable@0x38/0x3c, FailureRate@0x68/0x6c
+        let epb = ep as *const u8;
+        let cid = {
+            let k = std::ptr::read_unaligned::<i32>(epb.add(0x24) as *const i32);
+            let h = std::ptr::read_unaligned::<i32>(epb.add(0x28) as *const i32);
+            h ^ k
+        };
+        let is_enable = {
+            let k = std::ptr::read_unaligned::<i32>(epb.add(0x38) as *const i32);
+            let h = std::ptr::read_unaligned::<i32>(epb.add(0x3c) as *const i32);
+            h ^ k
+        };
+        let failure_rate = {
+            let k = std::ptr::read_unaligned::<i32>(epb.add(0x68) as *const i32);
+            let h = std::ptr::read_unaligned::<i32>(epb.add(0x6c) as *const i32);
+            h ^ k
+        };
 
         let cname = match cid {
             CMD_SPEED=>"Speed", CMD_STAMINA=>"Stamina", CMD_GUTS=>"Guts",
@@ -5178,8 +5186,8 @@ unsafe fn read_training_predict() -> String {
         let mut support_count: i32 = 0;
         let mut npc_count: i32 = 0;
 
-        if !cmd_elem_class.is_null() {
-            let pa = call_getter_on_instance(cmd_elem_class, ep, "get_TrainingPartnerArray");
+        {
+            let pa = std::ptr::read_unaligned::<*mut c_void>(epb.add(0x50) as *const *mut c_void);
             if !pa.is_null() {
                 let pb = pa as *const u8;
                 let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
@@ -5233,14 +5241,14 @@ unsafe fn read_training_predict() -> String {
         }
 
         // Read TipsEventPartnerArray (shining partners)
-        let shining_count = if !cmd_elem_class.is_null() {
-            let arr = call_getter_on_instance(cmd_elem_class, ep, "get_TipsEventPartnerArray");
+        let shining_count = {
+            let arr = std::ptr::read_unaligned::<*mut c_void>(epb.add(0x58) as *const *mut c_void);
             if !arr.is_null() {
                 let ab = arr as *const u8;
                 let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                 al as i32
             } else { 0 }
-        } else { 0 };
+        };
 
         // Read ParamsIncDecInfoArray (training gains)
         let mut gains_json: Vec<String> = Vec::new();
@@ -5248,8 +5256,8 @@ unsafe fn read_training_predict() -> String {
         let mut skill_pt_gain: i32 = 0;
         let mut vital_cost: i32 = 0;
 
-        if !cmd_elem_class.is_null() {
-            let pa = call_getter_on_instance(cmd_elem_class, ep, "get_ParamsIncDecInfoArray");
+        {
+            let pa = std::ptr::read_unaligned::<*mut c_void>(epb.add(0x60) as *const *mut c_void);
             if !pa.is_null() {
                 let pb = pa as *const u8;
                 let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
@@ -5257,14 +5265,18 @@ unsafe fn read_training_predict() -> String {
                     for j in 0..pl {
                         let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                         if pe.is_null() { continue; }
-                        // Read params class from object header
-                        let params_class = std::ptr::read_unaligned::<*mut c_void>(pe as *const *mut c_void);
-                        let tt = if !params_class.is_null() {
-                            call_getter_obscured_int(params_class, pe, "get_TargetType")
-                        } else { -1 };
-                        let v = if !params_class.is_null() {
-                            call_getter_obscured_int(params_class, pe, "get_Value")
-                        } else { 0 };
+                        // Read ObscuredInt fields directly: TargetType@0x10/0x14, Value@0x24/0x28
+                        let peb = pe as *const u8;
+                        let tt = {
+                            let k = std::ptr::read_unaligned::<i32>(peb.add(0x10) as *const i32);
+                            let h = std::ptr::read_unaligned::<i32>(peb.add(0x14) as *const i32);
+                            h ^ k
+                        };
+                        let v = {
+                            let k = std::ptr::read_unaligned::<i32>(peb.add(0x24) as *const i32);
+                            let h = std::ptr::read_unaligned::<i32>(peb.add(0x28) as *const i32);
+                            h ^ k
+                        };
                         if v == 0 { continue; }
                         let tn = match tt {
                             1=>"Speed", 2=>"Stamina", 3=>"Guts",
@@ -5399,7 +5411,7 @@ unsafe fn read_training_predict() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.8","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.9","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -5539,7 +5551,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.8","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.9","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -5639,7 +5651,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.8","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.9","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -5799,7 +5811,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.8","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.9","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -5809,13 +5821,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.8","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.9","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.8","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.9","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
