@@ -383,7 +383,7 @@ fn upload_all_logs() -> String {
 
     let _ = std::fs::remove_file("/sdcard/uma_upload_tmp.json");
 
-    let files_json = file_names.iter().map(|n| format!(""{}"", n)).collect::<Vec<_>>().join(",");
+    let files_json = file_names.iter().map(|n| format!(r#""{}""#, n)).collect::<Vec<_>>().join(",");
     format!(r#"{{"uploaded":{},"files":[{}]}}"#, uploaded, files_json)
 }
 
