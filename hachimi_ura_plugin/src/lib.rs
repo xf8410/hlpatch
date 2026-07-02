@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.16
+//! URA Plugin v3.22.17
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -746,6 +746,27 @@ unsafe fn call_getter_obscured_int(
 
     decrypted
 }
+
+// ============================================================
+// ★ v3.22.17: Direct memory read helpers — zero il2cpp calls
+// ============================================================
+
+unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
+    if obj.is_null() || field_offset < 0 { return -1; }
+    let base = obj as *const u8;
+    let off = field_offset as usize;
+    let key = std::ptr::read_unaligned::<i32>(base.add(off) as *const i32);
+    let hidden = std::ptr::read_unaligned::<i32>(base.add(off + 4) as *const i32);
+    hidden ^ key
+}
+
+unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
+    if obj.is_null() || field_offset < 0 { return ptr::null_mut(); }
+    std::ptr::read_unaligned::<*mut c_void>(
+        (obj as *const u8).add(field_offset as usize) as *const *mut c_void
+    )
+}
+
 
 // ============================================================
 // ★ Read ObscuredInt[] array (for charaEffectIdArray etc)
@@ -1757,6 +1778,139 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
 
     format!(r#"{{"total":{},"fields":[{}]}}"#, all_fields.len(), all_fields.join(","))
 }
+
+// ============================================================
+// ★ v3.22.17: find_field_offset — read field offset via il2cpp_class_get_fields
+// Thread-safe metadata API, NO il2cpp_runtime_invoke calls
+// ============================================================
+
+unsafe fn find_field_offset(class: *mut c_void, field_name: &str) -> i32 {
+    if class.is_null() || API.is_null() { return -1; }
+
+    let get_fields_fn: Option<FnClassGetFields> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_fields");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetFields>(p)) }
+    };
+    let get_parent_fn: Option<FnClassGetParent> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(p)) }
+    };
+
+    if get_fields_fn.is_none() { return -1; }
+
+    let normalize = |name: &str| -> String {
+        let n = if name.starts_with('<') {
+            if let Some(end) = name.find('>') { &name[1..end] } else { name }
+        } else {
+            name
+        };
+        n.trim_start_matches('_').to_lowercase()
+    };
+    let target = normalize(field_name);
+
+    // Pass 1: exact match (case-insensitive after normalization)
+    let mut current_class = class;
+    let mut depth = 0;
+    loop {
+        if current_class.is_null() || depth > 10 { break; }
+        let mut iter: *mut c_void = ptr::null_mut();
+        loop {
+            let field_info = get_fields_fn.unwrap()(current_class, &mut iter);
+            if field_info.is_null() { break; }
+            if !(*field_info).name.is_null() {
+                let s = std::ffi::CStr::from_ptr((*field_info).name);
+                let fname = s.to_string_lossy().to_string();
+                if normalize(&fname) == target {
+                    return (*field_info).offset;
+                }
+            }
+        }
+        if let Some(ref get_parent) = get_parent_fn {
+            let parent = get_parent(current_class);
+            if parent.is_null() || parent == current_class { break; }
+            current_class = parent;
+        } else {
+            break;
+        }
+        depth += 1;
+    }
+
+    // Pass 2: substring match (fallback)
+    let mut current_class = class;
+    let mut depth = 0;
+    loop {
+        if current_class.is_null() || depth > 10 { break; }
+        let mut iter: *mut c_void = ptr::null_mut();
+        loop {
+            let field_info = get_fields_fn.unwrap()(current_class, &mut iter);
+            if field_info.is_null() { break; }
+            if !(*field_info).name.is_null() {
+                let s = std::ffi::CStr::from_ptr((*field_info).name);
+                let fname = s.to_string_lossy().to_string();
+                let normalized = normalize(&fname);
+                if normalized.contains(&target) || fname.contains(field_name) {
+                    return (*field_info).offset;
+                }
+            }
+        }
+        if let Some(ref get_parent) = get_parent_fn {
+            let parent = get_parent(current_class);
+            if parent.is_null() || parent == current_class { break; }
+            current_class = parent;
+        } else {
+            break;
+        }
+        depth += 1;
+    }
+
+    ura_log(3, &format!("find_field_offset: '{}' not found", field_name));
+    -1
+}
+
+// ============================================================
+// ★ v3.22.17: read_ramen_scalar_fields — read 5 ObscuredInt fields from DataSet
+// Zero il2cpp_runtime_invoke calls (only find_field_offset + read_obscured_int_at)
+// ============================================================
+
+unsafe fn read_ramen_scalar_fields(
+    ds_class: *mut c_void,
+    dataset_obj: *const c_void,
+) -> (i32, i32, i32, i32, i32) {
+    let checkpoint_pt = {
+        let off = find_field_offset(ds_class, "CheckPointPt");
+        if off >= 0 { read_obscured_int_at(dataset_obj, off) } else { -1 }
+    };
+    let special_feeling_num = {
+        let off = find_field_offset(ds_class, "SpecialFeelingNum");
+        if off >= 0 { read_obscured_int_at(dataset_obj, off) } else { -1 }
+    };
+    let recommend_type = {
+        let off = find_field_offset(ds_class, "RecommendType");
+        if off >= 0 { read_obscured_int_at(dataset_obj, off) } else { -1 }
+    };
+    let (uraf_type, uraf_state) = {
+        let uraf_off = find_field_offset(ds_class, "UrafEffectInfo");
+        if uraf_off >= 0 {
+            let uraf_obj = read_ptr_at(dataset_obj, uraf_off);
+            if !uraf_obj.is_null() {
+                let uraf_class = std::ptr::read_unaligned::<*mut c_void>(
+                    uraf_obj as *const *mut c_void
+                );
+                let ut_off = find_field_offset(uraf_class, "UrafEffectType");
+                let us_off = find_field_offset(uraf_class, "UrafEffectState");
+                let ut = if ut_off >= 0 { read_obscured_int_at(uraf_obj, ut_off) } else { -1 };
+                let us = if us_off >= 0 { read_obscured_int_at(uraf_obj, us_off) } else { -1 };
+                (ut, us)
+            } else {
+                (-1, -1)
+            }
+        } else {
+            (-1, -1)
+        }
+    };
+    (checkpoint_pt, special_feeling_num, recommend_type, uraf_type, uraf_state)
+}
+
 
 // ============================================================
 // Enumerate methods on a class
@@ -2818,11 +2972,140 @@ unsafe fn read_summary_inner() -> String {
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
-    // v3.22.16: Skip ENTIRE ramen section in read_summary_inner (same fix as read_training_predict v3.22.16)
-    // try_get_scenario_obj and call_getter_ref("get_DataSet") call il2cpp_runtime_invoke which crashes.
-    // All ramen_* variables remain at defaults (-1, empty). Use /debug/rameninfo for ramen data.
+    // ★ v3.22.17: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
+    // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
     if sid == 14 {
-        // Ramen data skipped — zero il2cpp_runtime_invoke calls
+        ura_log(3, "v3.22.17 ramen: direct memory read");
+        let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
+        if !scenario_obj.is_null() {
+            let sc_class = std::ptr::read_unaligned::<*mut c_void>(
+                scenario_obj as *const *mut c_void
+            );
+            let dataset_obj = call_getter_ref(sc_class, scenario_obj, "get_DataSet");
+            if !dataset_obj.is_null() {
+                let ds_class = std::ptr::read_unaligned::<*mut c_void>(
+                    dataset_obj as *const *mut c_void
+                );
+                // Read 5 scalar ObscuredInt fields (zero il2cpp calls)
+                let (cp_pt, sf_num, rec_type, uraf_t, uraf_s) =
+                    read_ramen_scalar_fields(ds_class, dataset_obj);
+                ramen_checkpoint_pt = cp_pt;
+                ramen_special_feeling_num = sf_num;
+                ramen_recommend_type = rec_type;
+                ramen_uraf_type = uraf_t;
+                ramen_uraf_state = uraf_s;
+                ura_log(3, &format!(
+                    "ramen scalar: cp={} sf={} rec={} uraf_t={} uraf_s={}",
+                    cp_pt, sf_num, rec_type, uraf_t, uraf_s
+                ));
+                // SelectedRegionIdArray (List<ObscuredInt>)
+                let sra_off = find_field_offset(ds_class, "SelectedRegionIdArray");
+                if sra_off >= 0 {
+                    let list_obj = read_ptr_at(dataset_obj, sra_off);
+                    if !list_obj.is_null() {
+                        let lb = list_obj as *const u8;
+                        let llen = std::ptr::read_unaligned::<usize>(
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                        );
+                        if llen > 0 && llen < 100 {
+                            let mut ids: Vec<String> = Vec::new();
+                            for i in 0..llen {
+                                let elem = lb.add(IL2CPP_LIST_ITEMS_OFF + i * 0x14);
+                                let val = read_obscured_int_at(elem as *const c_void, 0);
+                                ids.push(val.to_string());
+                            }
+                            ramen_selected_region_ids_json = ids.join(",");
+                        }
+                    }
+                }
+                // ActiveEffectArray (List<ActiveEffectInfo>)
+                let ae_off = find_field_offset(ds_class, "ActiveEffectArray");
+                if ae_off >= 0 {
+                    let list_obj = read_ptr_at(dataset_obj, ae_off);
+                    if !list_obj.is_null() {
+                        let lb = list_obj as *const u8;
+                        let llen = std::ptr::read_unaligned::<usize>(
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                        );
+                        if llen > 0 && llen < 100 {
+                            let first_elem = std::ptr::read_unaligned::<*mut c_void>(
+                                lb.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void
+                            );
+                            if !first_elem.is_null() {
+                                let elem_class = std::ptr::read_unaligned::<*mut c_void>(
+                                    first_elem as *const *mut c_void
+                                );
+                                let cat_off = find_field_offset(elem_class, "EffectCategory");
+                                let eid_off = find_field_offset(elem_class, "EffectId");
+                                let val_off = find_field_offset(elem_class, "EffectValue");
+                                let mut effects: Vec<String> = Vec::new();
+                                for i in 0..llen {
+                                    let ep = std::ptr::read_unaligned::<*mut c_void>(
+                                        lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+                                    );
+                                    if ep.is_null() { continue; }
+                                    let cat = if cat_off >= 0 { read_obscured_int_at(ep, cat_off) } else { -1 };
+                                    let eid = if eid_off >= 0 { read_obscured_int_at(ep, eid_off) } else { -1 };
+                                    let val = if val_off >= 0 { read_obscured_int_at(ep, val_off) } else { -1 };
+                                    effects.push(format!(
+                                        r#"{{"category":{},"id":{},"value":{}}}"#,
+                                        cat, eid, val
+                                    ));
+                                }
+                                ramen_active_effects_raw_json = effects.join(",");
+                            }
+                        }
+                    }
+                }
+                // FeelingInfoArray (List<FeelingInfo>)
+                let fi_off = find_field_offset(ds_class, "FeelingInfoArray");
+                if fi_off >= 0 {
+                    let list_obj = read_ptr_at(dataset_obj, fi_off);
+                    if !list_obj.is_null() {
+                        let lb = list_obj as *const u8;
+                        let llen = std::ptr::read_unaligned::<usize>(
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                        );
+                        if llen > 0 && llen < 100 {
+                            let first_elem = std::ptr::read_unaligned::<*mut c_void>(
+                                lb.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void
+                            );
+                            if !first_elem.is_null() {
+                                let elem_class = std::ptr::read_unaligned::<*mut c_void>(
+                                    first_elem as *const *mut c_void
+                                );
+                                let ft_off = find_field_offset(elem_class, "FeelingType");
+                                let fv_off = find_field_offset(elem_class, "FeelingValue");
+                                let mut feelings: Vec<String> = Vec::new();
+                                for i in 0..llen {
+                                    let ep = std::ptr::read_unaligned::<*mut c_void>(
+                                        lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+                                    );
+                                    if ep.is_null() { continue; }
+                                    let ft = if ft_off >= 0 { read_obscured_int_at(ep, ft_off) } else { -1 };
+                                    let fv = if fv_off >= 0 { read_obscured_int_at(ep, fv_off) } else { -1 };
+                                    feelings.push(format!(
+                                        r#"{{"FeelingType":{},"FeelingValue":{}}}"#,
+                                        ft, fv
+                                    ));
+                                }
+                                ramen_feeling_info_json = feelings.join(",");
+                            }
+                        }
+                    }
+                }
+                ura_log(3, &format!(
+                    "ramen arrays: regions={} effects={} feelings={}",
+                    !ramen_selected_region_ids_json.is_empty(),
+                    !ramen_active_effects_raw_json.is_empty(),
+                    !ramen_feeling_info_json.is_empty()
+                ));
+            } else {
+                ura_log(2, "ramen: dataset_obj null");
+            }
+        } else {
+            ura_log(2, "ramen: scenario_obj null");
+        }
     }
 
     // --- Training data via HomeInfoData (ALL scenarios) ---
@@ -3163,7 +3446,12 @@ unsafe fn read_summary_inner() -> String {
     ura_log(3, "★ read_summary phase6: buffs");
     // ★ v3.14.2: Always generate buffs from chara_effect_ids first
     let mut buff_json = effects_to_buffs_json(&chara_effect_ids);
-    let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
+    // ★ v3.22.17: sid==14 skips try_get_scenario_obj (data pre-read in ramen section)
+    let scenario_obj = if sid == 14 {
+        ptr::null_mut()
+    } else {
+        try_get_scenario_obj(chara_class, chara_obj, sid)
+    };
     if !scenario_obj.is_null() {
         let sc_name = match sid {
             1=>"WorkSingleModeScenarioURA", 2=>"WorkSingleModeScenarioTeamRace",
@@ -3263,6 +3551,49 @@ unsafe fn read_summary_inner() -> String {
         }
     }
 
+    // ★ v3.22.17: Ramen buffs — extracted outside nested block (uses pre-read data only)
+    if sid == 14 && !ramen_active_effects_raw_json.is_empty() {
+        let mut buffs = Vec::new();
+        for ae_part in ramen_active_effects_raw_json.split("},{") {
+            let mut cat: i32 = -1;
+            let mut eid: i32 = 0;
+            let mut val: i32 = 0;
+            for field in ae_part.trim_start_matches('{').trim_end_matches('}').split(',') {
+                let fv: Vec<&str> = field.splitn(2, ':').collect();
+                if fv.len() == 2 {
+                    let key = fv[0].trim();
+                    if key.contains("category") { cat = fv[1].parse().unwrap_or(-1); }
+                    else if key.contains("id") && !key.contains("Eff") { eid = fv[1].parse().unwrap_or(0); }
+                    else if key.contains("value") { val = fv[1].parse().unwrap_or(0); }
+                }
+            }
+            if cat >= 0 {
+                let cat_name = match cat {
+                    1 => "試食会", 2 => "地域", 4 => "隠し味", _ => "他",
+                };
+                let name = format!("{}#{}", cat_name, eid);
+                let desc = format!("+{}%", val);
+                buffs.push(format!(
+                    r#"{{"name":"{}","EffectId":{},"EffectValue":{},"desc":"{}","type":"Ramen"}}"#,
+                    name, eid, val, desc
+                ));
+            }
+        }
+        if ramen_uraf_type >= 0 {
+            let ut_name = match ramen_uraf_type {
+                1 => "試食会", 2 => "地域", 4 => "隠し味", _ => "?",
+            };
+            let state_name = match ramen_uraf_state {
+                0 => "無効", 1 => "有効", _ => "?",
+            };
+            buffs.push(format!(r#"{{"name":"裏風:{}","UrafEffectType":{},"type":"Ramen"}}"#, ut_name, ramen_uraf_type));
+            buffs.push(format!(r#"{{"name":"裏風状態","state":"{}","UrafEffectState":{},"type":"Ramen"}}"#, state_name, ramen_uraf_state));
+        }
+        if !buffs.is_empty() {
+            buff_json = format!("[{}]", buffs.join(","));
+        }
+    }
+
     // ★ state field removed: get_State() doesn't exist on WorkSingleModeCharaData
     // Health condition is now detected via chara_effect_ids (top-level array)
     // ★ AI Evaluation (v3.15.1): compute score and training recommendation
@@ -3303,7 +3634,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.22.16","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.17","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3483,7 +3814,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.16","endpoints":["/summary","/data","/scenario","/training/predict","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.17","endpoints":["/summary","/data","/scenario","/training/predict","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3684,7 +4015,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.16").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.17").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -3891,10 +4222,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.16 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.17 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.16 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.17 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -4666,7 +4997,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.16","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.17","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -4731,7 +5062,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.16","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.17","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4803,7 +5134,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.16","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.17","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4959,7 +5290,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.16","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.17","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -5424,20 +5755,46 @@ unsafe fn read_training_predict() -> String {
 
     log_predict_step(&format!("commands done, ramen sid={}", sid));
 
-    // 5. Ramen scenario data — v3.22.16: Skip ENTIRELY (zero il2cpp_runtime_invoke)
-    // try_get_scenario_obj and call_getter_ref both call il2cpp_runtime_invoke which crashes.
-    // Use /debug/rameninfo to get ramen DataSet data separately.
+    // 5. Ramen scenario data — v3.22.17: Direct memory read (only 2 il2cpp_runtime_invoke)
     let mut ramen_json = String::new();
     if sid == 14 {
-        log_predict_step("ramen skipped (v3.22.16)");
-        ramen_json = r#","ramen":{"available":true,"note":"use_debug_rameninfo"}"#.to_string();
+        log_predict_step("ramen direct read (v3.22.17)");
+        let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
+        if !scenario_obj.is_null() {
+            let sc_class = std::ptr::read_unaligned::<*mut c_void>(
+                scenario_obj as *const *mut c_void
+            );
+            let dataset_obj = call_getter_ref(sc_class, scenario_obj, "get_DataSet");
+            if !dataset_obj.is_null() {
+                let ds_class = std::ptr::read_unaligned::<*mut c_void>(
+                    dataset_obj as *const *mut c_void
+                );
+                let (cp_pt, sf_num, rec_type, uraf_t, uraf_s) =
+                    read_ramen_scalar_fields(ds_class, dataset_obj);
+                log_predict_step(&format!(
+                    "ramen: cp={} sf={} rec={} uraf_t={} uraf_s={}",
+                    cp_pt, sf_num, rec_type, uraf_t, uraf_s
+                ));
+                ramen_json = format!(
+                    r#","ramen":{"checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"uraf_type":{},"uraf_state":{}}}"#,
+                    cp_pt, sf_num, rec_type, uraf_t, uraf_s
+                );
+            } else {
+                log_predict_step("ramen: dataset null");
+            }
+        } else {
+            log_predict_step("ramen: scenario null");
+        }
+        if ramen_json.is_empty() {
+            ramen_json = r#","ramen":{"available":false,"error":"dataset_null"}"#.to_string();
+        }
     }
 
     log_predict_step("DONE");
     log_predict_step("building json");
 
     let result = format!(
-        r#"{{"version":"3.22.16","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.17","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -5580,7 +5937,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.16","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.17","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -5681,7 +6038,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.16","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.17","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -5842,7 +6199,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.16","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.17","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -5852,13 +6209,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.16","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.17","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.16","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.17","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
