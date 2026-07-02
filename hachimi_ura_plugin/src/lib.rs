@@ -3745,7 +3745,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let len = LAST_STEP_LEN.load(std::sync::atomic::Ordering::Relaxed) as usize;
         let msg = if len > 0 && len < 128 {
             unsafe {
-                let buf_ptr = LAST_STEP_BUF.as_ptr() as *const i8;
+                let buf_ptr = LAST_STEP_BUF.as_ptr();
                 std::ffi::CStr::from_ptr(buf_ptr).to_string_lossy().into_owned()
             }
         } else { String::new() };
