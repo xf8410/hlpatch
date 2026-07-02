@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.0
+//! URA Plugin v3.22.10
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -55,6 +55,7 @@ struct Api {
 static mut API: *const Api = ptr::null();
 static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
+static PREDICT_STEP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 // ★ Mutex to prevent concurrent read_summary_inner calls from HTTP + push threads
 static READ_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -205,6 +206,133 @@ unsafe fn ura_notify(msg: &str) {
         notify_fn(text.as_ptr());
     }
 }
+
+// ===== Crash logging for /training/predict =====
+extern "C" {
+    #[link_name = "signal"]
+    fn sys_signal(signum: i32, handler: usize) -> usize;
+    #[link_name = "open"]
+    fn sys_open(pathname: *const i8, flags: i32, mode: i32) -> i32;
+    #[link_name = "write"]
+    fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize;
+    #[link_name = "close"]
+    fn sys_close(fd: i32) -> i32;
+    #[link_name = "raise"]
+    fn sys_raise(sig: i32) -> i32;
+    #[link_name = "system"]
+    fn sys_system(cmd: *const i8) -> i32;
+}
+
+const CRASH_LOG_PATH: &str = "/sdcard/uma_predict.log";
+
+extern "C" fn crash_signal_handler(sig: i32) {
+    let step = PREDICT_STEP.load(std::sync::atomic::Ordering::Relaxed);
+    let mut msg = [0u8; 48];
+    let p = b"CRASH at step ";
+    msg[..p.len()].copy_from_slice(p);
+    let mut len = p.len();
+    let mut n = step;
+    if n == 0 { msg[len] = b'0'; len += 1; }
+    else {
+        let mut digits = [0u8; 10];
+        let mut dlen = 0;
+        while n > 0 { digits[dlen] = b'0' + (n % 10) as u8; n /= 10; dlen += 1; }
+        for i in (0..dlen).rev() { msg[len] = digits[i]; len += 1; }
+    }
+    let s = b" sig=";
+    msg[len..len+s.len()].copy_from_slice(s); len += s.len();
+    let mut n2 = sig as u32;
+    if n2 == 0 { msg[len] = b'0'; len += 1; }
+    else {
+        let mut digits = [0u8; 10];
+        let mut dlen = 0;
+        while n2 > 0 { digits[dlen] = b'0' + (n2 % 10) as u8; n2 /= 10; dlen += 1; }
+        for i in (0..dlen).rev() { msg[len] = digits[i]; len += 1; }
+    }
+    msg[len] = b'\n'; len += 1;
+    let path = b"/sdcard/uma_predict.log\0";
+    let fd = unsafe { sys_open(path.as_ptr() as *const i8, 1 | 64 | 1024, 0o644) };
+    if fd >= 0 {
+        unsafe { sys_write(fd, &msg[..len], len); sys_close(fd); }
+    }
+    unsafe { sys_signal(sig, 0); sys_raise(sig); }
+}
+
+fn init_crash_handler() {
+    unsafe {
+        let handler = crash_signal_handler as usize;
+        sys_signal(11, handler); // SIGSEGV
+        sys_signal(6, handler);  // SIGABRT
+        sys_signal(7, handler);  // SIGBUS
+        sys_signal(8, handler);  // SIGFPE
+    }
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("PANIC: {}\n", info);
+        let _ = std::fs::OpenOptions::new().create(true).append(true)
+            .open("/sdcard/uma_predict.log")
+            .and_then(|mut f| std::io::Write::write_all(&mut f, msg.as_bytes()));
+    }));
+}
+
+fn log_predict_step(msg: &str) {
+    let step = PREDICT_STEP.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let line = format!("[{}] {}\n", step, msg);
+    let _ = std::fs::OpenOptions::new().create(true).append(true)
+        .open("/sdcard/uma_predict.log")
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
+fn clear_predict_log() {
+    PREDICT_STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+    let _ = std::fs::write("/sdcard/uma_predict.log", "");
+}
+
+fn read_crash_log() -> String {
+    std::fs::read_to_string("/sdcard/uma_predict.log").unwrap_or_else(|_| {
+        std::fs::read_to_string("/data/local/tmp/uma_predict.log").unwrap_or_else(|_| {
+            r#"{"error":"no_crash_log"}"#.to_string()
+        })
+    })
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut r = String::new();
+    for ch in data.chunks(3) {
+        let b0 = ch[0] as usize;
+        let b1 = if ch.len() > 1 { ch[1] as usize } else { 0 };
+        let b2 = if ch.len() > 2 { ch[2] as usize } else { 0 };
+        r.push(T[b0 >> 2] as char);
+        r.push(T[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        if ch.len() > 1 { r.push(T[((b1 & 0x0f) << 2) | (b2 >> 6)] as char); }
+        else { r.push('='); }
+        if ch.len() > 2 { r.push(T[b2 & 0x3f] as char); }
+        else { r.push('='); }
+    }
+    r
+}
+
+fn check_and_upload_crash_log() {
+    let path = "/sdcard/uma_predict.log";
+    if !std::path::Path::new(path).exists() { return; }
+    let content = match std::fs::read(path) { Ok(c) => c, Err(_) => return };
+    if content.is_empty() { return; }
+    if content.ends_with(b"DONE\n") {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+    // Base64 encode and upload to GitHub
+    let b64 = base64_encode(&content);
+    let json = format!(r#"{{"message":"crash log auto-upload","content":"{}"}}"#, b64);
+    let _ = std::fs::write("/sdcard/uma_upload.json", &json);
+    let cmd = format!("curl -s -X PUT -H 'Authorization: token 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' -H 'Content-Type: application/json' -d @/sdcard/uma_upload.json https://api.github.com/repos/xf8410/uma-hook/contents/crash_log.txt >/dev/null 2>&1");
+    if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
+        unsafe { sys_system(cmd_c.as_ptr()); }
+    }
+    let _ = std::fs::remove_file("/sdcard/uma_upload.json");
+}
+
+
 
 // ============================================================
 // IL2CPP Helpers
@@ -2531,6 +2659,7 @@ unsafe fn read_summary_inner() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    log_predict_step("got wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -2604,6 +2733,7 @@ unsafe fn read_summary_inner() -> String {
             if !ramen_sc_obj.is_null() {
                 let ramen_ds_obj = call_getter_ref(ramen_sc_class, ramen_sc_obj, "get_DataSet");
                 if !ramen_ds_obj.is_null() {
+                    log_predict_step("got ramen_ds");
                     let ramen_ds_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
                     if !ramen_ds_class.is_null() {
                         let ramen_cmd_arr = call_getter_on_instance(ramen_ds_class, ramen_ds_obj, "get_CommandInfoArray");
@@ -3268,7 +3398,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.22.9","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.10","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3448,7 +3578,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.9","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.10","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3518,6 +3648,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { debug_params_inc_dec() }
     } else if path == "/debug/breeders" {
         unsafe { debug_breeders_team() }
+    } else if path == "/debug/crashlog" {
+        read_crash_log()
     } else if path == "/debug/cmdinfo" {
         unsafe { debug_cmdinfo() }
 
@@ -3623,7 +3755,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.0").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.10").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -3828,10 +3960,12 @@ pub unsafe extern "C" fn hachimi_init_v3(
 ) -> i32 {
     let api = resolve_api(get_api);
     API = Box::into_raw(Box::new(api));
-    ura_log(3, "URA plugin v3.22.0 loaded (Ramen + Kakushimi + AI eval)");
+    init_crash_handler();
+    check_and_upload_crash_log();
+    ura_log(3, "URA plugin v3.22.10 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.0 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.10 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -4603,7 +4737,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.9","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.10","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -4668,7 +4802,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.9","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.10","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4740,7 +4874,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.9","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.10","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4896,7 +5030,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.9","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.10","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -5030,6 +5164,7 @@ unsafe fn debug_cmdinfo() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    log_predict_step("got wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -5037,6 +5172,7 @@ unsafe fn debug_cmdinfo() -> String {
 
     let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
     if home_info_obj.is_null() { return r#"{"error":"no_home_info"}"#.to_string(); }
+    log_predict_step("got home_info");
     let hi_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeHomeInfoData").as_ptr());
     if hi_class.is_null() { return r#"{"error":"no_home_info_class"}"#.to_string(); }
 
@@ -5090,16 +5226,20 @@ unsafe fn debug_cmdinfo() -> String {
 ///   - WorkSingleModeScenarioRamenDataSet (ramen-specific data, scenario_id==14)
 unsafe fn read_training_predict() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    clear_predict_log();
+    log_predict_step("start");
     let image = match get_image() {
         img if !img.is_null() => img,
         _ => return r#"{"error":"image_null"}"#.to_string(),
     };
+    log_predict_step("got image");
 
     // 1. Get WDM -> SingleMode -> CharaData (standard path)
     let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    log_predict_step("got wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -5119,10 +5259,12 @@ unsafe fn read_training_predict() -> String {
     let mvit = call_getter_int(chara_class, chara_obj, "get_MaxHp");
     let mot = call_getter_int(chara_class, chara_obj, "get_Motivation");
     let spt = call_getter_obscured_int(chara_class, chara_obj, "get_SkillPoint");
+    log_predict_step(&format!("chara stats sid={} spd={} sta={}", sid, spd, sta));
 
     // 2. Get HomeInfoData -> CommandInfoArray
     let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
     if home_info_obj.is_null() { return r#"{"error":"no_home_info"}"#.to_string(); }
+    log_predict_step("got home_info");
     let hi_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeHomeInfoData").as_ptr());
     if hi_class.is_null() { return r#"{"error":"no_home_info_class"}"#.to_string(); }
 
@@ -5136,10 +5278,13 @@ unsafe fn read_training_predict() -> String {
         return format!(r#"{{"error":"cmd_len_invalid","len":{}}}"#, cmd_len);
     }
 
+    log_predict_step(&format!("cmd_arr len={}", cmd_len));
+
     // 3. Read CharaEffectBuffArray for active buffs
     // WorkSingleModeCharaData._charaEffectIdArray + EvaluationList -> CharaEffectBuff
     let effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
     let buffs_from_effects = effects_to_buffs_json(&effect_ids);
+    log_predict_step("effects done");
 
     // 4. Iterate commands — read class from each object's header (offset 0 = Il2CppClass*)
     // This avoids find_class_by_short_name matching wrong class -> runtime_invoke crash
@@ -5151,6 +5296,7 @@ unsafe fn read_training_predict() -> String {
 
         // Read class from object header — guaranteed correct class for this object
         let cmd_elem_class = std::ptr::read_unaligned::<*mut c_void>(ep as *const *mut c_void);
+        log_predict_step(&format!("cmd[{}] class read", i));
 
         // Read command fields directly from memory (offsets confirmed by /debug/cmdinfo)
         // SingleModeCommandInfoData: CommandId@0x24/0x28, IsEnable@0x38/0x3c, FailureRate@0x68/0x6c
@@ -5170,6 +5316,7 @@ unsafe fn read_training_predict() -> String {
             let h = std::ptr::read_unaligned::<i32>(epb.add(0x6c) as *const i32);
             h ^ k
         };
+        log_predict_step(&format!("cmd[{}] cid={} enable={} fail={}", i, cid, is_enable, failure_rate));
 
         let cname = match cid {
             CMD_SPEED=>"Speed", CMD_STAMINA=>"Stamina", CMD_GUTS=>"Guts",
@@ -5181,6 +5328,7 @@ unsafe fn read_training_predict() -> String {
             701=>"Outing3", 801=>"Outing4", _=>"Unknown"
         };
 
+        log_predict_step(&format!("cmd[{}] reading partners", i));
         // Read TrainingPartnerArray — distinguish support cards vs NPCs
         let mut partners_json: Vec<String> = Vec::new();
         let mut support_count: i32 = 0;
@@ -5206,6 +5354,7 @@ unsafe fn read_training_predict() -> String {
 
                         if is_support_card && !pp_class.is_null() {
                             // Support card partner
+                            log_predict_step(&format!("cmd[{}] partner[{}] support calling getters", i, j));
                             let partner_id = call_getter_int(pp_class, pp, "get_PartnerId");
                             let eval_val = call_getter_int(pp_class, pp, "get_EvaluationValue");
                             let chara_id = call_getter_int(pp_class, pp, "get_CharaId");
@@ -5221,6 +5370,7 @@ unsafe fn read_training_predict() -> String {
                             support_count += 1;
                         } else if !pp_class.is_null() {
                             // NPC partner (EtcCharaEntity)
+                            log_predict_step(&format!("cmd[{}] partner[{}] npc calling getters", i, j));
                             let partner_id = call_getter_int(pp_class, pp, "get_PartnerId");
                             let eval_val = call_getter_int(pp_class, pp, "get_EvaluationValue");
                             let chara_id = call_getter_int(pp_class, pp, "get_CharaId");
@@ -5240,6 +5390,8 @@ unsafe fn read_training_predict() -> String {
             }
         }
 
+        log_predict_step(&format!("cmd[{}] partners done s={} n={}", i, support_count, npc_count));
+
         // Read TipsEventPartnerArray (shining partners)
         let shining_count = {
             let arr = std::ptr::read_unaligned::<*mut c_void>(epb.add(0x58) as *const *mut c_void);
@@ -5250,6 +5402,7 @@ unsafe fn read_training_predict() -> String {
             } else { 0 }
         };
 
+        log_predict_step(&format!("cmd[{}] reading params", i));
         // Read ParamsIncDecInfoArray (training gains)
         let mut gains_json: Vec<String> = Vec::new();
         let mut stat_gains = [0i32; 5]; // [Speed, Stamina, Power, Guts, Wisdom]
@@ -5299,6 +5452,7 @@ unsafe fn read_training_predict() -> String {
             }
         }
 
+        log_predict_step(&format!("cmd[{}] params done", i));
         commands_json.push(format!(
             r#"{{"name":"{}","command_id":{},"is_enable":{},"failure_rate":{},"shining":{},"support_count":{},"npc_count":{},"partners":[{}],"gains":{{{}}},"stat_gains":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"skill_pt":{},"vital_cost":{}}}"#,
             cname, cid, is_enable, failure_rate, shining_count, support_count, npc_count,
@@ -5309,6 +5463,8 @@ unsafe fn read_training_predict() -> String {
         ));
     }
 
+    log_predict_step(&format!("commands done, ramen sid={}", sid));
+
     // 5. Ramen scenario data (if applicable)
     let mut ramen_json = String::new();
     if sid == 14 {
@@ -5318,8 +5474,10 @@ unsafe fn read_training_predict() -> String {
             if !ramen_sc_obj.is_null() {
                 let ramen_ds_obj = call_getter_ref(ramen_sc_class, ramen_sc_obj, "get_DataSet");
                 if !ramen_ds_obj.is_null() {
+                    log_predict_step("got ramen_ds");
                     let ramen_ds_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
                     if !ramen_ds_class.is_null() {
+                        log_predict_step("ramen calling getters");
                         let cppt = call_getter_obscured_int(ramen_ds_class, ramen_ds_obj, "get_CheckPointPt");
                         let sfn = call_getter_obscured_int(ramen_ds_class, ramen_ds_obj, "get_SpecialFeelingNum");
                         let rt = call_getter_obscured_int(ramen_ds_class, ramen_ds_obj, "get_RecommendType");
@@ -5410,8 +5568,10 @@ unsafe fn read_training_predict() -> String {
         }
     }
 
+    log_predict_step("DONE");
+
     format!(
-        r#"{{"version":"3.22.9","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.10","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -5438,6 +5598,7 @@ unsafe fn read_inherit_compat() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    log_predict_step("got wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -5551,7 +5712,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.9","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.10","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -5577,6 +5738,7 @@ unsafe fn read_turn_log() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    log_predict_step("got wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -5651,7 +5813,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.9","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.10","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -5672,6 +5834,7 @@ unsafe fn read_event_recommend() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    log_predict_step("got wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -5811,7 +5974,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.9","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.10","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -5821,13 +5984,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.9","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.10","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.9","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.10","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
