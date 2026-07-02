@@ -5624,7 +5624,7 @@ unsafe fn read_training_predict() -> String {
     log_predict_step("building json");
 
     let result = format!(
-        r#"{{"version":"3.22.15","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.15","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
