@@ -3268,7 +3268,7 @@ unsafe fn read_summary_inner() -> String {
     };
 
     format!(
-        r#"{{"version":"3.22.7","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.8","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3448,7 +3448,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.7","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.8","endpoints":["/summary","/data","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3518,6 +3518,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { debug_params_inc_dec() }
     } else if path == "/debug/breeders" {
         unsafe { debug_breeders_team() }
+    } else if path == "/debug/cmdinfo" {
+        unsafe { debug_cmdinfo() }
 
     } else if path == "/events" {
         read_events_data()
@@ -3579,7 +3581,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         };
         unsafe { enumerate_all_classes(search) }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/training/predict","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/classes/search/keyword"]}}"#, path)
     };
 
     if path == "/saddles-dl" {
@@ -4601,7 +4603,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.7","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.8","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -4666,7 +4668,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.7","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.8","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -4738,7 +4740,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.7","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.8","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -4894,7 +4896,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.7","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.8","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -5013,6 +5015,72 @@ unsafe fn read_ranking_data() -> String {
 // ★ v3.22.0: 4 new endpoints for training prediction, event recommendation,
 //   inheritance compatibility, and turn log
 // ============================================================
+
+/// /debug/cmdinfo — Dump command element class info WITHOUT runtime_invoke on command elements
+/// Reads class from object header (offset 0), enumerates fields + methods + hex dump
+/// Safe: only uses il2cpp_class_get_fields / il2cpp_class_get_methods (no runtime_invoke on cmd elements)
+unsafe fn debug_cmdinfo() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+
+    let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
+    if home_info_obj.is_null() { return r#"{"error":"no_home_info"}"#.to_string(); }
+    let hi_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeHomeInfoData").as_ptr());
+    if hi_class.is_null() { return r#"{"error":"no_home_info_class"}"#.to_string(); }
+
+    let cmd_arr = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
+    if cmd_arr.is_null() { return r#"{"error":"no_cmd_arr"}"#.to_string(); }
+
+    let cmd_base = cmd_arr as *const u8;
+    let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if cmd_len == 0 { return r#"{"error":"empty_cmd_arr"}"#.to_string(); }
+
+    // Read first element
+    let ep = std::ptr::read_unaligned::<*mut c_void>(cmd_base.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void);
+    if ep.is_null() { return r#"{"error":"null_elem"}"#.to_string(); }
+
+    // Read class from object header (offset 0 = Il2CppClass*)
+    let elem_class = std::ptr::read_unaligned::<*mut c_void>(ep as *const *mut c_void);
+    let class_name = get_class_name_from_pointer(elem_class);
+
+    // Enumerate fields and methods on this class
+    let fields_json = enumerate_class_fields(elem_class);
+    let methods_json = enumerate_class_methods(elem_class);
+
+    // Hex dump first 0x80 bytes (32 x i32 values)
+    let ep_base = ep as *const u8;
+    let mut hex_parts: Vec<String> = Vec::new();
+    for off in (0..0x80).step_by(4) {
+        let val = std::ptr::read_unaligned::<i32>(ep_base.add(off) as *const i32);
+        hex_parts.push(format!(r#""0x{:02x}":{}"#, off, val));
+    }
+
+    // Also check 2nd element class name (verify all elements are same type)
+    let ep2_class_name = if cmd_len > 1 {
+        let ep2 = std::ptr::read_unaligned::<*mut c_void>(cmd_base.add(IL2CPP_LIST_ITEMS_OFF + IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+        if !ep2.is_null() {
+            let ep2_class = std::ptr::read_unaligned::<*mut c_void>(ep2 as *const *mut c_void);
+            get_class_name_from_pointer(ep2_class)
+        } else { String::new() }
+    } else { String::new() };
+
+    format!(
+        r#"{{"cmd_len":{},"elem0_class":"{}","elem1_class":"{}","fields":{},"methods":{},"hex":{{{}}}}}"#,
+        cmd_len, class_name, ep2_class_name, fields_json, methods_json, hex_parts.join(",")
+    )
+}
 
 /// /training/predict — Detailed training prediction with NPC partner breakdown
 /// Returns per-command: gains, partner details (support card vs NPC), buffs, failure risk
@@ -5331,7 +5399,7 @@ unsafe fn read_training_predict() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.7","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.8","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -5471,7 +5539,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.7","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.8","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -5571,7 +5639,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.7","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.8","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -5731,7 +5799,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.7","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.8","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -5741,13 +5809,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.7","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.8","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.7","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.8","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
