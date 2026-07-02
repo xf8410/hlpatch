@@ -253,7 +253,7 @@ extern "C" fn crash_signal_handler(sig: i32) {
     let path = b"/sdcard/uma_predict.log\0";
     let fd = unsafe { sys_open(path.as_ptr() as *const i8, 1 | 64 | 1024, 0o644) };
     if fd >= 0 {
-        unsafe { sys_write(fd, &msg[..len], len); sys_close(fd); }
+        unsafe { sys_write(fd, msg.as_ptr(), len); sys_close(fd); }
     }
     unsafe { sys_signal(sig, 0); sys_raise(sig); }
 }
@@ -327,7 +327,7 @@ fn check_and_upload_crash_log() {
     let _ = std::fs::write("/sdcard/uma_upload.json", &json);
     let cmd = format!("curl -s -X PUT -H 'Authorization: token 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' -H 'Content-Type: application/json' -d @/sdcard/uma_upload.json https://api.github.com/repos/xf8410/uma-hook/contents/crash_log.txt >/dev/null 2>&1");
     if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
-        unsafe { sys_system(cmd_c.as_ptr()); }
+        unsafe { sys_system(cmd_c.as_ptr() as *const i8); }
     }
     let _ = std::fs::remove_file("/sdcard/uma_upload.json");
 }
