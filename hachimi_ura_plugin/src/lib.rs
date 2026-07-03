@@ -3666,7 +3666,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.30","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.31","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3847,7 +3847,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.30","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.31","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3947,7 +3947,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         } else { "" };
         unsafe { debug_dumpclass(class_name) }
     } else if path == "/debug/storydata" {
-        // v3.22.30: Discover all DataSet getters, find story/event related arrays
+        // v3.22.31: Discover all DataSet getters, find story/event related arrays
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { debug_storydata() }
         })).unwrap_or_else(|_| r#"{"error":"storydata_panic"}"#.to_string())
@@ -5253,7 +5253,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.30","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.31","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5318,7 +5318,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.30","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.31","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5390,7 +5390,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.30","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.31","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5546,7 +5546,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.30","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.31","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6076,7 +6076,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.30","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.31","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6177,7 +6177,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.30","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.31","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6338,7 +6338,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.30","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.31","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6348,32 +6348,35 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.30","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.31","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.30","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.31","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
 }
 
 
-/// v3.22.30: /debug/storydata — Pure memory read: dump DataSet + SingleModeData fields + hex
+/// v3.22.31: /debug/storydata — Pure memory read: dump DataSet + SingleModeData fields + hex
 /// NO runtime_invoke on any new path. Only reads memory + uses existing safe getters.
 /// 1. Get DataSet pointer via existing safe getters
 /// 2. Dump all class fields + offsets (metadata only)
 /// 3. Hex dump the object memory
 /// 4. For ObscuredInt fields at known offsets, decrypt directly
 
-/// v3.22.30: /debug/storydata — Read _storyInfoListDic + EventChoiceRewardDict from SingleModeData
+/// v3.22.31: /debug/storydata — Read _storyInfoListDic + EventChoiceRewardDict from SingleModeData
 /// Pure memory read: read pointers at known offsets, dump class info + hex
 
-/// v3.22.30: /debug/storydata — Read event dictionaries from SingleModeData
+/// v3.22.31: /debug/storydata — Read event dictionaries from SingleModeData
 /// Reads _storyInfoListDic, EventChoiceRewardDict, StoryEventBonusDict
 /// Traverses Dictionary`2 _entries array to dump key/value objects
+
+/// v3.22.31: /debug/storydata — Pure memory read event dictionaries
+/// ZERO runtime_invoke calls. Only reads raw pointers + hex.
 unsafe fn debug_storydata() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
@@ -6390,10 +6393,8 @@ unsafe fn debug_storydata() -> String {
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
     let sm_base = sm_obj as *const u8;
 
-    // Helper: read Dictionary`2 contents
-    // Layout: _buckets@0x10, _entries@0x18, _count@0x20, _freeList@0x24, _freeCount@0x28
-    // Entry struct: hashCode(i32)+next(i32)+key(ptr)+value(ptr) = 0x18 per entry
-    // _entries points to Il2CppArray: klass(8)+monitor(8)+bounds(8)+max_length(8)+data@0x20
+    // Helper: read Dictionary`2 — pure memory, zero invoke
+    // Dict layout: _buckets@0x10, _entries@0x18, _count@0x20
     let read_dict = |dic_ptr: *mut c_void, dic_name: &str| -> String {
         if dic_ptr.is_null() { return format!(r#"{{"name":"{}","ptr":"null"}}"#, dic_name); }
         let db = dic_ptr as *const u8;
@@ -6401,60 +6402,61 @@ unsafe fn debug_storydata() -> String {
         let entries_ptr = std::ptr::read_unaligned::<*mut c_void>(db.add(0x18) as *const *mut c_void);
 
         if count <= 0 || entries_ptr.is_null() {
-            // Dump class info even if empty
-            let dic_class = get_class_from_object(dic_ptr);
-            let dic_class_name = get_class_name_from_pointer(dic_class);
-            // Hex dump 0x60 bytes for debugging
             let mut hex: Vec<String> = Vec::new();
             for off in (0..0x60).step_by(4) {
                 let val = std::ptr::read_unaligned::<i32>(db.add(off) as *const i32);
                 hex.push(format!(r#""0x{:02x}:{}"#, off, val));
             }
-            return format!(r#"{{"name":"{}","ptr":"{:p}","class":"{}","count":{},"hex":{{{}}}}}"#,
-                dic_name, dic_ptr, dic_class_name, count, hex.join(","));
+            return format!(r#"{{"name":"{}","ptr":"{:p}","count":{},"hex":{{{}}}}}"#,
+                dic_name, dic_ptr, count, hex.join(","));
         }
 
+        // Il2CppArray: header 0x20 bytes, then Entry[] items
+        // Entry struct: hashCode(i32) + next(i32) + key(ptr) + value(ptr) = 0x18 bytes
         let count = count as usize;
-        let entry_data_start = entries_ptr as *const u8;
-        // Il2CppArray elements start at offset 0x20
-        let arr_base = entry_data_start;
-        let entry_size: usize = 0x18; // hashCode(4)+next(4)+key(8)+value(8)
+        let arr_base = entries_ptr as *const u8;
+        let entry_size: usize = 0x18;
         let mut entries: Vec<String> = Vec::new();
-        let max_entries = if count > 50 { 50 } else { count };
+        let max_entries = if count > 30 { 30 } else { count };
 
         for i in 0..max_entries {
-            let e_off = 0x20 + i * entry_size; // 0x20 = Il2CppArray header
+            let e_off = 0x20 + i * entry_size;
             let key_ptr = std::ptr::read_unaligned::<*mut c_void>(arr_base.add(e_off + 0x08) as *const *mut c_void);
             let val_ptr = std::ptr::read_unaligned::<*mut c_void>(arr_base.add(e_off + 0x10) as *const *mut c_void);
 
             let key_info = if !key_ptr.is_null() {
-                let kc = get_class_from_object(key_ptr);
-                let kcn = get_class_name_from_pointer(kc);
                 let kb = key_ptr as *const u8;
-                // Read first 0x30 bytes of key
                 let mut kh: Vec<String> = Vec::new();
-                for off in (0..0x30).step_by(4) {
+                for off in (0..0x20).step_by(4) {
                     let v = std::ptr::read_unaligned::<i32>(kb.add(off) as *const i32);
                     kh.push(format!(r#""0x{:02x}:{}"#, off, v));
                 }
-                format!(r#"{{"ptr":"{:p}","class":"{}","hex":{{{}}}}}"#, key_ptr, kcn, kh.join(","))
+                // Get key class name from object header
+                let key_klass_ptr = std::ptr::read_unaligned::<*mut c_void>(kb as *const *mut c_void);
+                let key_class_name = if !key_klass_ptr.is_null() {
+                    get_class_name_from_pointer(key_klass_ptr)
+                } else {
+                    "null".to_string()
+                };
+                format!(r#"{{"ptr":"{:p}","class":"{}","hex":{{{}}}}}"#, key_ptr, key_class_name, kh.join(","))
             } else {
                 r#"{"ptr":"null"}"#.to_string()
             };
 
             let val_info = if !val_ptr.is_null() {
-                let vc = get_class_from_object(val_ptr);
-                let vcn = get_class_name_from_pointer(vc);
                 let vb = val_ptr as *const u8;
-                // Read first 0x60 bytes of value
                 let mut vh: Vec<String> = Vec::new();
-                for off in (0..0x60).step_by(4) {
+                for off in (0..0x80).step_by(4) {
                     let v = std::ptr::read_unaligned::<i32>(vb.add(off) as *const i32);
                     vh.push(format!(r#""0x{:02x}:{}"#, off, v));
                 }
-                // Also enumerate value class fields
-                let val_fields = enumerate_class_fields(vc);
-                format!(r#"{{"ptr":"{:p}","class":"{}","fields":{},"hex":{{{}}}}}"#, val_ptr, vcn, val_fields, vh.join(","))
+                let val_klass_ptr = std::ptr::read_unaligned::<*mut c_void>(vb as *const *mut c_void);
+                let val_class_name = if !val_klass_ptr.is_null() {
+                    get_class_name_from_pointer(val_klass_ptr)
+                } else {
+                    "null".to_string()
+                };
+                format!(r#"{{"ptr":"{:p}","class":"{}","hex":{{{}}}}}"#, val_ptr, val_class_name, vh.join(","))
             } else {
                 r#"{"ptr":"null"}"#.to_string()
             };
@@ -6466,7 +6468,7 @@ unsafe fn debug_storydata() -> String {
             dic_name, dic_ptr, count, entries.join(","))
     };
 
-    // Read three dictionaries
+    // Read three dictionaries at known offsets — pure pointer deread, zero invoke
     let story_dic_ptr = std::ptr::read_unaligned::<*mut c_void>(sm_base.add(0x38) as *const *mut c_void);
     let story_info = read_dict(story_dic_ptr, "storyInfoListDic");
 
@@ -6476,19 +6478,8 @@ unsafe fn debug_storydata() -> String {
     let bonus_dic_ptr = std::ptr::read_unaligned::<*mut c_void>(sm_base.add(0x180) as *const *mut c_void);
     let bonus_info = read_dict(bonus_dic_ptr, "storyEventBonusDict");
 
-    // Also try calling get_StoryInfoListDic getter for comparison
-    let getter_dic = call_getter_ref(sm_class, sm_obj, "get_StoryInfoListDic");
-    let getter_info = if !getter_dic.is_null() {
-        let gc = get_class_from_object(getter_dic);
-        let gcn = get_class_name_from_pointer(gc);
-        let gcount = std::ptr::read_unaligned::<i32>((getter_dic as *const u8).add(0x20) as *const i32);
-        format!(r#"{{"ptr":"{:p}","class":"{}","count":{}}}"#, getter_dic, gcn, gcount)
-    } else {
-        r#"{"ptr":"null"}"#.to_string()
-    };
-
     format!(
-        r#"{{"story_info_list_dic":{},"event_choice_reward_dict":{},"story_event_bonus_dict":{},"getter_storyInfoListDic":{}}}"#,
-        story_info, reward_info, bonus_info, getter_info
+        r#"{{"story_info_list_dic":{},"event_choice_reward_dict":{},"story_event_bonus_dict":{}}}"#,
+        story_info, reward_info, bonus_info
     )
 }
