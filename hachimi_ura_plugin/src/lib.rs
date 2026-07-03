@@ -3847,7 +3847,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.29","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/ramenfields","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.29","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3939,13 +3939,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
         upload_all_logs()
     } else if path == "/debug/cmdinfo" {
         unsafe { debug_cmdinfo() }
-    } else if path.starts_with("/debug/dumpclass") {
+    } else if path.starts_with("/debug/dumpclass","/debug/storydata") {
         // v3.22.28: Dump all fields of any IL2CPP class by name
-        // Usage: /debug/dumpclass?name=WorkSingleModeData
+        // Usage: /debug/dumpclass","/debug/storydata?name=WorkSingleModeData
         let class_name = if let Some(q) = full_uri.find("?name=") {
             &full_uri[q+6..]
         } else { "" };
         unsafe { debug_dumpclass(class_name) }
+    } else if path == "/debug/storydata" {
+        // v3.22.29: Discover all DataSet getters, find story/event related arrays
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unsafe { debug_storydata() }
+        })).unwrap_or_else(|_| r#"{"error":"storydata_panic"}"#.to_string())
+
     } else if path == "/debug/ramenfields" {
         // v3.22.28: Dump all ramen array element classes + their fields at runtime
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -4017,7 +4023,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/dumpclass","/debug/ramenfields","/mdb","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/mdb","/classes/search/keyword"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -5661,7 +5667,7 @@ unsafe fn read_ranking_data() -> String {
 // ============================================================
 
 
-/// v3.22.28: /debug/dumpclass?name=ClassName — Dump all fields of any IL2CPP class
+/// v3.22.28: /debug/dumpclass","/debug/storydata?name=ClassName — Dump all fields of any IL2CPP class
 /// Uses il2cpp_class_get_fields (metadata only, no runtime_invoke)
 unsafe fn debug_dumpclass(class_name: &str) -> String {
     if class_name.is_empty() {
@@ -6352,4 +6358,152 @@ unsafe fn read_event_recommend() -> String {
             card_id, sid
         )
     }
+}
+
+/// v3.22.29: /debug/storydata — Discover all DataSet getters and try to find story/event data
+/// Walks DataSet object, calls ALL get_ methods, reports return type/value for each
+unsafe fn debug_storydata() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    // 1. Get scenario info
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+    let scenario_id = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+
+    let scenario_class_name = match scenario_id {
+        1 => "WorkSingleModeScenarioURA",
+        2 => "WorkSingleModeScenarioTeamRace",
+        3 => "WorkSingleModeScenarioLive",
+        4 => "WorkSingleModeScenarioFree",
+        5 => "WorkSingleModeScenarioVenus",
+        6 => "WorkSingleModeScenarioArc",
+        7 => "WorkSingleModeScenarioSport",
+        8 => "WorkSingleModeScenarioCook",
+        9 => "WorkSingleModeScenarioMecha",
+        10 => "WorkSingleModeScenarioLegend",
+        11 => "WorkSingleModeScenarioPioneer",
+        12 => "WorkSingleModeScenarioOnsen",
+        13 => "WorkSingleModeScenarioBreeders",
+        14 => "WorkSingleModeScenarioRamen",
+        _ => "Unknown",
+    };
+
+    let scenario_class = find_class_by_short_name(image, scenario_class_name);
+    if scenario_class.is_null() { return format!(r#"{{"error":"no_scenario_class","name":"{}"}}"#, scenario_class_name); }
+    let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, scenario_id);
+    if scenario_obj.is_null() { return r#"{"error":"no_scenario_obj"}"#.to_string(); }
+
+    let ds_obj = call_getter_ref(scenario_class, scenario_obj, "get_DataSet");
+    if ds_obj.is_null() { return r#"{"error":"no_dataset_obj"}"#.to_string(); }
+
+    // 2. Get DataSet class from object header (handles Obscured wrappers)
+    let ds_class = get_class_from_object(ds_obj);
+    let ds_class_name = get_class_name_from_pointer(ds_class);
+
+    // 3. Enumerate ALL methods from DataSet class, find get_ methods
+    let get_methods_fn: Option<FnClassGetMethods> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethods>(p)) }
+    };
+    let get_method_name_fn: Option<FnMethodGetName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnMethodGetName>(p)) }
+    };
+
+    if get_methods_fn.is_none() || get_method_name_fn.is_none() {
+        return r#"{"error":"no_method_enum_api"}"#.to_string();
+    }
+
+    // Collect all get_ method names
+    let mut getter_names: Vec<String> = Vec::new();
+    let mut iter: *mut c_void = ptr::null_mut();
+    loop {
+        let method_info = get_methods_fn.unwrap()(ds_class, &mut iter);
+        if method_info.is_null() { break; }
+        let method_name = if let Some(ref get_name) = get_method_name_fn {
+            let name_ptr = get_name(method_info);
+            if !name_ptr.is_null() {
+                std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().to_string()
+            } else { continue; }
+        } else { continue; };
+        if method_name.starts_with("get_") {
+            getter_names.push(method_name);
+        }
+    }
+
+    // 4. Call each getter and try to identify the return type
+    let mut results: Vec<String> = Vec::new();
+    for getter in &getter_names {
+        let result_ptr = call_getter_on_instance(ds_class, ds_obj, getter);
+        if result_ptr.is_null() {
+            results.push(format!(r#"{{"getter":"{}","type":"null"}}"#, getter));
+            continue;
+        }
+
+        // Try to read as object - get class from header
+        let obj_class = get_class_from_object(result_ptr);
+        let obj_class_name = get_class_name_from_pointer(obj_class);
+
+        // Check if it's a List/Array by looking for count field at 0x18
+        let base = result_ptr as *const u8;
+        let maybe_count = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+
+        // Heuristic: if class name contains "List" or count is small and items pointer is valid
+        let is_list = obj_class_name.contains("List") || obj_class_name.contains("Array");
+
+        if is_list || (maybe_count > 0 && maybe_count < 1000) {
+            // Try to read as List
+            let length = maybe_count;
+            if length < 1000 {
+                // Read first element class name if available
+                let first_elem_class = if length > 0 {
+                    let first_ptr = std::ptr::read_unaligned::<*mut c_void>(
+                        base.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void
+                    );
+                    if !first_ptr.is_null() {
+                        let fc = get_class_from_object(first_ptr);
+                        get_class_name_from_pointer(fc)
+                    } else {
+                        "null_elem".to_string()
+                    }
+                } else {
+                    "empty".to_string()
+                };
+                results.push(format!(
+                    r#"{{"getter":"{}","type":"list","class":"{}","len":{},"elem_class":"{}"}}"#,
+                    getter, obj_class_name, length, first_elem_class
+                ));
+            } else {
+                results.push(format!(
+                    r#"{{"getter":"{}","type":"obj","class":"{}","maybe_count":{}}}"#,
+                    getter, obj_class_name, maybe_count
+                ));
+            }
+        } else {
+            // It's a regular object or value type
+            // Check if it's a boxed int (value at +16)
+            let maybe_int = std::ptr::read_unaligned::<i32>(base.add(16) as *const i32);
+            results.push(format!(
+                r#"{{"getter":"{}","type":"obj","class":"{}","boxed_int_maybe":{}}}"#,
+                getter, obj_class_name, maybe_int
+            ));
+        }
+    }
+
+    format!(
+        r#"{{"scenario_id":{},"scenario_class":"{}","dataset_class":"{}","getters":[{}]}}"#,
+        scenario_id, scenario_class_name, ds_class_name, results.join(",")
+    )
 }
