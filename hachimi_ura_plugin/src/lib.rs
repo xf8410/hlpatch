@@ -456,7 +456,7 @@ unsafe fn find_class(image: *const c_void, ns: *const c_char, name: *const c_cha
         if let Ok(guard) = CLASS_CACHE.lock() {
             if let Some(ref map) = *guard {
                 if let Some(&cls) = map.get(&name_str) {
-                    return cls;
+                    return cls as *mut c_void;
                 }
             }
         }
@@ -475,7 +475,7 @@ unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *m
     if let Ok(guard) = CLASS_CACHE.lock() {
         if let Some(ref map) = *guard {
             if let Some(&cls) = map.get(class_name) {
-                return cls;
+                return cls as *mut c_void;
             }
         }
     }
@@ -547,7 +547,7 @@ unsafe fn get_singleton(class: *mut c_void) -> *const c_void {
     if let Ok(guard) = SINGLETON_CACHE.lock() {
         if let Some(ref map) = *guard {
             if let Some(&val) = map.get(&key) {
-                return val;
+                return val as *const c_void;
             }
         }
     }
@@ -1894,8 +1894,8 @@ static FIELD_OFFSET_CACHE: std::sync::Mutex<Option<HashMap<String, i32>>> = std:
 
 // v3.22.21: Zero IL2CPP API in read path
 static IN_READ_PATH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static CLASS_CACHE: std::sync::Mutex<Option<HashMap<String, *mut c_void>>> = std::sync::Mutex::new(None);
-static SINGLETON_CACHE: std::sync::Mutex<Option<HashMap<usize, *const c_void>>> = std::sync::Mutex::new(None);
+static CLASS_CACHE: std::sync::Mutex<Option<HashMap<String, usize>>> = std::sync::Mutex::new(None);
+static SINGLETON_CACHE: std::sync::Mutex<Option<HashMap<usize, usize>>> = std::sync::Mutex::new(None);
 
 unsafe fn cached_find_field_offset(class: *mut c_void, field_name: &str) -> i32 {
     let key = format!("{:p}_{}", class, field_name);
@@ -4229,7 +4229,7 @@ unsafe fn precache_metadata() {
             if let Ok(mut guard) = CLASS_CACHE.lock() {
                 if guard.is_none() { *guard = Some(HashMap::new()); }
                 if let Some(ref mut map) = *guard {
-                    map.insert(name.to_string(), cls);
+                    map.insert(name.to_string(), cls as usize);
                 }
             }
             precache_all_fields(cls);
@@ -4244,7 +4244,7 @@ unsafe fn precache_metadata() {
             if let Ok(mut guard) = CLASS_CACHE.lock() {
                 if guard.is_none() { *guard = Some(HashMap::new()); }
                 if let Some(ref mut map) = *guard {
-                    map.insert(name.to_string(), cls);
+                    map.insert(name.to_string(), cls as usize);
                 }
             }
             precache_all_fields(cls);
@@ -4254,12 +4254,13 @@ unsafe fn precache_metadata() {
 
     // Cache WorkDataManager singleton
     if let Some(wdm_cls) = CLASS_CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get("WorkDataManager").copied())) {
-        let inst = get_singleton(wdm_cls);
+        let wdm_ptr = wdm_cls as *mut c_void;
+        let inst = get_singleton(wdm_ptr);
         if !inst.is_null() {
             if let Ok(mut guard) = SINGLETON_CACHE.lock() {
                 if guard.is_none() { *guard = Some(HashMap::new()); }
                 if let Some(ref mut map) = *guard {
-                    map.insert(wdm_cls as usize, inst);
+                    map.insert(wdm_cls, inst as usize);
                 }
             }
             ura_log(2, &format!("precache_metadata: WDM singleton cached at {:p}", inst));
