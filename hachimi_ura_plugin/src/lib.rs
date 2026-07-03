@@ -1236,7 +1236,7 @@ unsafe fn read_scenario_detail() -> String {
                                 let cat = read_obscured_int_from_obj(ep, "get_EffectCategory");
                                 let eid = read_obscured_int_from_obj(ep, "get_EffectId");
                                 let val = read_obscured_int_from_obj(ep, "get_EffectValue");
-                                effects.push(format!(r#"{"EffectCategory":{},"EffectId":{},"EffectValue":{}}"#, cat, eid, val));
+                                effects.push(format!(r#"{{"EffectCategory":{},"EffectId":{},"EffectValue":{}}}"#, cat, eid, val));
                             }
                             result_parts.push(format!(r#""active_effects":[{}]"#, effects.join(",")));
                         }
@@ -1277,7 +1277,7 @@ unsafe fn read_scenario_detail() -> String {
                                 if fe_ptr.is_null() { fi_elements.push("{}".to_string()); continue; }
                                 let ft = read_obscured_int_from_obj(fe_ptr, "get_FeelingType");
                                 let fv = read_obscured_int_from_obj(fe_ptr, "get_FeelingValue");
-                                fi_elements.push(format!(r#"{"FeelingType":{},"FeelingValue":{}}"#, ft, fv));
+                                fi_elements.push(format!(r#"{{"FeelingType":{},"FeelingValue":{}}}"#, ft, fv));
                             }
                             result_parts.push(format!(r#""feeling_info":[{}]"#, fi_elements.join(",")));
                         }
@@ -1296,7 +1296,7 @@ unsafe fn read_scenario_detail() -> String {
                                 if fp.is_null() { ft_elems.push("{}".to_string()); continue; }
                                 let t = read_obscured_int_from_obj(fp, "get_Turn");
                                 let fty = read_obscured_int_from_obj(fp, "get_FeelingType");
-                                ft_elems.push(format!(r#"{"Turn":{},"FeelingType":{}}"#, t, fty));
+                                ft_elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, fty));
                             }
                             result_parts.push(format!(r#""feeling_turn_info":[{}]"#, ft_elems.join(",")));
                         }
@@ -1317,7 +1317,7 @@ unsafe fn read_scenario_detail() -> String {
                                 let ct = read_obscured_int_from_obj(cp, "get_CommandType");
                                 let cid = read_obscured_int_from_obj(cp, "get_CommandId");
                                 let fid = read_obscured_int_from_obj(cp, "get_FeelingId");
-                                cf_elems.push(format!(r#"{"CommandType":{},"CommandId":{},"FeelingId":{}}"#, ct, cid, fid));
+                                cf_elems.push(format!(r#"{{"CommandType":{},"CommandId":{},"FeelingId":{}}}"#, ct, cid, fid));
                             }
                             result_parts.push(format!(r#""command_feeling_info":[{}]"#, cf_elems.join(",")));
                         }
@@ -1337,7 +1337,7 @@ unsafe fn read_scenario_detail() -> String {
                                 if rp.is_null() { fr_elems.push("{}".to_string()); continue; }
                                 let t = read_obscured_int_from_obj(rp, "get_Turn");
                                 let fty = read_obscured_int_from_obj(rp, "get_FeelingType");
-                                fr_elems.push(format!(r#"{"Turn":{},"FeelingType":{}}"#, t, fty));
+                                fr_elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, fty));
                             }
                             result_parts.push(format!(r#""feeling_reduce_turn_info":[{}]"#, fr_elems.join(",")));
                         }
