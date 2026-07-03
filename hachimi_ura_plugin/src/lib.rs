@@ -5837,6 +5837,63 @@ unsafe fn debug_cmdinfo() -> String {
     )
 }
 
+/// /debug/rameninfo — Dump ramen DataSet hex + class info (for offset discovery)
+unsafe fn read_ramen_info() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    let ramen_sc_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
+    if ramen_sc_class.is_null() { return r#"{"error":"no_ramen_sc_class"}"#.to_string(); }
+    let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
+    if ramen_sc_obj.is_null() { return r#"{"error":"no_ramen_sc_obj"}"#.to_string(); }
+    let ramen_ds_obj = call_getter_ref(ramen_sc_class, ramen_sc_obj, "get_DataSet");
+    if ramen_ds_obj.is_null() { return r#"{"error":"no_ramen_ds"}"#.to_string(); }
+
+    // Read class pointer from object header (offset 0 on 64-bit = Il2CppObject.klass)
+    let ds_base = ramen_ds_obj as *const u8;
+    let ds_class_ptr = std::ptr::read_unaligned::<*mut c_void>(ds_base as *const *mut c_void);
+
+    // Hex dump first 256 bytes
+    let mut hex = String::new();
+    for i in 0..256usize {
+        let b = std::ptr::read_unaligned::<u8>(ds_base.add(i));
+        hex.push_str(&format!("{:02x}", b));
+        if (i + 1) % 16 == 0 { hex.push('\n'); } else if (i + 1) % 8 == 0 { hex.push(' '); }
+    }
+
+    // Try to read class name via il2cpp class API
+    let mut class_name = String::new();
+    if !ds_class_ptr.is_null() {
+        let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
+        if !get_name_fn.is_null() {
+            let fn_ptr: unsafe extern "C" fn(*mut c_void) -> *const u8 = std::mem::transmute(get_name_fn);
+            let name_ptr = fn_ptr(ds_class_ptr);
+            if !name_ptr.is_null() {
+                let cstr = std::ffi::CStr::from_ptr(name_ptr);
+                class_name = cstr.to_string_lossy().into_owned();
+            }
+        }
+    }
+
+    format!(
+        r#"{"ds_ptr":"0x{:x}","ds_class":"0x{:x}","class_name":"{}","hex_dump":"{}"}"#,
+        ramen_ds_obj as usize, ds_class_ptr as usize, class_name, hex
+    )
+}
+
 /// /inherit/compat — Inheritance compatibility calculation
 /// Shows exact compatibility values (not just ○△×), split by parent gender,
 /// and detects target race overlap
