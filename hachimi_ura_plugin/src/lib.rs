@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.25
+//! URA Plugin v3.22.26
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -211,7 +211,7 @@ unsafe fn ura_notify(msg: &str) {
     }
 }
 
-// ===== Crash logging for /training/predict =====
+// ===== Crash logging =====
 extern "C" {
     #[link_name = "signal"]
     fn sys_signal(signum: i32, handler: usize) -> usize;
@@ -302,7 +302,7 @@ fn log_predict_step(msg: &str) {
         if fd >= 0 { sys_write(fd, line_bytes.as_ptr(), line_bytes.len()); sys_close(fd); }
         let fd2 = sys_open(path2.as_ptr() as *const i8, 1 | 64 | 1024, 0o644);
         if fd2 >= 0 { sys_write(fd2, line_bytes.as_ptr(), line_bytes.len()); sys_close(fd2); }
-    // v3.22.25: std::fs fallback
+    // v3.22.26: std::fs fallback
     let _ = std::fs::OpenOptions::new().create(true).append(true)
         .open("/data/data/jp.pokemon.pokeuma/files/uma_predict.log")
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
@@ -751,7 +751,7 @@ unsafe fn call_getter_obscured_int(
 }
 
 // ============================================================
-// ★ v3.22.25: Direct memory read helpers — zero il2cpp calls
+// ★ v3.22.26: Direct memory read helpers — zero il2cpp calls
 // ============================================================
 
 unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
@@ -770,21 +770,21 @@ unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
     )
 }
 
-// ★ v3.22.25: Direct int read — zero il2cpp_runtime_invoke
+// ★ v3.22.26: Direct int read — zero il2cpp_runtime_invoke
 unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
     if obj.is_null() || field_offset < 0 { return -1; }
     let base = obj as *const u8;
     std::ptr::read_unaligned::<i32>(base.add(field_offset as usize) as *const i32)
 }
 
-/// v3.22.25: Read Il2CppClass* from object header (offset 0 on 64-bit)
+/// v3.22.26: Read Il2CppClass* from object header (offset 0 on 64-bit)
 /// This gives us the EXACT class of any object instance at runtime
 unsafe fn get_class_from_object(obj: *const c_void) -> *mut c_void {
     if obj.is_null() { return ptr::null_mut(); }
     std::ptr::read_unaligned::<*mut c_void>(obj as *const *mut c_void)
 }
 
-/// v3.22.25: Read ObscuredInt field from object using its own class (from header)
+/// v3.22.26: Read ObscuredInt field from object using its own class (from header)
 /// No need to find class by name — reads it directly from the object
 unsafe fn read_obscured_int_from_obj(obj: *const c_void, field_name: &str) -> i32 {
     if obj.is_null() { return -1; }
@@ -816,7 +816,7 @@ unsafe fn read_obscured_int_array(
     // +0x20: data start
     let base = arr_obj as *const u8;
     let length = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if length == 0 || length > 200 { return result; } // ★ v3.22.25: guard rail — lower limit
+    if length == 0 || length > 200 { return result; } // ★ v3.22.26: guard rail — lower limit
 
     // ObscuredInt struct (unboxed) layout:
     // offset 0x00: currentCryptoKey (Int32)
@@ -1210,7 +1210,7 @@ unsafe fn read_scenario_detail() -> String {
                             for i in 0..ae_len {
                                 let ep = std::ptr::read_unaligned::<*mut c_void>(ae_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                 if ep.is_null() { continue; }
-                                // v3.22.25: Read class from object header — no more find_class or hardcoded offsets
+                                // v3.22.26: Read class from object header — no more find_class or hardcoded offsets
                                 let cat = read_obscured_int_from_obj(ep, "get_EffectCategory");
                                 let eid = read_obscured_int_from_obj(ep, "get_EffectId");
                                 let val = read_obscured_int_from_obj(ep, "get_EffectValue");
@@ -1225,7 +1225,7 @@ unsafe fn read_scenario_detail() -> String {
                     // ObscuredInt fields: UrafEffectType, UrafEffectState
                     let uraf_obj = call_getter_on_instance(dataset_class, dataset_obj, "get_UrafEffectInfo");
                     if !uraf_obj.is_null() {
-                        // v3.22.25: Read class from object header — no more find_class or hardcoded offsets
+                        // v3.22.26: Read class from object header — no more find_class or hardcoded offsets
                         let ut = read_obscured_int_from_obj(uraf_obj, "get_UrafEffectType");
                         let us = read_obscured_int_from_obj(uraf_obj, "get_UrafEffectState");
                         result_parts.push(format!(r#""uraf_effect":{{"UrafEffectType":{},"UrafEffectState":{}}}"#, ut, us));
@@ -1248,7 +1248,7 @@ unsafe fn read_scenario_detail() -> String {
                         let fi_base = fi_arr as *const u8;
                         let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                         if fi_len > 0 && fi_len < 100 {
-                            // v3.22.25: Read class from each element's object header — no more find_class or hardcoded offsets
+                            // v3.22.26: Read class from each element's object header — no more find_class or hardcoded offsets
                             let mut fi_elements = Vec::new();
                             for fi in 0..fi_len {
                                 let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -1262,7 +1262,7 @@ unsafe fn read_scenario_detail() -> String {
                     }
 
                     // FeelingTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
-                    // v3.22.25: Read class from object header — no more hardcoded offsets
+                    // v3.22.26: Read class from object header — no more hardcoded offsets
                     let ft_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingTurnInfoArray");
                     if !ft_arr.is_null() {
                         let ft_base = ft_arr as *const u8;
@@ -1282,7 +1282,7 @@ unsafe fn read_scenario_detail() -> String {
 
 
                     // CommandFeelingInfoArray: 3 ObscuredInt fields (CommandType, CommandId, FeelingId)
-                    // v3.22.25: Read class from object header — no more hardcoded offsets
+                    // v3.22.26: Read class from object header — no more hardcoded offsets
                     let cf_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandFeelingInfoArray");
                     if !cf_arr.is_null() {
                         let cf_base = cf_arr as *const u8;
@@ -1303,7 +1303,7 @@ unsafe fn read_scenario_detail() -> String {
 
 
                     // FeelingReduceTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
-                    // v3.22.25: Read class from object header — no more hardcoded offsets
+                    // v3.22.26: Read class from object header — no more hardcoded offsets
                     let fr_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingReduceTurnInfoArray");
                     if !fr_arr.is_null() {
                         let fr_base = fr_arr as *const u8;
@@ -1735,7 +1735,7 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
 }
 
 // ============================================================
-// ★ v3.22.25: find_field_offset — read field offset via il2cpp_class_get_fields
+// ★ v3.22.26: find_field_offset — read field offset via il2cpp_class_get_fields
 // Thread-safe metadata API, NO il2cpp_runtime_invoke calls
 // ============================================================
 
@@ -1822,12 +1822,12 @@ unsafe fn find_field_offset(class: *mut c_void, field_name: &str) -> i32 {
 }
 
 // ============================================================
-// ★ v3.22.25: Field offset cache — avoid repeated il2cpp_class_get_fields calls
+// ★ v3.22.26: Field offset cache — avoid repeated il2cpp_class_get_fields calls
 // ============================================================
 use std::collections::HashMap;
 static FIELD_OFFSET_CACHE: std::sync::Mutex<Option<HashMap<String, i32>>> = std::sync::Mutex::new(None);
 
-// v3.22.25: Zero IL2CPP API in read path
+// v3.22.26: Zero IL2CPP API in read path
 static IN_READ_PATH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CLASS_CACHE: std::sync::Mutex<Option<HashMap<String, usize>>> = std::sync::Mutex::new(None);
 static SINGLETON_CACHE: std::sync::Mutex<Option<HashMap<usize, usize>>> = std::sync::Mutex::new(None);
@@ -1855,7 +1855,7 @@ unsafe fn cached_find_field_offset(class: *mut c_void, field_name: &str) -> i32 
 }
 
 // ============================================================
-// ★ v3.22.25: read_ramen_scalar_fields — read 5 ObscuredInt fields from DataSet
+// ★ v3.22.26: read_ramen_scalar_fields — read 5 ObscuredInt fields from DataSet
 // Zero il2cpp_runtime_invoke calls (only find_field_offset + read_obscured_int_at)
 // ============================================================
 
@@ -2871,12 +2871,12 @@ fn compute_skill_eval(skills: &[(i32, i32)]) -> (i32, i32, String) {
     (total_eval, skills.len() as i32, format!("[{}]", breakdown.join(",")))
 }
 
-// ★ v3.22.25: Summary cache — reduce IL2CPP metadata reads
+// ★ v3.22.26: Summary cache — reduce IL2CPP metadata reads
 static CACHED_SUMMARY: std::sync::Mutex<Option<(String, u64)>> = std::sync::Mutex::new(None);
 const SUMMARY_CACHE_TTL_SECS: u64 = 3;
 
 fn read_summary() -> String {
-    // ★ v3.22.25: Check cache first — avoid IL2CPP calls if data hasn't changed
+    // ★ v3.22.26: Check cache first — avoid IL2CPP calls if data hasn't changed
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -2893,7 +2893,7 @@ fn read_summary() -> String {
     let summary = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unsafe { read_summary_inner() }
     })).unwrap_or_else(|_| r#"{"error":"panic_caught","hint":"read_summary panicked, game protected"}"#.to_string());
-    // ★ v3.22.25: Update cache
+    // ★ v3.22.26: Update cache
     if let Ok(mut guard) = CACHED_SUMMARY.lock() {
         *guard = Some((summary.clone(), now));
     }
@@ -2901,7 +2901,7 @@ fn read_summary() -> String {
 }
 
 unsafe fn read_summary_inner() -> String {
-    // v3.22.25: IN_READ_PATH disabled - /debug/ramenfields proves IL2CPP APIs are safe from HTTP thread
+    // v3.22.26: IN_READ_PATH disabled - /debug/ramenfields proves IL2CPP APIs are safe from HTTP thread
     // Keep the wrapper for potential future use, but don't block any APIs
     read_summary_inner_impl()
 }
@@ -2988,10 +2988,10 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
-    // ★ v3.22.25: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
+    // ★ v3.22.26: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
     // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
     if sid == 14 {
-        ura_log(3, "v3.22.25 ramen: direct memory read");
+        ura_log(3, "v3.22.26 ramen: direct memory read");
         log_predict_step("S:ramen start");
         let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
         if !scenario_obj.is_null() {
@@ -3476,7 +3476,7 @@ unsafe fn read_summary_inner_impl() -> String {
     log_predict_step("S:p6 buffs");
     // ★ v3.14.2: Always generate buffs from chara_effect_ids first
     let mut buff_json = effects_to_buffs_json(&chara_effect_ids);
-    // ★ v3.22.25: sid==14 skips try_get_scenario_obj (data pre-read in ramen section)
+    // ★ v3.22.26: sid==14 skips try_get_scenario_obj (data pre-read in ramen section)
     let scenario_obj = if sid == 14 {
         ptr::null_mut()
     } else {
@@ -3581,7 +3581,7 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     }
 
-    // ★ v3.22.25: Ramen buffs — extracted outside nested block (uses pre-read data only)
+    // ★ v3.22.26: Ramen buffs — extracted outside nested block (uses pre-read data only)
     if sid == 14 && !ramen_active_effects_raw_json.is_empty() {
         let mut buffs = Vec::new();
         for ae_part in ramen_active_effects_raw_json.split("},{") {
@@ -3666,7 +3666,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.25","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.26","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3847,7 +3847,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.25","endpoints":["/summary","/data","/scenario","/training/predict","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/ramenfields","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.26","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/ramenfields","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3940,14 +3940,14 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/cmdinfo" {
         unsafe { debug_cmdinfo() }
     } else if path.starts_with("/debug/dumpclass") {
-        // v3.22.25: Dump all fields of any IL2CPP class by name
+        // v3.22.26: Dump all fields of any IL2CPP class by name
         // Usage: /debug/dumpclass?name=WorkSingleModeData
         let class_name = if let Some(q) = full_uri.find("?name=") {
             &full_uri[q+6..]
         } else { "" };
         unsafe { debug_dumpclass(class_name) }
     } else if path == "/debug/ramenfields" {
-        // v3.22.25: Dump all ramen array element classes + their fields at runtime
+        // v3.22.26: Dump all ramen array element classes + their fields at runtime
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { debug_ramenfields() }
         })).unwrap_or_else(|_| r#"{"error":"ramenfields_panic"}"#.to_string())
@@ -3963,12 +3963,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
         read_skilldata()
     } else if path == "/hall" {
         unsafe { read_hall_data() }
-    } else if path == "/training/predict" {
-        clear_predict_log();
-        let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            unsafe { read_training_predict() }
-        })).unwrap_or_else(|_| r#"{"error":"panic_caught","hint":"read_training_predict panicked"}"#.to_string())
     } else if path == "/event/recommend" {
         unsafe { read_event_recommend() }
     } else if path == "/inherit/compat" {
@@ -4016,7 +4010,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         };
         unsafe { enumerate_all_classes(search) }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/training/predict","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/dumpclass","/debug/ramenfields","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/dumpclass","/debug/ramenfields","/classes/search/keyword"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -4039,7 +4033,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
 }
 
 // ============================================================
-// v3.22.25: Pre-cache all class metadata on game thread
+// v3.22.26: Pre-cache all class metadata on game thread
 // ============================================================
 
 /// Convert PascalCase to snake_case for cache key matching
@@ -4115,7 +4109,7 @@ unsafe fn precache_all_fields(class: *mut c_void) {
 
 /// Pre-cache all known classes and field offsets on game thread
 unsafe fn precache_metadata() {
-    ura_log(2, "v3.22.25 precache_metadata: starting");
+    ura_log(2, "v3.22.26 precache_metadata: starting");
     let image = match get_image() {
         img if !img.is_null() => img,
         _ => { ura_log(1, "precache_metadata: image null"); return; }
@@ -4204,7 +4198,7 @@ unsafe fn precache_metadata() {
         .ok().and_then(|g| g.as_ref().map(|m| m.len())).unwrap_or(0);
 
     ura_log(2, &format!(
-        "v3.22.25 precache_metadata: done — {} classes, {} field offsets cached",
+        "v3.22.26 precache_metadata: done — {} classes, {} field offsets cached",
         cached_count, field_count
     ));
 }
@@ -4222,7 +4216,7 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     unsafe {
         ura_log(3, "Game initialized");
         ura_notify("URA: Game ready!");
-        // v3.22.25: Pre-cache all IL2CPP metadata on game thread
+        // v3.22.26: Pre-cache all IL2CPP metadata on game thread
         precache_metadata();
     }
 }
@@ -4233,7 +4227,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.25").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.26").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -4440,10 +4434,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.25 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.26 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.25 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.26 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -5215,7 +5209,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.25","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.26","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5280,7 +5274,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.25","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.26","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5352,7 +5346,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.25","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.26","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5508,7 +5502,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.25","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.26","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -5629,7 +5623,7 @@ unsafe fn read_ranking_data() -> String {
 // ============================================================
 
 
-/// v3.22.25: /debug/dumpclass?name=ClassName — Dump all fields of any IL2CPP class
+/// v3.22.26: /debug/dumpclass?name=ClassName — Dump all fields of any IL2CPP class
 /// Uses il2cpp_class_get_fields (metadata only, no runtime_invoke)
 unsafe fn debug_dumpclass(class_name: &str) -> String {
     if class_name.is_empty() {
@@ -5669,7 +5663,7 @@ unsafe fn debug_dumpclass(class_name: &str) -> String {
     )
 }
 
-/// v3.22.25: /debug/ramenfields — Walk all ramen arrays, dump element class + fields
+/// v3.22.26: /debug/ramenfields — Walk all ramen arrays, dump element class + fields
 /// For each array: read first element, get class from object header, dump all fields + hex
 unsafe fn debug_ramenfields() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
@@ -5843,332 +5837,6 @@ unsafe fn debug_cmdinfo() -> String {
     )
 }
 
-/// /training/predict — Detailed training prediction with NPC partner breakdown
-/// Returns per-command: gains, partner details (support card vs NPC), buffs, failure risk
-/// Key data sources:
-///   - WorkSingleModeData -> get_HomeInfoData -> CommandInfoArray (training layout + partners)
-///   - WorkSingleModeCharaData -> CharaEffectBuffArray (active buffs)
-///   - WorkSingleModeScenarioRamenDataSet (ramen-specific data, scenario_id==14)
-unsafe fn read_ramen_info() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
-    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
-    let wdm_inst = get_singleton(wdm_class);
-    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
-    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
-    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
-    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
-    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
-    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
-
-    let ramen_sc_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
-    if ramen_sc_class.is_null() { return r#"{"error":"no_ramen_sc_class"}"#.to_string(); }
-    let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
-    if ramen_sc_obj.is_null() { return r#"{"error":"no_ramen_sc_obj"}"#.to_string(); }
-    let ramen_ds_obj = call_getter_ref(ramen_sc_class, ramen_sc_obj, "get_DataSet");
-    if ramen_ds_obj.is_null() { return r#"{"error":"no_ramen_ds"}"#.to_string(); }
-
-    // Read class pointer from object header (offset 0 on 64-bit = Il2CppObject.klass)
-    let ds_base = ramen_ds_obj as *const u8;
-    let ds_class_ptr = std::ptr::read_unaligned::<*mut c_void>(ds_base as *const *mut c_void);
-
-    // Hex dump first 256 bytes
-    let mut hex = String::new();
-    for i in 0..256usize {
-        let b = std::ptr::read_unaligned::<u8>(ds_base.add(i));
-        hex.push_str(&format!("{:02x}", b));
-        if (i + 1) % 16 == 0 { hex.push('\n'); } else if (i + 1) % 8 == 0 { hex.push(' '); }
-    }
-
-    // Try to read class name via il2cpp class API
-    let mut class_name = String::new();
-    if !ds_class_ptr.is_null() {
-        let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
-        if !get_name_fn.is_null() {
-            let fn_ptr: unsafe extern "C" fn(*mut c_void) -> *const u8 = std::mem::transmute(get_name_fn);
-            let name_ptr = fn_ptr(ds_class_ptr);
-            if !name_ptr.is_null() {
-                let cstr = std::ffi::CStr::from_ptr(name_ptr);
-                class_name = cstr.to_string_lossy().into_owned();
-            }
-        }
-    }
-
-    format!(
-        r#"{{"ds_ptr":"0x{:x}","ds_class":"0x{:x}","class_name":"{}","hex_dump":"{}"}}"#,
-        ramen_ds_obj as usize, ds_class_ptr as usize, class_name, hex
-    )
-}
-
-unsafe fn read_training_predict() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
-    clear_predict_log();
-    log_predict_step("P:start");
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-    log_predict_step("got image");
-
-    // 1. Get WDM -> SingleMode -> CharaData (standard path)
-    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
-    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
-    let wdm_inst = get_singleton(wdm_class);
-    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    log_predict_step("P:wdm");
-
-    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
-    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
-    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
-
-    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
-    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
-    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
-
-    let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
-    let spd = call_getter_int(chara_class, chara_obj, "get_Speed");
-    let sta = call_getter_int(chara_class, chara_obj, "get_Stamina");
-    let pow_ = call_getter_int(chara_class, chara_obj, "get_Power");
-    let gut = call_getter_int(chara_class, chara_obj, "get_Guts");
-    let wiz = call_getter_int(chara_class, chara_obj, "get_Wiz");
-    let vit = call_getter_int(chara_class, chara_obj, "get_Hp");
-    let mvit = call_getter_int(chara_class, chara_obj, "get_MaxHp");
-    let mot = call_getter_int(chara_class, chara_obj, "get_Motivation");
-    let spt = call_getter_obscured_int(chara_class, chara_obj, "get_SkillPoint");
-    log_predict_step(&format!("chara stats sid={} spd={} sta={}", sid, spd, sta));
-
-    // 2. Get HomeInfoData -> CommandInfoArray
-    let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
-    if home_info_obj.is_null() { return r#"{"error":"no_home_info"}"#.to_string(); }
-    log_predict_step("got home_info");
-    let hi_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeHomeInfoData").as_ptr());
-    if hi_class.is_null() { return r#"{"error":"no_home_info_class"}"#.to_string(); }
-
-    // CommandInfoArray is a public field at offset 0x10
-    let cmd_arr = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
-    if cmd_arr.is_null() { return r#"{"error":"no_cmd_arr"}"#.to_string(); }
-
-    let cmd_base = cmd_arr as *const u8;
-    let cmd_len = std::ptr::read_unaligned::<usize>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if cmd_len == 0 || cmd_len > 100 {
-        return format!(r#"{{"error":"cmd_len_invalid","len":{}}}"#, cmd_len);
-    }
-
-    log_predict_step(&format!("cmd_arr len={}", cmd_len));
-
-    // 3. Read CharaEffectBuffArray for active buffs
-    // WorkSingleModeCharaData._charaEffectIdArray + EvaluationList -> CharaEffectBuff
-    let effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
-    let buffs_from_effects = effects_to_buffs_json(&effect_ids);
-    log_predict_step("effects done");
-
-    // 4. Iterate commands — read class from each object's header (offset 0 = Il2CppClass*)
-    // This avoids find_class_by_short_name matching wrong class -> runtime_invoke crash
-    let mut commands_json: Vec<String> = Vec::new();
-
-    for i in 0..cmd_len {
-        let ep = std::ptr::read_unaligned::<*mut c_void>(cmd_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-        if ep.is_null() { continue; }
-
-        // Read class from object header — guaranteed correct class for this object
-        let cmd_elem_class = std::ptr::read_unaligned::<*mut c_void>(ep as *const *mut c_void);
-        log_predict_step(&format!("cmd[{}] class read", i));
-
-        // Read command fields directly from memory (offsets confirmed by /debug/cmdinfo)
-        // SingleModeCommandInfoData: CommandId@0x24/0x28, IsEnable@0x38/0x3c, FailureRate@0x68/0x6c
-        let epb = ep as *const u8;
-        let cid = {
-            let k = std::ptr::read_unaligned::<i32>(epb.add(0x24) as *const i32);
-            let h = std::ptr::read_unaligned::<i32>(epb.add(0x28) as *const i32);
-            h ^ k
-        };
-        let is_enable = {
-            let k = std::ptr::read_unaligned::<i32>(epb.add(0x38) as *const i32);
-            let h = std::ptr::read_unaligned::<i32>(epb.add(0x3c) as *const i32);
-            h ^ k
-        };
-        let failure_rate = {
-            let k = std::ptr::read_unaligned::<i32>(epb.add(0x68) as *const i32);
-            let h = std::ptr::read_unaligned::<i32>(epb.add(0x6c) as *const i32);
-            h ^ k
-        };
-        log_predict_step(&format!("cmd[{}] cid={} enable={} fail={}", i, cid, is_enable, failure_rate));
-
-        let cname = match cid {
-            CMD_SPEED=>"Speed", CMD_STAMINA=>"Stamina", CMD_GUTS=>"Guts",
-            CMD_POWER=>"Power", CMD_WISDOM=>"Wiz",
-            CMD_URA_SPEED=>"Speed", CMD_URA_STAMINA=>"Stamina", CMD_URA_GUTS=>"Guts",
-            CMD_URA_POWER=>"Power", CMD_URA_WISDOM=>"Wiz",
-            CMD_KAKUSHIMI=>"Kakushimi",
-            301=>"Outing", 390=>"Rest", 401=>"Outing2",
-            701=>"Outing3", 801=>"Outing4", _=>"Unknown"
-        };
-
-        log_predict_step(&format!("cmd[{}] reading partners", i));
-        // Read TrainingPartnerArray — distinguish support cards vs NPCs
-        let mut partners_json: Vec<String> = Vec::new();
-        let mut support_count: i32 = 0;
-        let mut npc_count: i32 = 0;
-
-        {
-            let pa = std::ptr::read_unaligned::<*mut c_void>(epb.add(0x50) as *const *mut c_void);
-            if !pa.is_null() {
-                let pb = pa as *const u8;
-                let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-                if pl > 0 && pl < 50 {
-                    for j in 0..pl {
-                        let pp = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                        if pp.is_null() { continue; }
-
-                        // Read partner class from object header (same pattern as cmd_elem_class above)
-                        let pp_class = std::ptr::read_unaligned::<*mut c_void>(pp as *const *mut c_void);
-                        let obj_class_name = get_object_class_name(pp);
-                        let is_support_card = obj_class_name.contains("SingleModeTrainingPartnerEntity")
-                            && !obj_class_name.contains("EtcChara")
-                            && !obj_class_name.contains("UniqueChara")
-                            && !obj_class_name.contains("Scout");
-
-                        if is_support_card {
-                            partners_json.push(r#"{"type":"support_card"}"#.to_string());
-                            support_count += 1;
-                        } else {
-                            partners_json.push(r#"{"type":"npc"}"#.to_string());
-                            npc_count += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        log_predict_step(&format!("cmd[{}] partners done s={} n={}", i, support_count, npc_count));
-
-        // Read TipsEventPartnerArray (shining partners)
-        let shining_count = {
-            let arr = std::ptr::read_unaligned::<*mut c_void>(epb.add(0x58) as *const *mut c_void);
-            if !arr.is_null() {
-                let ab = arr as *const u8;
-                let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-                al as i32
-            } else { 0 }
-        };
-
-        log_predict_step(&format!("cmd[{}] reading params", i));
-        // Read ParamsIncDecInfoArray (training gains)
-        let mut gains_json: Vec<String> = Vec::new();
-        let mut stat_gains = [0i32; 5]; // [Speed, Stamina, Power, Guts, Wisdom]
-        let mut skill_pt_gain: i32 = 0;
-        let mut vital_cost: i32 = 0;
-
-        {
-            let pa = std::ptr::read_unaligned::<*mut c_void>(epb.add(0x60) as *const *mut c_void);
-            if !pa.is_null() {
-                let pb = pa as *const u8;
-                let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-                if pl > 0 && pl < 100 {
-                    for j in 0..pl {
-                        let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                        if pe.is_null() { continue; }
-                        // Read ObscuredInt fields directly: TargetType@0x10/0x14, Value@0x24/0x28
-                        let peb = pe as *const u8;
-                        let tt = {
-                            let k = std::ptr::read_unaligned::<i32>(peb.add(0x10) as *const i32);
-                            let h = std::ptr::read_unaligned::<i32>(peb.add(0x14) as *const i32);
-                            h ^ k
-                        };
-                        let v = {
-                            let k = std::ptr::read_unaligned::<i32>(peb.add(0x24) as *const i32);
-                            let h = std::ptr::read_unaligned::<i32>(peb.add(0x28) as *const i32);
-                            h ^ k
-                        };
-                        if v == 0 { continue; }
-                        let tn = match tt {
-                            1=>"Speed", 2=>"Stamina", 3=>"Guts",
-                            4=>"Power", 5=>"Wiz", 10=>"HP",
-                            20=>"Motivation", 30=>"SkillPt", _=>"Unknown"
-                        };
-                        gains_json.push(format!(r#""{}":{}"#, tn, v));
-                        match tt {
-                            1 => stat_gains[0] += v,
-                            2 => stat_gains[1] += v,
-                            4 => stat_gains[2] += v,
-                            3 => stat_gains[3] += v,
-                            5 => stat_gains[4] += v,
-                            10 => vital_cost += v,
-                            30 => skill_pt_gain += v,
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        log_predict_step(&format!("cmd[{}] params done", i));
-        commands_json.push(format!(
-            r#"{{"name":"{}","command_id":{},"is_enable":{},"failure_rate":{},"shining":{},"support_count":{},"npc_count":{},"partners":[{}],"gains":{{{}}},"stat_gains":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"skill_pt":{},"vital_cost":{}}}"#,
-            cname, cid, is_enable, failure_rate, shining_count, support_count, npc_count,
-            partners_json.join(","),
-            gains_json.join(","),
-            stat_gains[0], stat_gains[1], stat_gains[2], stat_gains[3], stat_gains[4],
-            skill_pt_gain, vital_cost
-        ));
-    }
-
-    log_predict_step(&format!("commands done, ramen sid={}", sid));
-
-    // 5. Ramen scenario data — v3.22.25: Direct memory read (only 2 il2cpp_runtime_invoke)
-    let mut ramen_json = String::new();
-    if sid == 14 {
-        log_predict_step("ramen direct read (v3.22.25)");
-        let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
-        if !scenario_obj.is_null() {
-            let sc_class = std::ptr::read_unaligned::<*mut c_void>(
-                scenario_obj as *const *mut c_void
-            );
-            let dataset_obj = call_getter_ref(sc_class, scenario_obj, "get_DataSet");
-            if !dataset_obj.is_null() {
-                let ds_class = std::ptr::read_unaligned::<*mut c_void>(
-                    dataset_obj as *const *mut c_void
-                );
-                let (cp_pt, sf_num, rec_type, uraf_t, uraf_s) =
-                    read_ramen_scalar_fields(ds_class, dataset_obj);
-                log_predict_step(&format!(
-                    "ramen: cp={} sf={} rec={} uraf_t={} uraf_s={}",
-                    cp_pt, sf_num, rec_type, uraf_t, uraf_s
-                ));
-                ramen_json = format!(
-                    r#","ramen":{{"checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"uraf_type":{},"uraf_state":{}}}"#,
-                    cp_pt, sf_num, rec_type, uraf_t, uraf_s
-                );
-            } else {
-                log_predict_step("ramen: dataset null");
-            }
-        } else {
-            log_predict_step("ramen: scenario null");
-        }
-        if ramen_json.is_empty() {
-            ramen_json = r#","ramen":{"available":false,"error":"dataset_null"}"#.to_string();
-        }
-    }
-
-    log_predict_step("DONE");
-    log_predict_step("building json");
-
-    let result = format!(
-        r#"{{"version":"3.22.25","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
-        sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
-        commands_json.join(","),
-        ramen_json,
-        buffs_from_effects
-    );
-    log_predict_step("json built ok");
-    result
-}
-
 /// /inherit/compat — Inheritance compatibility calculation
 /// Shows exact compatibility values (not just ○△×), split by parent gender,
 /// and detects target race overlap
@@ -6302,7 +5970,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.25","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.26","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6403,7 +6071,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.25","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.26","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6564,7 +6232,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.25","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.26","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6574,13 +6242,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.25","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.26","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.25","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.26","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
