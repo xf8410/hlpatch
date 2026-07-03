@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.20
+//! URA Plugin v3.22.21
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -302,7 +302,7 @@ fn log_predict_step(msg: &str) {
         if fd >= 0 { sys_write(fd, line_bytes.as_ptr(), line_bytes.len()); sys_close(fd); }
         let fd2 = sys_open(path2.as_ptr() as *const i8, 1 | 64 | 1024, 0o644);
         if fd2 >= 0 { sys_write(fd2, line_bytes.as_ptr(), line_bytes.len()); sys_close(fd2); }
-    // v3.22.20: std::fs fallback
+    // v3.22.21: std::fs fallback
     let _ = std::fs::OpenOptions::new().create(true).append(true)
         .open("/data/data/jp.pokemon.pokeuma/files/uma_predict.log")
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
@@ -450,6 +450,19 @@ unsafe fn get_image() -> *const c_void {
 }
 
 unsafe fn find_class(image: *const c_void, ns: *const c_char, name: *const c_char) -> *mut c_void {
+    // v3.22.21: Check CLASS_CACHE first
+    if !name.is_null() {
+        let name_str = std::ffi::CStr::from_ptr(name).to_string_lossy().to_string();
+        if let Ok(guard) = CLASS_CACHE.lock() {
+            if let Some(ref map) = *guard {
+                if let Some(&cls) = map.get(&name_str) {
+                    return cls;
+                }
+            }
+        }
+    }
+    // v3.22.21: Block IL2CPP API in read path
+    if IN_READ_PATH.load(Ordering::Relaxed) { return ptr::null_mut(); }
     if image.is_null() || API.is_null() { return ptr::null_mut(); }
     match (*API).il2cpp_get_class_fn {
         Some(fn_ptr) => fn_ptr(image, ns, name),
@@ -458,6 +471,16 @@ unsafe fn find_class(image: *const c_void, ns: *const c_char, name: *const c_cha
 }
 
 unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
+    // v3.22.21: Check CLASS_CACHE first
+    if let Ok(guard) = CLASS_CACHE.lock() {
+        if let Some(ref map) = *guard {
+            if let Some(&cls) = map.get(class_name) {
+                return cls;
+            }
+        }
+    }
+    // v3.22.21: Block IL2CPP API in read path
+    if IN_READ_PATH.load(Ordering::Relaxed) { return ptr::null_mut(); }
     let name_c = to_cstr(class_name);
     // Try known namespaces first (fast path)
     let ns_gallop = to_cstr("Gallop");
@@ -519,6 +542,17 @@ unsafe fn get_object_class_name(obj: *const c_void) -> String {
 }
 
 unsafe fn get_singleton(class: *mut c_void) -> *const c_void {
+    // v3.22.21: Check SINGLETON_CACHE first
+    let key = class as usize;
+    if let Ok(guard) = SINGLETON_CACHE.lock() {
+        if let Some(ref map) = *guard {
+            if let Some(&val) = map.get(&key) {
+                return val;
+            }
+        }
+    }
+    // v3.22.21: Block IL2CPP API in read path
+    if IN_READ_PATH.load(Ordering::Relaxed) { return ptr::null(); }
     if class.is_null() || API.is_null() { return ptr::null(); }
     match (*API).il2cpp_get_singleton_like_instance_fn {
         Some(fn_ptr) => fn_ptr(class),
@@ -549,6 +583,12 @@ unsafe fn read_field_ptr(obj: *const c_void, class: *mut c_void, field_name: &st
 // Used for reading public fields (not getter properties) like CommandInfoArray
 unsafe fn read_field_value(class: *mut c_void, obj: *const c_void, field_name: &str) -> *mut c_void {
     if class.is_null() || obj.is_null() || API.is_null() { return ptr::null_mut(); }
+    // v3.22.21: In read path, use cached offset + direct memory read
+    if IN_READ_PATH.load(Ordering::Relaxed) {
+        let offset = cached_find_field_offset(class, field_name);
+        if offset >= 0 { return read_ptr_at(obj, offset); }
+        return ptr::null_mut();
+    }
     let field_info = match (*API).il2cpp_get_field_from_name_fn {
         Some(f) => f(class, to_cstr(field_name).as_ptr()),
         None => return ptr::null_mut(),
@@ -608,13 +648,13 @@ unsafe fn call_getter_on_instance(
     if class.is_null() || instance.is_null() {
         return ptr::null_mut();
     }
-    // ★ v3.22.20: Direct field read first — zero il2cpp_runtime_invoke
     let field_name = method_name.strip_prefix("get_").unwrap_or(method_name);
     let offset = cached_find_field_offset(class, field_name);
     if offset >= 0 {
         return read_ptr_at(instance, offset);
     }
-    // Fallback: il2cpp_runtime_invoke (field not found, may be computed property)
+    // v3.22.21: Block il2cpp_runtime_invoke in read path
+    if IN_READ_PATH.load(Ordering::Relaxed) { return ptr::null_mut(); }
 
     let get_method_fn: Option<FnClassGetMethodFromName> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
@@ -670,13 +710,13 @@ unsafe fn call_getter_int(
     method_name: &str,
 ) -> i32 {
     if class.is_null() || instance.is_null() { return -1; }
-    // ★ v3.22.20: Direct field read first — zero il2cpp_runtime_invoke
     let field_name = method_name.strip_prefix("get_").unwrap_or(method_name);
     let offset = cached_find_field_offset(class, field_name);
     if offset >= 0 {
         return read_int_at(instance, offset);
     }
-    // Fallback: il2cpp_runtime_invoke (field not found, may be computed property)
+    // v3.22.21: Block il2cpp_runtime_invoke in read path
+    if IN_READ_PATH.load(Ordering::Relaxed) { return -1; }
 
     let result = call_getter_on_instance(class, instance, method_name);
     if result.is_null() { return -1; }
@@ -741,13 +781,13 @@ unsafe fn call_getter_obscured_int(
     method_name: &str,
 ) -> i32 {
     if class.is_null() || instance.is_null() { return -1; }
-    // ★ v3.22.20: Direct field read first — zero il2cpp_runtime_invoke
     let field_name = method_name.strip_prefix("get_").unwrap_or(method_name);
     let offset = cached_find_field_offset(class, field_name);
     if offset >= 0 {
         return read_obscured_int_at(instance, offset);
     }
-    // Fallback: il2cpp_runtime_invoke (field not found, may be computed property)
+    // v3.22.21: Block il2cpp_runtime_invoke in read path
+    if IN_READ_PATH.load(Ordering::Relaxed) { return -1; }
 
     let result = call_getter_on_instance(class, instance, method_name);
     if result.is_null() { return -1; }
@@ -773,7 +813,7 @@ unsafe fn call_getter_obscured_int(
 }
 
 // ============================================================
-// ★ v3.22.20: Direct memory read helpers — zero il2cpp calls
+// ★ v3.22.21: Direct memory read helpers — zero il2cpp calls
 // ============================================================
 
 unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
@@ -792,21 +832,21 @@ unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
     )
 }
 
-// ★ v3.22.20: Direct int read — zero il2cpp_runtime_invoke
+// ★ v3.22.21: Direct int read — zero il2cpp_runtime_invoke
 unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
     if obj.is_null() || field_offset < 0 { return -1; }
     let base = obj as *const u8;
     std::ptr::read_unaligned::<i32>(base.add(field_offset as usize) as *const i32)
 }
 
-/// v3.22.20: Read Il2CppClass* from object header (offset 0 on 64-bit)
+/// v3.22.21: Read Il2CppClass* from object header (offset 0 on 64-bit)
 /// This gives us the EXACT class of any object instance at runtime
 unsafe fn get_class_from_object(obj: *const c_void) -> *mut c_void {
     if obj.is_null() { return ptr::null_mut(); }
     std::ptr::read_unaligned::<*mut c_void>(obj as *const *mut c_void)
 }
 
-/// v3.22.20: Read ObscuredInt field from object using its own class (from header)
+/// v3.22.21: Read ObscuredInt field from object using its own class (from header)
 /// No need to find class by name — reads it directly from the object
 unsafe fn read_obscured_int_from_obj(obj: *const c_void, field_name: &str) -> i32 {
     if obj.is_null() { return -1; }
@@ -838,7 +878,7 @@ unsafe fn read_obscured_int_array(
     // +0x20: data start
     let base = arr_obj as *const u8;
     let length = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if length == 0 || length > 200 { return result; } // ★ v3.22.20: guard rail — lower limit
+    if length == 0 || length > 200 { return result; } // ★ v3.22.21: guard rail — lower limit
 
     // ObscuredInt struct (unboxed) layout:
     // offset 0x00: currentCryptoKey (Int32)
@@ -1232,7 +1272,7 @@ unsafe fn read_scenario_detail() -> String {
                             for i in 0..ae_len {
                                 let ep = std::ptr::read_unaligned::<*mut c_void>(ae_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                 if ep.is_null() { continue; }
-                                // v3.22.20: Read class from object header — no more find_class or hardcoded offsets
+                                // v3.22.21: Read class from object header — no more find_class or hardcoded offsets
                                 let cat = read_obscured_int_from_obj(ep, "get_EffectCategory");
                                 let eid = read_obscured_int_from_obj(ep, "get_EffectId");
                                 let val = read_obscured_int_from_obj(ep, "get_EffectValue");
@@ -1247,7 +1287,7 @@ unsafe fn read_scenario_detail() -> String {
                     // ObscuredInt fields: UrafEffectType, UrafEffectState
                     let uraf_obj = call_getter_on_instance(dataset_class, dataset_obj, "get_UrafEffectInfo");
                     if !uraf_obj.is_null() {
-                        // v3.22.20: Read class from object header — no more find_class or hardcoded offsets
+                        // v3.22.21: Read class from object header — no more find_class or hardcoded offsets
                         let ut = read_obscured_int_from_obj(uraf_obj, "get_UrafEffectType");
                         let us = read_obscured_int_from_obj(uraf_obj, "get_UrafEffectState");
                         result_parts.push(format!(r#""uraf_effect":{{"UrafEffectType":{},"UrafEffectState":{}}}"#, ut, us));
@@ -1270,21 +1310,21 @@ unsafe fn read_scenario_detail() -> String {
                         let fi_base = fi_arr as *const u8;
                         let fi_len = std::ptr::read_unaligned::<usize>(fi_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                         if fi_len > 0 && fi_len < 100 {
-                            // v3.22.20: Read class from each element's object header — no more find_class or hardcoded offsets
+                            // v3.22.21: Read class from each element's object header — no more find_class or hardcoded offsets
                             let mut fi_elements = Vec::new();
                             for fi in 0..fi_len {
                                 let fe_ptr = std::ptr::read_unaligned::<*mut c_void>(fi_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                 if fe_ptr.is_null() { fi_elements.push("{}".to_string()); continue; }
-                                let ft = read_obscured_int_from_obj(fe_ptr, "get_FeelingType");
-                                let fv = read_obscured_int_from_obj(fe_ptr, "get_FeelingValue");
-                                fi_elements.push(format!(r#"{{"FeelingType":{},"FeelingValue":{}}}"#, ft, fv));
+                                let ft = read_obscured_int_from_obj(fe_ptr, "get_FeelingIndex");
+                                let fv = read_obscured_int_from_obj(fe_ptr, "get_FeelingId");
+                                fi_elements.push(format!(r#"{{"FeelingIndex":{},"FeelingId":{}}}"#, ft, fv));
                             }
                             result_parts.push(format!(r#""feeling_info":[{}]"#, fi_elements.join(",")));
                         }
                     }
 
                     // FeelingTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
-                    // v3.22.20: Read class from object header — no more hardcoded offsets
+                    // v3.22.21: Read class from object header — no more hardcoded offsets
                     let ft_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingTurnInfoArray");
                     if !ft_arr.is_null() {
                         let ft_base = ft_arr as *const u8;
@@ -1294,9 +1334,9 @@ unsafe fn read_scenario_detail() -> String {
                             for fi in 0..ft_len {
                                 let fp = std::ptr::read_unaligned::<*mut c_void>(ft_base.add(IL2CPP_LIST_ITEMS_OFF + fi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                 if fp.is_null() { ft_elems.push("{}".to_string()); continue; }
-                                let t = read_obscured_int_from_obj(fp, "get_Turn");
-                                let fty = read_obscured_int_from_obj(fp, "get_FeelingType");
-                                ft_elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, fty));
+                                let t = read_obscured_int_from_obj(fp, "get_RemainTurn");
+                                let fty = read_obscured_int_from_obj(fp, "get_FeelingId");
+                                ft_elems.push(format!(r#"{{"RemainTurn":{},"FeelingId":{}}}"#, t, fty));
                             }
                             result_parts.push(format!(r#""feeling_turn_info":[{}]"#, ft_elems.join(",")));
                         }
@@ -1304,7 +1344,7 @@ unsafe fn read_scenario_detail() -> String {
 
 
                     // CommandFeelingInfoArray: 3 ObscuredInt fields (CommandType, CommandId, FeelingId)
-                    // v3.22.20: Read class from object header — no more hardcoded offsets
+                    // v3.22.21: Read class from object header — no more hardcoded offsets
                     let cf_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_CommandFeelingInfoArray");
                     if !cf_arr.is_null() {
                         let cf_base = cf_arr as *const u8;
@@ -1325,7 +1365,7 @@ unsafe fn read_scenario_detail() -> String {
 
 
                     // FeelingReduceTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
-                    // v3.22.20: Read class from object header — no more hardcoded offsets
+                    // v3.22.21: Read class from object header — no more hardcoded offsets
                     let fr_arr = call_getter_on_instance(dataset_class, dataset_obj, "get_FeelingReduceTurnInfoArray");
                     if !fr_arr.is_null() {
                         let fr_base = fr_arr as *const u8;
@@ -1335,9 +1375,9 @@ unsafe fn read_scenario_detail() -> String {
                             for ri in 0..fr_len {
                                 let rp = std::ptr::read_unaligned::<*mut c_void>(fr_base.add(IL2CPP_LIST_ITEMS_OFF + ri * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                 if rp.is_null() { fr_elems.push("{}".to_string()); continue; }
-                                let t = read_obscured_int_from_obj(rp, "get_Turn");
-                                let fty = read_obscured_int_from_obj(rp, "get_FeelingType");
-                                fr_elems.push(format!(r#"{{"Turn":{},"FeelingType":{}}}"#, t, fty));
+                                let t = read_obscured_int_from_obj(rp, "get_CommandType");
+                                let fty = read_obscured_int_from_obj(rp, "get_CommandId");
+                                fr_elems.push(format!(r#"{{"CommandType":{},"CommandId":{}}}"#, t, fty));
                             }
                             result_parts.push(format!(r#""feeling_reduce_turn_info":[{}]"#, fr_elems.join(",")));
                         }
@@ -1757,12 +1797,14 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
 }
 
 // ============================================================
-// ★ v3.22.20: find_field_offset — read field offset via il2cpp_class_get_fields
+// ★ v3.22.21: find_field_offset — read field offset via il2cpp_class_get_fields
 // Thread-safe metadata API, NO il2cpp_runtime_invoke calls
 // ============================================================
 
 unsafe fn find_field_offset(class: *mut c_void, field_name: &str) -> i32 {
     if class.is_null() || API.is_null() { return -1; }
+    // v3.22.21: Block IL2CPP API in read path
+    if IN_READ_PATH.load(Ordering::Relaxed) { return -1; }
 
     let get_fields_fn: Option<FnClassGetFields> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_fields");
@@ -1845,10 +1887,15 @@ unsafe fn find_field_offset(class: *mut c_void, field_name: &str) -> i32 {
 }
 
 // ============================================================
-// ★ v3.22.20: Field offset cache — avoid repeated il2cpp_class_get_fields calls
+// ★ v3.22.21: Field offset cache — avoid repeated il2cpp_class_get_fields calls
 // ============================================================
 use std::collections::HashMap;
 static FIELD_OFFSET_CACHE: std::sync::Mutex<Option<HashMap<String, i32>>> = std::sync::Mutex::new(None);
+
+// v3.22.21: Zero IL2CPP API in read path
+static IN_READ_PATH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CLASS_CACHE: std::sync::Mutex<Option<HashMap<String, *mut c_void>>> = std::sync::Mutex::new(None);
+static SINGLETON_CACHE: std::sync::Mutex<Option<HashMap<usize, *const c_void>>> = std::sync::Mutex::new(None);
 
 unsafe fn cached_find_field_offset(class: *mut c_void, field_name: &str) -> i32 {
     let key = format!("{:p}_{}", class, field_name);
@@ -1860,6 +1907,8 @@ unsafe fn cached_find_field_offset(class: *mut c_void, field_name: &str) -> i32 
             }
         }
     }
+    // v3.22.21: Block IL2CPP API in read path
+    if IN_READ_PATH.load(Ordering::Relaxed) { return -1; }
     // Not in cache, look up
     let offset = find_field_offset(class, field_name);
     // Store in cache (even -1, to avoid repeated failed lookups)
@@ -1873,7 +1922,7 @@ unsafe fn cached_find_field_offset(class: *mut c_void, field_name: &str) -> i32 
 }
 
 // ============================================================
-// ★ v3.22.20: read_ramen_scalar_fields — read 5 ObscuredInt fields from DataSet
+// ★ v3.22.21: read_ramen_scalar_fields — read 5 ObscuredInt fields from DataSet
 // Zero il2cpp_runtime_invoke calls (only find_field_offset + read_obscured_int_at)
 // ============================================================
 
@@ -1882,27 +1931,27 @@ unsafe fn read_ramen_scalar_fields(
     dataset_obj: *const c_void,
 ) -> (i32, i32, i32, i32, i32) {
     let checkpoint_pt = {
-        let off = find_field_offset(ds_class, "CheckPointPt");
+        let off = cached_find_field_offset(ds_class, "CheckPointPt");
         if off >= 0 { read_obscured_int_at(dataset_obj, off) } else { -1 }
     };
     let special_feeling_num = {
-        let off = find_field_offset(ds_class, "SpecialFeelingNum");
+        let off = cached_find_field_offset(ds_class, "SpecialFeelingNum");
         if off >= 0 { read_obscured_int_at(dataset_obj, off) } else { -1 }
     };
     let recommend_type = {
-        let off = find_field_offset(ds_class, "RecommendType");
+        let off = cached_find_field_offset(ds_class, "RecommendType");
         if off >= 0 { read_obscured_int_at(dataset_obj, off) } else { -1 }
     };
     let (uraf_type, uraf_state) = {
-        let uraf_off = find_field_offset(ds_class, "UrafEffectInfo");
+        let uraf_off = cached_find_field_offset(ds_class, "UrafEffectInfo");
         if uraf_off >= 0 {
             let uraf_obj = read_ptr_at(dataset_obj, uraf_off);
             if !uraf_obj.is_null() {
                 let uraf_class = std::ptr::read_unaligned::<*mut c_void>(
                     uraf_obj as *const *mut c_void
                 );
-                let ut_off = find_field_offset(uraf_class, "UrafEffectType");
-                let us_off = find_field_offset(uraf_class, "UrafEffectState");
+                let ut_off = cached_find_field_offset(uraf_class, "UrafEffectType");
+                let us_off = cached_find_field_offset(uraf_class, "UrafEffectState");
                 let ut = if ut_off >= 0 { read_obscured_int_at(uraf_obj, ut_off) } else { -1 };
                 let us = if us_off >= 0 { read_obscured_int_at(uraf_obj, us_off) } else { -1 };
                 (ut, us)
@@ -2889,12 +2938,12 @@ fn compute_skill_eval(skills: &[(i32, i32)]) -> (i32, i32, String) {
     (total_eval, skills.len() as i32, format!("[{}]", breakdown.join(",")))
 }
 
-// ★ v3.22.20: Summary cache — reduce IL2CPP metadata reads
+// ★ v3.22.21: Summary cache — reduce IL2CPP metadata reads
 static CACHED_SUMMARY: std::sync::Mutex<Option<(String, u64)>> = std::sync::Mutex::new(None);
 const SUMMARY_CACHE_TTL_SECS: u64 = 3;
 
 fn read_summary() -> String {
-    // ★ v3.22.20: Check cache first — avoid IL2CPP calls if data hasn't changed
+    // ★ v3.22.21: Check cache first — avoid IL2CPP calls if data hasn't changed
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -2911,7 +2960,7 @@ fn read_summary() -> String {
     let summary = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unsafe { read_summary_inner() }
     })).unwrap_or_else(|_| r#"{"error":"panic_caught","hint":"read_summary panicked, game protected"}"#.to_string());
-    // ★ v3.22.20: Update cache
+    // ★ v3.22.21: Update cache
     if let Ok(mut guard) = CACHED_SUMMARY.lock() {
         *guard = Some((summary.clone(), now));
     }
@@ -2919,6 +2968,14 @@ fn read_summary() -> String {
 }
 
 unsafe fn read_summary_inner() -> String {
+    // v3.22.21: Set IN_READ_PATH to block ALL IL2CPP API calls
+    IN_READ_PATH.store(true, Ordering::Relaxed);
+    let result = read_summary_inner_impl();
+    IN_READ_PATH.store(false, Ordering::Relaxed);
+    result
+}
+
+unsafe fn read_summary_inner_impl() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -3000,10 +3057,10 @@ unsafe fn read_summary_inner() -> String {
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
-    // ★ v3.22.20: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
+    // ★ v3.22.21: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
     // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
     if sid == 14 {
-        ura_log(3, "v3.22.20 ramen: direct memory read");
+        ura_log(3, "v3.22.21 ramen: direct memory read");
         log_predict_step("S:ramen start");
         let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
         if !scenario_obj.is_null() {
@@ -3030,7 +3087,7 @@ unsafe fn read_summary_inner() -> String {
                     cp_pt, sf_num, rec_type, uraf_t, uraf_s
                 ));
                 // SelectedRegionIdArray (List<ObscuredInt>)
-                let sra_off = find_field_offset(ds_class, "SelectedRegionIdArray");
+                let sra_off = cached_find_field_offset(ds_class, "SelectedRegionIdArray");
                 if sra_off >= 0 {
                     let list_obj = read_ptr_at(dataset_obj, sra_off);
                     if !list_obj.is_null() {
@@ -3050,7 +3107,7 @@ unsafe fn read_summary_inner() -> String {
                     }
                 }
                 // ActiveEffectArray (List<ActiveEffectInfo>)
-                let ae_off = find_field_offset(ds_class, "ActiveEffectArray");
+                let ae_off = cached_find_field_offset(ds_class, "ActiveEffectArray");
                 if ae_off >= 0 {
                     let list_obj = read_ptr_at(dataset_obj, ae_off);
                     if !list_obj.is_null() {
@@ -3066,9 +3123,9 @@ unsafe fn read_summary_inner() -> String {
                                 let elem_class = std::ptr::read_unaligned::<*mut c_void>(
                                     first_elem as *const *mut c_void
                                 );
-                                let cat_off = find_field_offset(elem_class, "EffectCategory");
-                                let eid_off = find_field_offset(elem_class, "EffectId");
-                                let val_off = find_field_offset(elem_class, "EffectValue");
+                                let cat_off = cached_find_field_offset(elem_class, "EffectCategory");
+                                let eid_off = cached_find_field_offset(elem_class, "EffectId");
+                                let val_off = cached_find_field_offset(elem_class, "EffectValue");
                                 let mut effects: Vec<String> = Vec::new();
                                 for i in 0..llen {
                                     let ep = std::ptr::read_unaligned::<*mut c_void>(
@@ -3089,7 +3146,7 @@ unsafe fn read_summary_inner() -> String {
                     }
                 }
                 // FeelingInfoArray (List<FeelingInfo>)
-                let fi_off = find_field_offset(ds_class, "FeelingInfoArray");
+                let fi_off = cached_find_field_offset(ds_class, "FeelingInfoArray");
                 if fi_off >= 0 {
                     let list_obj = read_ptr_at(dataset_obj, fi_off);
                     if !list_obj.is_null() {
@@ -3105,8 +3162,8 @@ unsafe fn read_summary_inner() -> String {
                                 let elem_class = std::ptr::read_unaligned::<*mut c_void>(
                                     first_elem as *const *mut c_void
                                 );
-                                let ft_off = find_field_offset(elem_class, "FeelingType");
-                                let fv_off = find_field_offset(elem_class, "FeelingValue");
+                                let ft_off = cached_find_field_offset(elem_class, "FeelingIndex");
+                                let fv_off = cached_find_field_offset(elem_class, "FeelingId");
                                 let mut feelings: Vec<String> = Vec::new();
                                 for i in 0..llen {
                                     let ep = std::ptr::read_unaligned::<*mut c_void>(
@@ -3116,7 +3173,7 @@ unsafe fn read_summary_inner() -> String {
                                     let ft = if ft_off >= 0 { read_obscured_int_at(ep, ft_off) } else { -1 };
                                     let fv = if fv_off >= 0 { read_obscured_int_at(ep, fv_off) } else { -1 };
                                     feelings.push(format!(
-                                        r#"{{"FeelingType":{},"FeelingValue":{}}}"#,
+                                        r#"{{"FeelingIndex":{},"FeelingId":{}}}"#,
                                         ft, fv
                                     ));
                                 }
@@ -3488,7 +3545,7 @@ unsafe fn read_summary_inner() -> String {
     log_predict_step("S:p6 buffs");
     // ★ v3.14.2: Always generate buffs from chara_effect_ids first
     let mut buff_json = effects_to_buffs_json(&chara_effect_ids);
-    // ★ v3.22.20: sid==14 skips try_get_scenario_obj (data pre-read in ramen section)
+    // ★ v3.22.21: sid==14 skips try_get_scenario_obj (data pre-read in ramen section)
     let scenario_obj = if sid == 14 {
         ptr::null_mut()
     } else {
@@ -3593,7 +3650,7 @@ unsafe fn read_summary_inner() -> String {
         }
     }
 
-    // ★ v3.22.20: Ramen buffs — extracted outside nested block (uses pre-read data only)
+    // ★ v3.22.21: Ramen buffs — extracted outside nested block (uses pre-read data only)
     if sid == 14 && !ramen_active_effects_raw_json.is_empty() {
         let mut buffs = Vec::new();
         for ae_part in ramen_active_effects_raw_json.split("},{") {
@@ -3678,7 +3735,7 @@ unsafe fn read_summary_inner() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.20","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.21","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3858,7 +3915,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.20","endpoints":["/summary","/data","/scenario","/training/predict","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/ramenfields","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.21","endpoints":["/summary","/data","/scenario","/training/predict","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/ramenfields","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3951,14 +4008,14 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/cmdinfo" {
         unsafe { debug_cmdinfo() }
     } else if path.starts_with("/debug/dumpclass") {
-        // v3.22.20: Dump all fields of any IL2CPP class by name
+        // v3.22.21: Dump all fields of any IL2CPP class by name
         // Usage: /debug/dumpclass?name=WorkSingleModeData
         let class_name = if let Some(q) = path.find("?name=") {
             &path[q+6..]
         } else { "" };
         unsafe { debug_dumpclass(class_name) }
     } else if path == "/debug/ramenfields" {
-        // v3.22.20: Dump all ramen array element classes + their fields at runtime
+        // v3.22.21: Dump all ramen array element classes + their fields at runtime
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { debug_ramenfields() }
         })).unwrap_or_else(|_| r#"{"error":"ramenfields_panic"}"#.to_string())
@@ -4050,6 +4107,176 @@ fn handle_http(mut stream: std::net::TcpStream) {
 }
 
 // ============================================================
+// v3.22.21: Pre-cache all class metadata on game thread
+// ============================================================
+
+/// Convert PascalCase to snake_case for cache key matching
+fn to_snake_case(name: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            result.push('_');
+        }
+        result.extend(c.to_lowercase());
+    }
+    result
+}
+
+/// Pre-cache ALL field offsets for a class (including parent classes)
+/// Called on game thread — safe to use IL2CPP API
+unsafe fn precache_all_fields(class: *mut c_void) {
+    if class.is_null() { return; }
+    let get_fields_fn: Option<FnClassGetFields> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_fields");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetFields>(p)) }
+    };
+    let get_parent_fn: Option<FnClassGetParent> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetParent>(p)) }
+    };
+    if get_fields_fn.is_none() { return; }
+
+    let mut current_class = class;
+    let mut depth = 0;
+    loop {
+        if current_class.is_null() || depth > 10 { break; }
+        let mut iter: *mut c_void = ptr::null_mut();
+        loop {
+            let field_info = get_fields_fn.unwrap()(current_class, &mut iter);
+            if field_info.is_null() { break; }
+            if !(*field_info).name.is_null() {
+                let s = std::ffi::CStr::from_ptr((*field_info).name);
+                let fname = s.to_string_lossy().to_string();
+                let offset = (*field_info).offset;
+                // Extract property name from <PropName>k__BackingField
+                let prop_name = if fname.starts_with('<') {
+                    if let Some(end) = fname.find('>') { &fname[1..end] } else { &fname }
+                } else {
+                    &fname
+                };
+                // Store multiple cache keys for robust lookup
+                let keys = [
+                    format!("{:p}_{}", class, prop_name),
+                    format!("{:p}_{}", class, prop_name.to_lowercase()),
+                    format!("{:p}_{}", class, to_snake_case(prop_name)),
+                ];
+                if let Ok(mut guard) = FIELD_OFFSET_CACHE.lock() {
+                    if guard.is_none() { *guard = Some(HashMap::new()); }
+                    if let Some(ref mut map) = *guard {
+                        for k in &keys {
+                            map.insert(k.clone(), offset);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(ref get_parent) = get_parent_fn {
+            let parent = get_parent(current_class);
+            if parent.is_null() || parent == current_class { break; }
+            current_class = parent;
+        } else {
+            break;
+        }
+        depth += 1;
+    }
+}
+
+/// Pre-cache all known classes and field offsets on game thread
+unsafe fn precache_metadata() {
+    ura_log(2, "v3.22.21 precache_metadata: starting");
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => { ura_log(1, "precache_metadata: image null"); return; }
+    };
+
+    // Classes found via find_class(image, "Gallop", X)
+    let gallop_classes = [
+        "WorkDataManager", "WorkSingleModeData", "WorkSingleModeCharaData",
+        "WorkSingleModeHomeInfoData", "WorkSingleModeScenarioRamen",
+        "WorkSingleModeScenarioURA", "WorkSingleModeScenarioTeamRace",
+        "WorkSingleModeScenarioLive", "WorkSingleModeScenarioFree",
+        "WorkSingleModeScenarioVenus", "WorkSingleModeScenarioArc",
+        "WorkSingleModeScenarioSport", "WorkSingleModeScenarioCook",
+        "WorkSingleModeScenarioMecha", "WorkSingleModeScenarioLegend",
+        "WorkSingleModeScenarioPioneer", "WorkSingleModeScenarioOnsen",
+        "WorkSingleModeScenarioBreeders",
+    ];
+
+    // Classes found via find_class_by_short_name
+    let short_name_classes = [
+        "SingleModeSkillData", "SingleModeCommandInfoData", "SingleModeParamsIncDecInfoData",
+        "ObscuredSingleModeBreedersEnhanceGroup", "ObscuredSingleModeBreedersCommandInfo",
+        "WorkSingleModeScenarioRamenDataSet",
+        "ObscuredSingleModeRamenFeeling", "ObscuredSingleModeRamenFeelingTurnInfo",
+        "ObscuredSingleModeRamenCommandFeelingInfo", "ObscuredSingleModeRamenFeelingReduceTurnInfo",
+        "ObscuredSingleModeRamenUrafEffectInfo", "ObscuredSingleModeRamenActiveEffectInfo",
+        "WorkTrainedCharaData", "TrainedCharaData", "SuccessionCharaInfo",
+        "WorkSingleModeScenarioURADataSet", "WorkSingleModeScenarioTeamRaceDataSet",
+        "WorkSingleModeScenarioLiveDataSet", "WorkSingleModeScenarioFreeDataSet",
+        "WorkSingleModeScenarioVenusDataSet", "WorkSingleModeScenarioArcDataSet",
+        "WorkSingleModeScenarioSportDataSet", "WorkSingleModeScenarioCookDataSet",
+        "WorkSingleModeScenarioMechaDataSet", "WorkSingleModeScenarioLegendDataSet",
+        "WorkSingleModeScenarioPioneerDataSet", "WorkSingleModeScenarioOnsenDataSet",
+        "WorkSingleModeScenarioBreedersDataSet",
+    ];
+
+    let mut cached_count = 0i32;
+
+    // Cache Gallop namespace classes
+    for name in &gallop_classes {
+        let cls = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr(name).as_ptr());
+        if !cls.is_null() {
+            if let Ok(mut guard) = CLASS_CACHE.lock() {
+                if guard.is_none() { *guard = Some(HashMap::new()); }
+                if let Some(ref mut map) = *guard {
+                    map.insert(name.to_string(), cls);
+                }
+            }
+            precache_all_fields(cls);
+            cached_count += 1;
+        }
+    }
+
+    // Cache short-name classes
+    for name in &short_name_classes {
+        let cls = find_class_by_short_name(image, name);
+        if !cls.is_null() {
+            if let Ok(mut guard) = CLASS_CACHE.lock() {
+                if guard.is_none() { *guard = Some(HashMap::new()); }
+                if let Some(ref mut map) = *guard {
+                    map.insert(name.to_string(), cls);
+                }
+            }
+            precache_all_fields(cls);
+            cached_count += 1;
+        }
+    }
+
+    // Cache WorkDataManager singleton
+    if let Some(wdm_cls) = CLASS_CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get("WorkDataManager").copied())) {
+        let inst = get_singleton(wdm_cls);
+        if !inst.is_null() {
+            if let Ok(mut guard) = SINGLETON_CACHE.lock() {
+                if guard.is_none() { *guard = Some(HashMap::new()); }
+                if let Some(ref mut map) = *guard {
+                    map.insert(wdm_cls as usize, inst);
+                }
+            }
+            ura_log(2, &format!("precache_metadata: WDM singleton cached at {:p}", inst));
+        }
+    }
+
+    // Count cached field offsets
+    let field_count = FIELD_OFFSET_CACHE.lock()
+        .ok().and_then(|g| g.as_ref().map(|m| m.len())).unwrap_or(0);
+
+    ura_log(2, &format!(
+        "v3.22.21 precache_metadata: done — {} classes, {} field offsets cached",
+        cached_count, field_count
+    ));
+}
+
+// ============================================================
 // Menu Callbacks
 // ============================================================
 
@@ -4062,6 +4289,8 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     unsafe {
         ura_log(3, "Game initialized");
         ura_notify("URA: Game ready!");
+        // v3.22.21: Pre-cache all IL2CPP metadata on game thread
+        precache_metadata();
     }
 }
 
@@ -4071,7 +4300,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.20").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.21").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -4278,10 +4507,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.20 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.21 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.20 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.21 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -5053,7 +5282,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.20","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.21","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5118,7 +5347,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.20","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.21","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5190,7 +5419,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.20","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.21","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5346,7 +5575,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.20","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.21","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -5467,7 +5696,7 @@ unsafe fn read_ranking_data() -> String {
 // ============================================================
 
 
-/// v3.22.20: /debug/dumpclass?name=ClassName — Dump all fields of any IL2CPP class
+/// v3.22.21: /debug/dumpclass?name=ClassName — Dump all fields of any IL2CPP class
 /// Uses il2cpp_class_get_fields (metadata only, no runtime_invoke)
 unsafe fn debug_dumpclass(class_name: &str) -> String {
     if class_name.is_empty() {
@@ -5507,7 +5736,7 @@ unsafe fn debug_dumpclass(class_name: &str) -> String {
     )
 }
 
-/// v3.22.20: /debug/ramenfields — Walk all ramen arrays, dump element class + fields
+/// v3.22.21: /debug/ramenfields — Walk all ramen arrays, dump element class + fields
 /// For each array: read first element, get class from object header, dump all fields + hex
 unsafe fn debug_ramenfields() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
@@ -5958,10 +6187,10 @@ unsafe fn read_training_predict() -> String {
 
     log_predict_step(&format!("commands done, ramen sid={}", sid));
 
-    // 5. Ramen scenario data — v3.22.20: Direct memory read (only 2 il2cpp_runtime_invoke)
+    // 5. Ramen scenario data — v3.22.21: Direct memory read (only 2 il2cpp_runtime_invoke)
     let mut ramen_json = String::new();
     if sid == 14 {
-        log_predict_step("ramen direct read (v3.22.20)");
+        log_predict_step("ramen direct read (v3.22.21)");
         let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
         if !scenario_obj.is_null() {
             let sc_class = std::ptr::read_unaligned::<*mut c_void>(
@@ -5997,7 +6226,7 @@ unsafe fn read_training_predict() -> String {
     log_predict_step("building json");
 
     let result = format!(
-        r#"{{"version":"3.22.20","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.21","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -6140,7 +6369,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.20","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.21","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6241,7 +6470,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.20","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.21","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6402,7 +6631,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.20","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.21","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6412,13 +6641,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.20","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.21","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.20","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.21","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
