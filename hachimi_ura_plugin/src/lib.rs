@@ -5776,7 +5776,7 @@ unsafe fn read_training_predict() -> String {
                     cp_pt, sf_num, rec_type, uraf_t, uraf_s
                 ));
                 ramen_json = format!(
-                    r#","ramen":{"checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"uraf_type":{},"uraf_state":{}}}"#,
+                    r#","ramen":{{"checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"uraf_type":{},"uraf_state":{}}}}"#,
                     cp_pt, sf_num, rec_type, uraf_t, uraf_s
                 );
             } else {
