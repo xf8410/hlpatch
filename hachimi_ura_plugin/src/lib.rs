@@ -787,16 +787,16 @@ unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
 
 unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
     if obj.is_null() || field_offset < 0 { return ptr::null_mut(); }
+    std::ptr::read_unaligned::<*mut c_void>(
+        (obj as *const u8).add(field_offset as usize) as *const *mut c_void
+    )
+}
 
 // ★ v3.22.19: Direct int read — zero il2cpp_runtime_invoke
 unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
     if obj.is_null() || field_offset < 0 { return -1; }
     let base = obj as *const u8;
     std::ptr::read_unaligned::<i32>(base.add(field_offset as usize) as *const i32)
-}
-    std::ptr::read_unaligned::<*mut c_void>(
-        (obj as *const u8).add(field_offset as usize) as *const *mut c_void
-    )
 }
 
 
