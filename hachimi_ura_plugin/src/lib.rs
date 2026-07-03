@@ -5837,7 +5837,12 @@ unsafe fn debug_cmdinfo() -> String {
     )
 }
 
-/// /debug/rameninfo — Dump ramen DataSet hex + class info (for offset discovery)
+/// /training/predict — Detailed training prediction with NPC partner breakdown
+/// Returns per-command: gains, partner details (support card vs NPC), buffs, failure risk
+/// Key data sources:
+///   - WorkSingleModeData -> get_HomeInfoData -> CommandInfoArray (training layout + partners)
+///   - WorkSingleModeCharaData -> CharaEffectBuffArray (active buffs)
+///   - WorkSingleModeScenarioRamenDataSet (ramen-specific data, scenario_id==14)
 unsafe fn read_ramen_info() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
@@ -5889,7 +5894,7 @@ unsafe fn read_ramen_info() -> String {
     }
 
     format!(
-        r#"{"ds_ptr":"0x{:x}","ds_class":"0x{:x}","class_name":"{}","hex_dump":"{}"}"#,
+        r#"{{"ds_ptr":"0x{:x}","ds_class":"0x{:x}","class_name":"{}","hex_dump":"{}"}}"#,
         ramen_ds_obj as usize, ds_class_ptr as usize, class_name, hex
     )
 }
