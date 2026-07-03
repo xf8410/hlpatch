@@ -1252,21 +1252,6 @@ unsafe fn read_scenario_detail() -> String {
                         let us = read_obscured_int_from_obj(uraf_obj, "get_UrafEffectState");
                         result_parts.push(format!(r#""uraf_effect":{{"UrafEffectType":{},"UrafEffectState":{}}}"#, ut, us));
                     }
-                        } else {
-                            // Fallback: class not found in IL2CPP, read ObscuredInt fields manually
-                            // Layout (2 ObscuredInt fields, each 0x14 bytes):
-                            // UrafEffectType:  key=0x10, hidden=0x14
-                            // UrafEffectState: key=0x24, hidden=0x28
-                            let ub = uraf_obj as *const u8;
-                            let ut_key = std::ptr::read_unaligned::<i32>(ub.add(0x10) as *const i32);
-                            let ut_hid = std::ptr::read_unaligned::<i32>(ub.add(0x14) as *const i32);
-                            let us_key = std::ptr::read_unaligned::<i32>(ub.add(0x24) as *const i32);
-                            let us_hid = std::ptr::read_unaligned::<i32>(ub.add(0x28) as *const i32);
-                            let ut = ut_hid ^ ut_key;
-                            let us = us_hid ^ us_key;
-                            result_parts.push(format!(r#""uraf_effect":{{"UrafEffectType":{},"UrafEffectState":{}}}"#, ut, us));
-                        }
-                    }
 
                     // Read SelectedRegionIdArray using read_obscured_int_array
                     let region_ids = read_obscured_int_array(dataset_class, dataset_obj, "get_SelectedRegionIdArray");
@@ -1294,6 +1279,7 @@ unsafe fn read_scenario_detail() -> String {
                                 let fv = read_obscured_int_from_obj(fe_ptr, "get_FeelingValue");
                                 fi_elements.push(format!(r#"{"FeelingType":{},"FeelingValue":{}}"#, ft, fv));
                             }
+                            result_parts.push(format!(r#""feeling_info":[{}]"#, fi_elements.join(",")));
                         }
                     }
 
@@ -1313,8 +1299,6 @@ unsafe fn read_scenario_detail() -> String {
                                 ft_elems.push(format!(r#"{"Turn":{},"FeelingType":{}}"#, t, fty));
                             }
                             result_parts.push(format!(r#""feeling_turn_info":[{}]"#, ft_elems.join(",")));
-                        }
-                    }
                         }
                     }
 
@@ -1338,8 +1322,6 @@ unsafe fn read_scenario_detail() -> String {
                             result_parts.push(format!(r#""command_feeling_info":[{}]"#, cf_elems.join(",")));
                         }
                     }
-                        }
-                    }
 
 
                     // FeelingReduceTurnInfoArray: 2 ObscuredInt fields (Turn, FeelingType)
@@ -1358,8 +1340,6 @@ unsafe fn read_scenario_detail() -> String {
                                 fr_elems.push(format!(r#"{"Turn":{},"FeelingType":{}}"#, t, fty));
                             }
                             result_parts.push(format!(r#""feeling_reduce_turn_info":[{}]"#, fr_elems.join(",")));
-                        }
-                    }
                         }
                     }
 
