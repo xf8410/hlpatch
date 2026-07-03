@@ -3939,9 +3939,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         upload_all_logs()
     } else if path == "/debug/cmdinfo" {
         unsafe { debug_cmdinfo() }
-    } else if path.starts_with("/debug/dumpclass","/debug/storydata") {
+    } else if path.starts_with("/debug/dumpclass") {
         // v3.22.28: Dump all fields of any IL2CPP class by name
-        // Usage: /debug/dumpclass","/debug/storydata?name=WorkSingleModeData
+        // Usage: /debug/dumpclass?name=WorkSingleModeData
         let class_name = if let Some(q) = full_uri.find("?name=") {
             &full_uri[q+6..]
         } else { "" };
