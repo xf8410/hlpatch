@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.17
+//! URA Plugin v3.22.18
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -302,6 +302,10 @@ fn log_predict_step(msg: &str) {
         if fd >= 0 { sys_write(fd, line_bytes.as_ptr(), line_bytes.len()); sys_close(fd); }
         let fd2 = sys_open(path2.as_ptr() as *const i8, 1 | 64 | 1024, 0o644);
         if fd2 >= 0 { sys_write(fd2, line_bytes.as_ptr(), line_bytes.len()); sys_close(fd2); }
+    // v3.22.18: std::fs fallback
+    let _ = std::fs::OpenOptions::new().create(true).append(true)
+        .open("/data/data/jp.pokemon.pokeuma/files/uma_predict.log")
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
     }
 }
 
@@ -748,7 +752,7 @@ unsafe fn call_getter_obscured_int(
 }
 
 // ============================================================
-// ★ v3.22.17: Direct memory read helpers — zero il2cpp calls
+// ★ v3.22.18: Direct memory read helpers — zero il2cpp calls
 // ============================================================
 
 unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
@@ -1694,6 +1698,7 @@ unsafe fn read_chara_data(
 
     if any_valid {
         let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
+    log_predict_step(&format!("S:stats sid={}", sid));
         format!(
             r#"{{"ok":true,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
             speed, stamina, power, guts, wiz,
@@ -1780,7 +1785,7 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
 }
 
 // ============================================================
-// ★ v3.22.17: find_field_offset — read field offset via il2cpp_class_get_fields
+// ★ v3.22.18: find_field_offset — read field offset via il2cpp_class_get_fields
 // Thread-safe metadata API, NO il2cpp_runtime_invoke calls
 // ============================================================
 
@@ -1868,7 +1873,7 @@ unsafe fn find_field_offset(class: *mut c_void, field_name: &str) -> i32 {
 }
 
 // ============================================================
-// ★ v3.22.17: read_ramen_scalar_fields — read 5 ObscuredInt fields from DataSet
+// ★ v3.22.18: read_ramen_scalar_fields — read 5 ObscuredInt fields from DataSet
 // Zero il2cpp_runtime_invoke calls (only find_field_offset + read_obscured_int_at)
 // ============================================================
 
@@ -2905,7 +2910,7 @@ unsafe fn read_summary_inner() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    log_predict_step("got wdm");
+    log_predict_step("S:wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -2945,6 +2950,7 @@ unsafe fn read_summary_inner() -> String {
         compute_skill_eval(&learned_skills)
     };
     ura_log(2, &format!("skill_eval={} count={}", skill_eval, skill_count));
+    log_predict_step("S:skills");
 
     let mot_s = match mot { 5=>"Best", 4=>"Good", 3=>"Normal", 2=>"Bad", 1=>"Worst", _=>"?" };
     let scn_s = match sid {
@@ -2972,15 +2978,17 @@ unsafe fn read_summary_inner() -> String {
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
-    // ★ v3.22.17: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
+    // ★ v3.22.18: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
     // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
     if sid == 14 {
-        ura_log(3, "v3.22.17 ramen: direct memory read");
+        ura_log(3, "v3.22.18 ramen: direct memory read");
+        log_predict_step("S:ramen start");
         let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
         if !scenario_obj.is_null() {
             let sc_class = std::ptr::read_unaligned::<*mut c_void>(
                 scenario_obj as *const *mut c_void
             );
+            log_predict_step("S:ramen sc_obj");
             let dataset_obj = call_getter_ref(sc_class, scenario_obj, "get_DataSet");
             if !dataset_obj.is_null() {
                 let ds_class = std::ptr::read_unaligned::<*mut c_void>(
@@ -2988,6 +2996,7 @@ unsafe fn read_summary_inner() -> String {
                 );
                 // Read 5 scalar ObscuredInt fields (zero il2cpp calls)
                 let (cp_pt, sf_num, rec_type, uraf_t, uraf_s) =
+                    log_predict_step("S:ramen ds");
                     read_ramen_scalar_fields(ds_class, dataset_obj);
                 ramen_checkpoint_pt = cp_pt;
                 ramen_special_feeling_num = sf_num;
@@ -3100,6 +3109,7 @@ unsafe fn read_summary_inner() -> String {
                     !ramen_active_effects_raw_json.is_empty(),
                     !ramen_feeling_info_json.is_empty()
                 ));
+                log_predict_step("S:ramen arrays");
             } else {
                 ura_log(2, "ramen: dataset_obj null");
             }
@@ -3109,7 +3119,9 @@ unsafe fn read_summary_inner() -> String {
     }
 
     // --- Training data via HomeInfoData (ALL scenarios) ---
+    log_predict_step("S:ramen end");
     ura_log(3, "★ read_summary phase2: training data");
+    log_predict_step("S:p2 training");
     let mut tr_json = "[]".to_string();
     // ★ v3.15.1: collect eval_trainings in same pass (eliminate dangerous double-read)
     let mut eval_trainings: Vec<(i32, [i32; 5], i32, i32, i32, i32, i32, i32)> = Vec::new();
@@ -3246,7 +3258,9 @@ unsafe fn read_summary_inner() -> String {
     }
 
     // --- Support cards (graceful fallback) ---
+    log_predict_step("S:p2 done");
     ura_log(3, "★ read_summary phase3: support cards");
+    log_predict_step("S:p3 cards");
     let mut sc_json = "[]".to_string();
     let sc_arr = read_field_value(chara_class, chara_obj, "support_card_array");
     if sc_arr.is_null() {
@@ -3351,7 +3365,9 @@ unsafe fn read_summary_inner() -> String {
     }
 
     // --- Evaluation info (graceful fallback) ---
+    log_predict_step("S:p3 done");
     ura_log(3, "★ read_summary phase4: evaluation");
+    log_predict_step("S:p4 eval");
     let mut ev_json = "[]".to_string();
     let ev_arr = read_field_value(chara_class, chara_obj, "evaluation_info_array");
     if ev_arr.is_null() {
@@ -3398,7 +3414,9 @@ unsafe fn read_summary_inner() -> String {
     }
 
     // --- Training levels (graceful fallback) ---
+    log_predict_step("S:p4 done");
     ura_log(3, "★ read_summary phase5: training_levels");
+    log_predict_step("S:p5 levels");
     let mut tl_json = "[]".to_string();
     let tl_arr = read_field_value(chara_class, chara_obj, "training_level_info_array");
     if tl_arr.is_null() {
@@ -3443,10 +3461,12 @@ unsafe fn read_summary_inner() -> String {
     }
 
     // --- Buffs: chara_effect_ids → readable names (ALL scenarios) + EnhanceGroup (Breeders) ---
+    log_predict_step("S:p5 done");
     ura_log(3, "★ read_summary phase6: buffs");
+    log_predict_step("S:p6 buffs");
     // ★ v3.14.2: Always generate buffs from chara_effect_ids first
     let mut buff_json = effects_to_buffs_json(&chara_effect_ids);
-    // ★ v3.22.17: sid==14 skips try_get_scenario_obj (data pre-read in ramen section)
+    // ★ v3.22.18: sid==14 skips try_get_scenario_obj (data pre-read in ramen section)
     let scenario_obj = if sid == 14 {
         ptr::null_mut()
     } else {
@@ -3551,7 +3571,7 @@ unsafe fn read_summary_inner() -> String {
         }
     }
 
-    // ★ v3.22.17: Ramen buffs — extracted outside nested block (uses pre-read data only)
+    // ★ v3.22.18: Ramen buffs — extracted outside nested block (uses pre-read data only)
     if sid == 14 && !ramen_active_effects_raw_json.is_empty() {
         let mut buffs = Vec::new();
         for ae_part in ramen_active_effects_raw_json.split("},{") {
@@ -3598,6 +3618,7 @@ unsafe fn read_summary_inner() -> String {
     // Health condition is now detected via chara_effect_ids (top-level array)
     // ★ AI Evaluation (v3.15.1): compute score and training recommendation
     // FIXED: no more double-read of CommandInfoArray — eval_trainings collected in phase2
+    log_predict_step("S:buffs done");
     let ai_json = {
         let turn = std::cmp::min((mon - 1) * 2 + (half - 1), 71);
         let stats = [spd, sta, pow_, gut, wiz];
@@ -3633,8 +3654,9 @@ unsafe fn read_summary_inner() -> String {
         String::new()
     };
 
+    log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.17","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.18","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3814,7 +3836,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let path = parse_path(req);
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.17","endpoints":["/summary","/data","/scenario","/training/predict","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.18","endpoints":["/summary","/data","/scenario","/training/predict","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4015,7 +4037,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.17").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.18").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -4222,10 +4244,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.17 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.18 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.17 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.18 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -4997,7 +5019,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.17","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.18","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5062,7 +5084,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.17","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.18","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5134,7 +5156,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.17","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.18","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5290,7 +5312,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.17","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.18","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -5424,7 +5446,7 @@ unsafe fn debug_cmdinfo() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    log_predict_step("got wdm");
+    log_predict_step("P:wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -5543,7 +5565,7 @@ unsafe fn read_ramen_info() -> String {
 unsafe fn read_training_predict() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     clear_predict_log();
-    log_predict_step("start");
+    log_predict_step("P:start");
     let image = match get_image() {
         img if !img.is_null() => img,
         _ => return r#"{"error":"image_null"}"#.to_string(),
@@ -5555,7 +5577,7 @@ unsafe fn read_training_predict() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    log_predict_step("got wdm");
+    log_predict_step("P:wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -5755,10 +5777,10 @@ unsafe fn read_training_predict() -> String {
 
     log_predict_step(&format!("commands done, ramen sid={}", sid));
 
-    // 5. Ramen scenario data — v3.22.17: Direct memory read (only 2 il2cpp_runtime_invoke)
+    // 5. Ramen scenario data — v3.22.18: Direct memory read (only 2 il2cpp_runtime_invoke)
     let mut ramen_json = String::new();
     if sid == 14 {
-        log_predict_step("ramen direct read (v3.22.17)");
+        log_predict_step("ramen direct read (v3.22.18)");
         let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
         if !scenario_obj.is_null() {
             let sc_class = std::ptr::read_unaligned::<*mut c_void>(
@@ -5794,7 +5816,7 @@ unsafe fn read_training_predict() -> String {
     log_predict_step("building json");
 
     let result = format!(
-        r#"{{"version":"3.22.17","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
+        r#"{{"version":"3.22.18","scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{}}},"commands":[{}]{},"buffs":{}}}"#,
         sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt,
         commands_json.join(","),
         ramen_json,
@@ -5823,7 +5845,7 @@ unsafe fn read_inherit_compat() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    log_predict_step("got wdm");
+    log_predict_step("P:wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -5937,7 +5959,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.17","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.18","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -5963,7 +5985,7 @@ unsafe fn read_turn_log() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    log_predict_step("got wdm");
+    log_predict_step("P:wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -6038,7 +6060,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.17","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.18","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6059,7 +6081,7 @@ unsafe fn read_event_recommend() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    log_predict_step("got wdm");
+    log_predict_step("P:wdm");
 
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
@@ -6199,7 +6221,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.17","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.18","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6209,13 +6231,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.17","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.18","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.17","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.18","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
