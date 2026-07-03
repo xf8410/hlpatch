@@ -6367,6 +6367,9 @@ unsafe fn read_event_recommend() -> String {
 /// 2. Dump all class fields + offsets (metadata only)
 /// 3. Hex dump the object memory
 /// 4. For ObscuredInt fields at known offsets, decrypt directly
+
+/// v3.22.29: /debug/storydata — Read _storyInfoListDic + EventChoiceRewardDict from SingleModeData
+/// Pure memory read: read pointers at known offsets, dump class info + hex
 unsafe fn debug_storydata() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
@@ -6381,54 +6384,69 @@ unsafe fn debug_storydata() -> String {
     let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
-    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
-    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
-    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
-    let scenario_id = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    let sm_base = sm_obj as *const u8;
 
-    let scenario_class_name = match scenario_id {
-        1 => "WorkSingleModeScenarioURA", 2 => "WorkSingleModeScenarioTeamRace",
-        3 => "WorkSingleModeScenarioLive", 4 => "WorkSingleModeScenarioFree",
-        5 => "WorkSingleModeScenarioVenus", 6 => "WorkSingleModeScenarioArc",
-        7 => "WorkSingleModeScenarioSport", 8 => "WorkSingleModeScenarioCook",
-        9 => "WorkSingleModeScenarioMecha", 10 => "WorkSingleModeScenarioLegend",
-        11 => "WorkSingleModeScenarioPioneer", 12 => "WorkSingleModeScenarioOnsen",
-        13 => "WorkSingleModeScenarioBreeders", 14 => "WorkSingleModeScenarioRamen",
-        _ => "Unknown",
+    // === Read _storyInfoListDic at offset 0x38 ===
+    let story_dic_ptr = std::ptr::read_unaligned::<*mut c_void>(sm_base.add(0x38) as *const *mut c_void);
+    let story_dic_info = if !story_dic_ptr.is_null() {
+        let dic_class = get_class_from_object(story_dic_ptr);
+        let dic_class_name = get_class_name_from_pointer(dic_class);
+        let dic_fields = enumerate_class_fields(dic_class);
+        let dic_methods = enumerate_class_methods(dic_class);
+        // Hex dump 0x100 bytes
+        let db = story_dic_ptr as *const u8;
+        let mut hex: Vec<String> = Vec::new();
+        for off in (0..0x100).step_by(4) {
+            let val = std::ptr::read_unaligned::<i32>(db.add(off) as *const i32);
+            hex.push(format!(r#""0x{:02x}:{}"#, off, val));
+        }
+        format!(r#"{{"ptr":"{:p}","class":"{}","fields":{},"methods":{},"hex":{{{}}}}}"#,
+            story_dic_ptr, dic_class_name, dic_fields, dic_methods, hex.join(","))
+    } else {
+        r#"{"ptr":"null"}"#.to_string()
     };
 
-    let scenario_class = find_class_by_short_name(image, scenario_class_name);
-    if scenario_class.is_null() { return format!(r#"{{"error":"no_scenario_class","name":"{}"}}"#, scenario_class_name); }
-    let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, scenario_id);
-    if scenario_obj.is_null() { return r#"{"error":"no_scenario_obj"}"#.to_string(); }
+    // === Read EventChoiceRewardDict at offset 0x1b8 ===
+    let reward_dic_ptr = std::ptr::read_unaligned::<*mut c_void>(sm_base.add(0x1b8) as *const *mut c_void);
+    let reward_dic_info = if !reward_dic_ptr.is_null() {
+        let dic_class = get_class_from_object(reward_dic_ptr);
+        let dic_class_name = get_class_name_from_pointer(dic_class);
+        let dic_fields = enumerate_class_fields(dic_class);
+        let dic_methods = enumerate_class_methods(dic_class);
+        // Hex dump 0x100 bytes
+        let db = reward_dic_ptr as *const u8;
+        let mut hex: Vec<String> = Vec::new();
+        for off in (0..0x100).step_by(4) {
+            let val = std::ptr::read_unaligned::<i32>(db.add(off) as *const i32);
+            hex.push(format!(r#""0x{:02x}:{}"#, off, val));
+        }
+        format!(r#"{{"ptr":"{:p}","class":"{}","fields":{},"methods":{},"hex":{{{}}}}}"#,
+            reward_dic_ptr, dic_class_name, dic_fields, dic_methods, hex.join(","))
+    } else {
+        r#"{"ptr":"null"}"#.to_string()
+    };
 
-    // Only safe getter call - get_DataSet is proven safe from v3.22.23+
-    let ds_obj = call_getter_ref(scenario_class, scenario_obj, "get_DataSet");
-    if ds_obj.is_null() { return r#"{"error":"no_dataset_obj"}"#.to_string(); }
-
-    let ds_class = get_class_from_object(ds_obj);
-    let ds_class_name = get_class_name_from_pointer(ds_class);
-
-    // Enumerate fields (metadata only, no invoke)
-    let ds_fields = enumerate_class_fields(ds_class);
-    let ds_methods = enumerate_class_methods(ds_class);
-
-    // Hex dump DataSet object (first 0x400 bytes)
-    let ds_base = ds_obj as *const u8;
-    let mut ds_hex: Vec<String> = Vec::new();
-    for off in (0..0x400).step_by(4) {
-        let val = std::ptr::read_unaligned::<i32>(ds_base.add(off) as *const i32);
-        ds_hex.push(format!(r#""0x{:03x}:{}"#, off, val));
-    }
-
-    // Also dump SingleModeData class fields/methods for finding story-related getters
-    let sm_fields = enumerate_class_fields(sm_class);
-    let sm_methods = enumerate_class_methods(sm_class);
+    // === Read StoryEventBonusDict at offset 0x180 ===
+    let bonus_dic_ptr = std::ptr::read_unaligned::<*mut c_void>(sm_base.add(0x180) as *const *mut c_void);
+    let bonus_dic_info = if !bonus_dic_ptr.is_null() {
+        let dic_class = get_class_from_object(bonus_dic_ptr);
+        let dic_class_name = get_class_name_from_pointer(dic_class);
+        let dic_fields = enumerate_class_fields(dic_class);
+        // Hex dump 0x80 bytes
+        let db = bonus_dic_ptr as *const u8;
+        let mut hex: Vec<String> = Vec::new();
+        for off in (0..0x80).step_by(4) {
+            let val = std::ptr::read_unaligned::<i32>(db.add(off) as *const i32);
+            hex.push(format!(r#""0x{:02x}:{}"#, off, val));
+        }
+        format!(r#"{{"ptr":"{:p}","class":"{}","fields":{},"hex":{{{}}}}}"#,
+            bonus_dic_ptr, dic_class_name, dic_fields, hex.join(","))
+    } else {
+        r#"{"ptr":"null"}"#.to_string()
+    };
 
     format!(
-        r#"{{"scenario_id":{},"scenario_class":"{}","dataset_class":"{}","dataset_fields":{},"dataset_methods":{},"dataset_hex":{{{}}},"sm_data_fields":{},"sm_data_methods":{}}}"#,
-        scenario_id, scenario_class_name, ds_class_name,
-        ds_fields, ds_methods, ds_hex.join(","),
-        sm_fields, sm_methods
+        r#"{{"story_info_list_dic":{},"event_choice_reward_dict":{},"story_event_bonus_dict":{}}}"#,
+        story_dic_info, reward_dic_info, bonus_dic_info
     )
 }
