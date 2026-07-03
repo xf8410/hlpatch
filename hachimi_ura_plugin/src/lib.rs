@@ -5136,7 +5136,7 @@ fn read_events_data() -> String {
         "PRAGMA table_info(single_mode_story_data)"
     ) {
         Ok(mut stmt) => stmt.query_map([], |row| {
-            row.get::<_, String>(1).unwrap_or_default()
+            Ok(row.get::<_, String>(1).unwrap_or_default())
         }).ok().map(|iter| iter.filter_map(|r| r.ok()).collect()).unwrap_or_default(),
         Err(_) => Vec::new(),
     };
