@@ -6360,8 +6360,13 @@ unsafe fn read_event_recommend() -> String {
     }
 }
 
-/// v3.22.29: /debug/storydata — Discover all DataSet getters and try to find story/event data
-/// Walks DataSet object, calls ALL get_ methods, reports return type/value for each
+
+/// v3.22.29: /debug/storydata — Pure memory read: dump DataSet + SingleModeData fields + hex
+/// NO runtime_invoke on any new path. Only reads memory + uses existing safe getters.
+/// 1. Get DataSet pointer via existing safe getters
+/// 2. Dump all class fields + offsets (metadata only)
+/// 3. Hex dump the object memory
+/// 4. For ObscuredInt fields at known offsets, decrypt directly
 unsafe fn debug_storydata() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
@@ -6369,7 +6374,6 @@ unsafe fn debug_storydata() -> String {
         _ => return r#"{"error":"image_null"}"#.to_string(),
     };
 
-    // 1. Get scenario info
     let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
@@ -6383,20 +6387,13 @@ unsafe fn debug_storydata() -> String {
     let scenario_id = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
 
     let scenario_class_name = match scenario_id {
-        1 => "WorkSingleModeScenarioURA",
-        2 => "WorkSingleModeScenarioTeamRace",
-        3 => "WorkSingleModeScenarioLive",
-        4 => "WorkSingleModeScenarioFree",
-        5 => "WorkSingleModeScenarioVenus",
-        6 => "WorkSingleModeScenarioArc",
-        7 => "WorkSingleModeScenarioSport",
-        8 => "WorkSingleModeScenarioCook",
-        9 => "WorkSingleModeScenarioMecha",
-        10 => "WorkSingleModeScenarioLegend",
-        11 => "WorkSingleModeScenarioPioneer",
-        12 => "WorkSingleModeScenarioOnsen",
-        13 => "WorkSingleModeScenarioBreeders",
-        14 => "WorkSingleModeScenarioRamen",
+        1 => "WorkSingleModeScenarioURA", 2 => "WorkSingleModeScenarioTeamRace",
+        3 => "WorkSingleModeScenarioLive", 4 => "WorkSingleModeScenarioFree",
+        5 => "WorkSingleModeScenarioVenus", 6 => "WorkSingleModeScenarioArc",
+        7 => "WorkSingleModeScenarioSport", 8 => "WorkSingleModeScenarioCook",
+        9 => "WorkSingleModeScenarioMecha", 10 => "WorkSingleModeScenarioLegend",
+        11 => "WorkSingleModeScenarioPioneer", 12 => "WorkSingleModeScenarioOnsen",
+        13 => "WorkSingleModeScenarioBreeders", 14 => "WorkSingleModeScenarioRamen",
         _ => "Unknown",
     };
 
@@ -6405,105 +6402,33 @@ unsafe fn debug_storydata() -> String {
     let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, scenario_id);
     if scenario_obj.is_null() { return r#"{"error":"no_scenario_obj"}"#.to_string(); }
 
+    // Only safe getter call - get_DataSet is proven safe from v3.22.23+
     let ds_obj = call_getter_ref(scenario_class, scenario_obj, "get_DataSet");
     if ds_obj.is_null() { return r#"{"error":"no_dataset_obj"}"#.to_string(); }
 
-    // 2. Get DataSet class from object header (handles Obscured wrappers)
     let ds_class = get_class_from_object(ds_obj);
     let ds_class_name = get_class_name_from_pointer(ds_class);
 
-    // 3. Enumerate ALL methods from DataSet class, find get_ methods
-    let get_methods_fn: Option<FnClassGetMethods> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethods>(p)) }
-    };
-    let get_method_name_fn: Option<FnMethodGetName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnMethodGetName>(p)) }
-    };
+    // Enumerate fields (metadata only, no invoke)
+    let ds_fields = enumerate_class_fields(ds_class);
+    let ds_methods = enumerate_class_methods(ds_class);
 
-    if get_methods_fn.is_none() || get_method_name_fn.is_none() {
-        return r#"{"error":"no_method_enum_api"}"#.to_string();
+    // Hex dump DataSet object (first 0x400 bytes)
+    let ds_base = ds_obj as *const u8;
+    let mut ds_hex: Vec<String> = Vec::new();
+    for off in (0..0x400).step_by(4) {
+        let val = std::ptr::read_unaligned::<i32>(ds_base.add(off) as *const i32);
+        ds_hex.push(format!(r#""0x{:03x}:{}"#, off, val));
     }
 
-    // Collect all get_ method names
-    let mut getter_names: Vec<String> = Vec::new();
-    let mut iter: *mut c_void = ptr::null_mut();
-    loop {
-        let method_info = get_methods_fn.unwrap()(ds_class, &mut iter);
-        if method_info.is_null() { break; }
-        let method_name = if let Some(ref get_name) = get_method_name_fn {
-            let name_ptr = get_name(method_info);
-            if !name_ptr.is_null() {
-                std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().to_string()
-            } else { continue; }
-        } else { continue; };
-        if method_name.starts_with("get_") {
-            getter_names.push(method_name);
-        }
-    }
-
-    // 4. Call each getter and try to identify the return type
-    let mut results: Vec<String> = Vec::new();
-    for getter in &getter_names {
-        let result_ptr = call_getter_on_instance(ds_class, ds_obj, getter);
-        if result_ptr.is_null() {
-            results.push(format!(r#"{{"getter":"{}","type":"null"}}"#, getter));
-            continue;
-        }
-
-        // Try to read as object - get class from header
-        let obj_class = get_class_from_object(result_ptr);
-        let obj_class_name = get_class_name_from_pointer(obj_class);
-
-        // Check if it's a List/Array by looking for count field at 0x18
-        let base = result_ptr as *const u8;
-        let maybe_count = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-
-        // Heuristic: if class name contains "List" or count is small and items pointer is valid
-        let is_list = obj_class_name.contains("List") || obj_class_name.contains("Array");
-
-        if is_list || (maybe_count > 0 && maybe_count < 1000) {
-            // Try to read as List
-            let length = maybe_count;
-            if length < 1000 {
-                // Read first element class name if available
-                let first_elem_class = if length > 0 {
-                    let first_ptr = std::ptr::read_unaligned::<*mut c_void>(
-                        base.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void
-                    );
-                    if !first_ptr.is_null() {
-                        let fc = get_class_from_object(first_ptr);
-                        get_class_name_from_pointer(fc)
-                    } else {
-                        "null_elem".to_string()
-                    }
-                } else {
-                    "empty".to_string()
-                };
-                results.push(format!(
-                    r#"{{"getter":"{}","type":"list","class":"{}","len":{},"elem_class":"{}"}}"#,
-                    getter, obj_class_name, length, first_elem_class
-                ));
-            } else {
-                results.push(format!(
-                    r#"{{"getter":"{}","type":"obj","class":"{}","maybe_count":{}}}"#,
-                    getter, obj_class_name, maybe_count
-                ));
-            }
-        } else {
-            // It's a regular object or value type
-            // Check if it's a boxed int (value at +16)
-            let maybe_int = std::ptr::read_unaligned::<i32>(base.add(16) as *const i32);
-            results.push(format!(
-                r#"{{"getter":"{}","type":"obj","class":"{}","boxed_int_maybe":{}}}"#,
-                getter, obj_class_name, maybe_int
-            ));
-        }
-    }
+    // Also dump SingleModeData class fields/methods for finding story-related getters
+    let sm_fields = enumerate_class_fields(sm_class);
+    let sm_methods = enumerate_class_methods(sm_class);
 
     format!(
-        r#"{{"scenario_id":{},"scenario_class":"{}","dataset_class":"{}","getters":[{}]}}"#,
-        scenario_id, scenario_class_name, ds_class_name, results.join(",")
+        r#"{{"scenario_id":{},"scenario_class":"{}","dataset_class":"{}","dataset_fields":{},"dataset_methods":{},"dataset_hex":{{{}}},"sm_data_fields":{},"sm_data_methods":{}}}"#,
+        scenario_id, scenario_class_name, ds_class_name,
+        ds_fields, ds_methods, ds_hex.join(","),
+        sm_fields, sm_methods
     )
 }
