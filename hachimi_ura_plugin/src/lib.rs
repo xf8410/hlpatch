@@ -1698,7 +1698,6 @@ unsafe fn read_chara_data(
 
     if any_valid {
         let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
-    log_predict_step(&format!("S:stats sid={}", sid));
         format!(
             r#"{{"ok":true,"chara":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"scenario_id":{},"fan_count":{},"chara_effect_ids":[{}],"scenario_progress":{}}},"month":{},"half":{},"playing_state":{},"is_playing":{},{},"via":"WorkDataManager->get_SingleMode->get_Character->getters"}}"#,
             speed, stamina, power, guts, wiz,
@@ -2942,6 +2941,7 @@ unsafe fn read_summary_inner() -> String {
     let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
     let chara_effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
     let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
+    log_predict_step(&format!("S:stats sid={}", sid));
 
     // ★ v3.22.0: Read learned skills and compute skill evaluation
     ura_log(3, "★ read_summary phase1b: skill eval");
@@ -2996,8 +2996,8 @@ unsafe fn read_summary_inner() -> String {
                 );
                 // Read 5 scalar ObscuredInt fields (zero il2cpp calls)
                 let (cp_pt, sf_num, rec_type, uraf_t, uraf_s) =
-                    log_predict_step("S:ramen ds");
                     read_ramen_scalar_fields(ds_class, dataset_obj);
+                log_predict_step("S:ramen ds");
                 ramen_checkpoint_pt = cp_pt;
                 ramen_special_feeling_num = sf_num;
                 ramen_recommend_type = rec_type;
