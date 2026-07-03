@@ -38,3 +38,20 @@ jobs:
         with:
           name: libhachimi_ura
           path: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+
+      - name: Get version from source
+        id: version
+        run: |
+          VERSION=$(grep -oP 'version = "\K[^"]+' hachimi_ura_plugin/Cargo.toml || echo "0.0.0")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          files: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
