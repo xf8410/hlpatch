@@ -225,15 +225,27 @@ extern "C" {
     fn sys_raise(sig: i32) -> i32;
     #[link_name = "system"]
     fn sys_system(cmd: *const i8) -> i32;
+    #[link_name = "sigsetjmp"]
+    fn sys_sigsetjmp(env: *mut u8, savemask: i32) -> i32;
+    #[link_name = "siglongjmp"]
+    fn sys_siglongjmp(env: *const u8, val: i32) -> !;
 }
 
 const CRASH_LOG_PATH: &str = "/data/data/jp.pokemon.pokeuma/files/uma_predict.log";
 
+// ★ v3.22.33: SIGSEGV recovery for push thread
+// sigsetjmp buffer: 200 bytes is enough for jmp_buf on aarch64 (typically 24 x 8 = 192 bytes)
+static mut SIGSEGV_JMP_BUF: [u8; 200] = [0u8; 200];
+static SIGSEGV_RECOVERY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Cooldown: after SIGSEGV recovery, skip reads for N seconds
+static SIGSEGV_COOLDOWN_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 extern "C" fn crash_signal_handler(sig: i32) {
     CRASH_SIG.store(sig, std::sync::atomic::Ordering::Relaxed);
     CRASH_STEP.store(PREDICT_STEP.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
+    // Log the crash
     let step = PREDICT_STEP.load(std::sync::atomic::Ordering::Relaxed);
-    let mut msg = [0u8; 48];
+    let mut msg = [0u8; 64];
     let p = b"CRASH at step ";
     msg[..p.len()].copy_from_slice(p);
     let mut len = p.len();
@@ -255,12 +267,26 @@ extern "C" fn crash_signal_handler(sig: i32) {
         while n2 > 0 { digits[dlen] = b'0' + (n2 % 10) as u8; n2 /= 10; dlen += 1; }
         for i in (0..dlen).rev() { msg[len] = digits[i]; len += 1; }
     }
+    let r = b" RECOVERED";
+    msg[len..len+r.len()].copy_from_slice(r); len += r.len();
     msg[len] = b'\n'; len += 1;
     let path = b"/data/data/jp.pokemon.pokeuma/files/uma_predict.log\0";
     let fd = unsafe { sys_open(path.as_ptr() as *const i8, 1 | 64 | 1024, 0o644) };
     if fd >= 0 {
         unsafe { sys_write(fd, msg.as_ptr(), len); sys_close(fd); }
     }
+    // ★ v3.22.33: If sigsetjmp was set (push thread), longjmp back instead of killing process
+    if SIGSEGV_RECOVERY.load(std::sync::atomic::Ordering::Relaxed) {
+        // Set cooldown: skip reads for 60 seconds
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        SIGSEGV_COOLDOWN_UNTIL.store(now + 60, std::sync::atomic::Ordering::Relaxed);
+        SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+        unsafe { sys_siglongjmp(SIGSEGV_JMP_BUF.as_ptr(), 1); }
+    }
+    // Not in recovery context — re-raise signal to kill process (unrecoverable)
     unsafe { sys_signal(sig, 0); sys_raise(sig); }
 }
 
@@ -2876,11 +2902,16 @@ static CACHED_SUMMARY: std::sync::Mutex<Option<(String, u64)>> = std::sync::Mute
 const SUMMARY_CACHE_TTL_SECS: u64 = 3;
 
 fn read_summary() -> String {
-    // ★ v3.22.28: Check cache first — avoid IL2CPP calls if data hasn't changed
+    // ★ v3.22.33: SIGSEGV cooldown — if we recently recovered from a crash, skip reads
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+    let cooldown = SIGSEGV_COOLDOWN_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+    if now < cooldown {
+        return format!(r#"{{"error":"sigsegv_cooldown","retry_after":{}}}"#, cooldown - now);
+    }
+    // ★ v3.22.28: Check cache first — avoid IL2CPP calls if data hasn't changed
     if let Ok(guard) = CACHED_SUMMARY.lock() {
         if let Some((ref cached, ts)) = *guard {
             if now.saturating_sub(ts) < SUMMARY_CACHE_TTL_SECS {
@@ -2890,9 +2921,25 @@ fn read_summary() -> String {
     }
     // ★ v3.15.2: Mutex lock prevents concurrent il2cpp reads from HTTP + push threads
     let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    // ★ v3.22.33: sigsetjmp recovery — catch SIGSEGV from il2cpp_runtime_invoke
+    // If SIGSEGV fires during read_summary_inner, signal handler will longjmp back here
+    let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+    if jmp_result != 0 {
+        // We jumped back from SIGSEGV handler — read_summary_inner crashed
+        ura_log(1, "★ SIGSEGV recovered in read_summary — skipping for 60s");
+        let err = r#"{"error":"sigsegv_recovered","hint":"read_summary hit native crash, cooling down"}"#.to_string();
+        if let Ok(mut guard) = CACHED_SUMMARY.lock() {
+            *guard = Some((err.clone(), now));
+        }
+        return err;
+    }
+    // Set recovery flag so signal handler knows to longjmp instead of killing process
+    SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
     let summary = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unsafe { read_summary_inner() }
     })).unwrap_or_else(|_| r#"{"error":"panic_caught","hint":"read_summary panicked, game protected"}"#.to_string());
+    // Clear recovery flag — normal return, no crash
+    SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
     // ★ v3.22.28: Update cache
     if let Ok(mut guard) = CACHED_SUMMARY.lock() {
         *guard = Some((summary.clone(), now));
@@ -3666,7 +3713,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.32","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.33","month":{},"half":{},"scenario":"{}","stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3847,7 +3894,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.32","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.33","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -3947,7 +3994,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         } else { "" };
         unsafe { debug_dumpclass(class_name) }
     } else if path == "/debug/storydata" {
-        // v3.22.32: Discover all DataSet getters, find story/event related arrays
+        // v3.22.33: Discover all DataSet getters, find story/event related arrays
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { debug_storydata() }
         })).unwrap_or_else(|_| r#"{"error":"storydata_panic"}"#.to_string())
@@ -5253,7 +5300,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.32","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.33","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5318,7 +5365,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.32","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.33","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5390,7 +5437,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.32","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.33","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5546,7 +5593,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.32","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.33","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6076,7 +6123,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.32","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.33","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6177,7 +6224,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.32","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.33","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6338,7 +6385,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.32","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.33","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6348,36 +6395,55 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.32","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.33","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.32","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.33","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
 }
 
 
-/// v3.22.32: /debug/storydata — Pure memory read: dump DataSet + SingleModeData fields + hex
+/// v3.22.33: /debug/storydata — Pure memory read: dump DataSet + SingleModeData fields + hex
 /// NO runtime_invoke on any new path. Only reads memory + uses existing safe getters.
 /// 1. Get DataSet pointer via existing safe getters
 /// 2. Dump all class fields + offsets (metadata only)
 /// 3. Hex dump the object memory
 /// 4. For ObscuredInt fields at known offsets, decrypt directly
 
-/// v3.22.32: /debug/storydata — Read _storyInfoListDic + EventChoiceRewardDict from SingleModeData
+/// v3.22.33: /debug/storydata — Read _storyInfoListDic + EventChoiceRewardDict from SingleModeData
 /// Pure memory read: read pointers at known offsets, dump class info + hex
 
-/// v3.22.32: /debug/storydata — Read event dictionaries from SingleModeData
+/// v3.22.33: /debug/storydata — Read event dictionaries from SingleModeData
 /// Reads _storyInfoListDic, EventChoiceRewardDict, StoryEventBonusDict
 /// Traverses Dictionary`2 _entries array to dump key/value objects
 
-/// v3.22.32: /debug/storydata — Pure memory read event dictionaries
+/// v3.22.33: /debug/storydata — Pure memory read event dictionaries
 /// ZERO runtime_invoke calls. Only reads raw pointers + hex.
 unsafe fn debug_storydata() -> String {
+    // ★ v3.22.33: Acquire READ_MUTEX to share SIGSEGV_JMP_BUF safely with read_summary
+    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    // ★ v3.22.33: SIGSEGV recovery — same pattern as read_summary
+    let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+    if jmp_result != 0 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        SIGSEGV_COOLDOWN_UNTIL.store(now + 60, std::sync::atomic::Ordering::Relaxed);
+        return r#"{"error":"sigsegv_recovered_in_storydata"}"#.to_string();
+    }
+    SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = debug_storydata_inner();
+    SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+    result
+}
+
+unsafe fn debug_storydata_inner() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
         img if !img.is_null() => img,
