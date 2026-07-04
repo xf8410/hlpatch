@@ -7013,73 +7013,6 @@ unsafe fn debug_paramsincdec() -> String {
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
-    let plb = params_list as *const u8;
-    let plen = std::ptr::read_unaligned::<usize>(plb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if plen > 1000 { return format!(r#"{{"error":"params_bad_len","len":{}}}"#, plen); }
-
-    let max_read = if plen < 3 { plen } else { 3 };
-    let mut classes: Vec<String> = Vec::new();
-    for i in 0..max_read {
-        let ep = std::ptr::read_unaligned::<*mut c_void>(
-            plb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
-        );
-        if ep.is_null() {
-            classes.push("null".to_string());
-        } else {
-            let ep_class = get_class_from_object(ep);
-            classes.push(get_class_name_from_pointer(ep_class));
-        }
-    }
-    let sample_str = {
-        let mut quoted: Vec<String> = Vec::new();
-        for c in &classes { quoted.push(format!("\"{}\"", c)); }
-        quoted.join(",")
-    };
-
-    // Also check all 5 CommandInfo elements for their ParamsIncDecInfoArray lengths
-    let mut cmd_details: Vec<String> = Vec::new();
-    for ci in 0..cmd_len {
-        let ce = std::ptr::read_unaligned::<*mut c_void>(
-            cmd_lb.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
-        );
-        if ce.is_null() {
-            cmd_details.push(format!(r#"{{"idx":{},"error":"null"}}"#, ci));
-            continue;
-        }
-        let ce_params = read_ptr_at(ce, 56);
-        if ce_params.is_null() {
-            cmd_details.push(format!(r#"{{"idx":{},"params_len":0}}"#, ci));
-            continue;
-        }
-        let ce_plb = ce_params as *const u8;
-        let ce_plen = std::ptr::read_unaligned::<usize>(ce_plb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-        cmd_details.push(format!(r#"{{"idx":{},"params_len":{}}}"#, ci, ce_plen));
-    }
-
-    // Read first ParamsIncDecInfo element and enumerate its fields/methods
-    let (elem0_fields, elem0_methods, elem0_class_name) = if plen > 0 {
-        let ep0 = std::ptr::read_unaligned::<*mut c_void>(
-            plb.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void
-        );
-        if !ep0.is_null() {
-            let ep0_class = get_class_from_object(ep0);
-            let name = get_class_name_from_pointer(ep0_class);
-            let fields = enumerate_class_fields(ep0_class);
-            let methods = enumerate_class_methods(ep0_class);
-            (fields, methods, name)
-        } else {
-            ("null".to_string(), "null".to_string(), "null".to_string())
-        }
-    } else {
-        ("no_elements".to_string(), "no_elements".to_string(), "no_elements".to_string())
-    };
-
-    format!(
-        r#"{{"version":"3.22.43","cmd0_class":"{}","cmd_len":{},"params_count":{},"params_sample_classes":[{}],"all_cmds":[{}],"elem0_class":"{}","elem0_fields":{},"elem0_methods":{}}}"#,
-        cmd0_class_name, cmd_len, plen, sample_str, cmd_details.join(","),
-        elem0_class_name, elem0_fields, elem0_methods
-    )
-}
 
 /// v3.22.43: /update — Self-update SO from GitHub Release
 /// 1. Find current SO path via /proc/self/maps
@@ -7146,8 +7079,6 @@ fn update_so() -> String {
     // On Linux, unlinking a file that's mmap'd by current process is safe:
     // the inode remains until all handles close; the new file gets a new inode.
     if let Err(e) = std::fs::remove_file(&so_path) {
-        // unlink might fail if we don't have write permission to directory
-        // but try rename anyway (rename overwrites on Linux)
         let _ = std::fs::remove_file(&tmp_path);
         return format!(r#"{{"error":"unlink_old_failed","detail":"{}"}}"#, e);
     }
@@ -7175,7 +7106,7 @@ fn find_own_so_path() -> Option<String> {
 
 /// Extract a JSON string value by key from a JSON body (simple, no parser)
 fn extract_json_string(body: &str, key: &str) -> Option<String> {
-    let pattern = format!(r#""{}":""#, key);
+    let pattern = format!(r##""{}":"##, key);
     let start = body.find(&pattern)?;
     let val_start = start + pattern.len();
     let val_end = body[val_start..].find('"')?;
@@ -7187,7 +7118,7 @@ fn extract_so_download_url(body: &str) -> Option<String> {
     // Look for "browser_download_url" entries that end with .so
     let mut search_from = 0;
     loop {
-        let pattern = r#""browser_download_url":""#;
+        let pattern = r##""browser_download_url":""##;
         let idx = body[search_from..].find(pattern)?;
         let url_start = search_from + idx + pattern.len();
         let url_end = body[url_start..].find('"')?;
