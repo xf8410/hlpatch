@@ -1634,7 +1634,7 @@ unsafe fn read_chara_data(
     let motivation = call_getter_int(chara_data_class, chara_obj, "get_Motivation");
     let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
     let fan_count = call_getter_int(chara_data_class, chara_obj, "get_FanCount");
-    // ★ v3.22.36: Read chara_id (card_id) for model inference input
+    // ★ v3.22.37: Read chara_id (card_id) for model inference input
     let chara_id = call_getter_int(chara_data_class, chara_obj, "get_CardId");
 
     // SkillPoint returns ObscuredInt - try the ObscuredInt decoder first,
@@ -3033,12 +3033,14 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_special_feeling_num: i32 = -1;
     let mut ramen_recommend_type: i32 = -1;
     let mut ramen_feeling_info_json = String::new();
-    // ★ v3.22.36: Aggregate sozai counts while reading FeelingInfo
+    // ★ v3.22.37: Aggregate sozai counts while reading FeelingInfo
     let mut ramen_sozai_counts: [i32; 3] = [0, 0, 0]; // [麺=1, スープ=2, トッピング=3]
     let mut ramen_selected_region_ids_json = String::new();
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
+    // ★ v3.22.37: Gauge gains per training command (from CommandFeelingInfoArray → TrainingFeelingEntity._gaugeGainCountDict)
+    let mut ramen_gauge_gains_json = String::new();
     // ★ v3.22.28: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
     // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
     if sid == 14 {
@@ -3127,6 +3129,73 @@ unsafe fn read_summary_inner_impl() -> String {
                         }
                     }
                 }
+                // ★ v3.22.37: CommandFeelingInfoArray (List<TrainingFeelingEntity>)
+                // Each TrainingFeelingEntity has _gaugeGainCountDict (Dict<int,FeelingGaugeGainCountVO>)
+                // key=FeelingId(1=麺,2=スープ,3=トッピ), value=gauge增量
+                let cf_off = cached_find_field_offset(ds_class, "CommandFeelingInfoArray");
+                if cf_off >= 0 {
+                    let list_obj = read_ptr_at(dataset_obj, cf_off);
+                    if !list_obj.is_null() {
+                        let lb = list_obj as *const u8;
+                        let llen = std::ptr::read_unaligned::<usize>(
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                        );
+                        if llen > 0 && llen < 100 {
+                            let mut cf_elems: Vec<String> = Vec::new();
+                            for i in 0..llen {
+                                let ep = std::ptr::read_unaligned::<*mut c_void>(
+                                    lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+                                );
+                                if ep.is_null() { continue; }
+                                // Read TrainingFeelingEntity fields
+                                let ep_class = get_class_from_object(ep);
+                                if ep_class.is_null() { continue; }
+                                let cmd_id = call_getter_obscured_int(ep_class, ep, "get_TrainingCommandId");
+                                let main_feeling = call_getter_obscured_int(ep_class, ep, "get_MainFeeling");
+                                // Read _gaugeGainCountDict (offset 16)
+                                let dict_ptr = read_ptr_at(ep, 16);
+                                let mut gauge_gains: Vec<String> = Vec::new();
+                                if !dict_ptr.is_null() {
+                                    let db = dict_ptr as *const u8;
+                                    let dict_count = std::ptr::read_unaligned::<i32>(db.add(0x20) as *const i32);
+                                    let entries_ptr = std::ptr::read_unaligned::<*mut c_void>(db.add(0x18) as *const *mut c_void);
+                                    if dict_count > 0 && !entries_ptr.is_null() {
+                                        let arr_base = entries_ptr as *const u8;
+                                        let entry_size: usize = 0x18;
+                                        let max_e = if dict_count as usize > 30 { 30 } else { dict_count as usize };
+                                        for j in 0..max_e {
+                                            let e_off = 0x20 + j * entry_size;
+                                            let hash_code = std::ptr::read_unaligned::<i32>(arr_base.add(e_off) as *const i32);
+                                            if hash_code == 0 { continue; } // empty slot
+                                            let key_ptr = std::ptr::read_unaligned::<*mut c_void>(arr_base.add(e_off + 0x08) as *const *mut c_void);
+                                            let val_ptr = std::ptr::read_unaligned::<*mut c_void>(arr_base.add(e_off + 0x10) as *const *mut c_void);
+                                            // key is int (FeelingId), boxed → value at +16
+                                            let feeling_id = if !key_ptr.is_null() {
+                                                std::ptr::read_unaligned::<i32>((key_ptr as *const u8).add(16) as *const i32)
+                                            } else { -1 };
+                                            // val is FeelingGaugeGainCountVO, FeelingGaugeGainCount at offset 16
+                                            let gauge_gain = if !val_ptr.is_null() {
+                                                let val_class = get_class_from_object(val_ptr);
+                                                if !val_class.is_null() {
+                                                    let fgc_off = cached_find_field_offset(val_class, "FeelingGaugeGainCount");
+                                                    if fgc_off >= 0 { read_obscured_int_at(val_ptr, fgc_off) } else { -1 }
+                                                } else { -1 }
+                                            } else { -1 };
+                                            if feeling_id >= 0 {
+                                                gauge_gains.push(format!("{}:{}", feeling_id, gauge_gain));
+                                            }
+                                        }
+                                    }
+                                }
+                                cf_elems.push(format!(
+                                    r#"{{"cmd_id":{},"main_feeling":{},"gauge_gains":{{{}}}}}"#,
+                                    cmd_id, main_feeling, gauge_gains.join(",")
+                                ));
+                            }
+                            ramen_gauge_gains_json = cf_elems.join(",");
+                        }
+                    }
+                }
                 // FeelingInfoArray (List<FeelingInfo>)
                 let fi_off = cached_find_field_offset(ds_class, "FeelingInfoArray");
                 if fi_off >= 0 {
@@ -3154,7 +3223,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                     if ep.is_null() { continue; }
                                     let ft = if ft_off >= 0 { read_obscured_int_at(ep, ft_off) } else { -1 };
                                     let fv = if fv_off >= 0 { read_obscured_int_at(ep, fv_off) } else { -1 };
-                                    // ★ v3.22.36: Count sozai by FeelingId (1=麺, 2=スープ, 3=トッピング)
+                                    // ★ v3.22.37: Count sozai by FeelingId (1=麺, 2=スープ, 3=トッピング)
                                     if fv >= 1 && fv <= 3 {
                                         ramen_sozai_counts[(fv - 1) as usize] += 1;
                                     }
@@ -3712,7 +3781,7 @@ unsafe fn read_summary_inner_impl() -> String {
         String::new()
     };
 
-    // ★ v3.22.36: Ramen scenario data — sozai counts aggregated during read
+    // ★ v3.22.37: Ramen scenario data — sozai counts aggregated during read
     let ramen_json = if sid == 14 && ramen_checkpoint_pt >= 0 {
         // Compute moriagari_level from checkpoint_pt thresholds
         let moriagari_level = if ramen_checkpoint_pt >= 480 { 5 }
@@ -3721,14 +3790,14 @@ unsafe fn read_summary_inner_impl() -> String {
             else if ramen_checkpoint_pt >= 120 { 2 }
             else if ramen_checkpoint_pt >= 50 { 1 }
             else { 0 };
-        format!(r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"selected_region_ids":[{}],"active_effects":[{}]}}"#, ramen_checkpoint_pt, moriagari_level, ramen_special_feeling_num, ramen_recommend_type, ramen_sozai_counts[0], ramen_sozai_counts[1], ramen_sozai_counts[2], ramen_feeling_info_json, ramen_selected_region_ids_json, ramen_active_effects_raw_json)
+        format!(r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"selected_region_ids":[{}],"active_effects":[{}],"gauge_gains":[{}]}}"#, ramen_checkpoint_pt, moriagari_level, ramen_special_feeling_num, ramen_recommend_type, ramen_sozai_counts[0], ramen_sozai_counts[1], ramen_sozai_counts[2], ramen_feeling_info_json, ramen_selected_region_ids_json, ramen_active_effects_raw_json, ramen_gauge_gains_json)
     } else {
         String::new()
     };
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.36","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.37","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3909,7 +3978,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.36","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.37","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -5319,7 +5388,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.36","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.37","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5384,7 +5453,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.36","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.37","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5456,7 +5525,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.36","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.37","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5612,7 +5681,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.36","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.37","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6142,7 +6211,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.36","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.37","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6243,7 +6312,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.36","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.37","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6404,7 +6473,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.36","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.37","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6414,13 +6483,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.36","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.37","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.36","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.37","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
