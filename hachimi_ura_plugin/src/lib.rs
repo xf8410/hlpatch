@@ -2998,6 +2998,7 @@ unsafe fn read_summary_inner_impl() -> String {
     let mon = if !sm_class.is_null() { call_getter_int(sm_class, sm_obj, "get_Month") } else { call_getter_int(chara_class, chara_obj, "get_Month") };
     let half = if !sm_class.is_null() { call_getter_int(sm_class, sm_obj, "get_Half") } else { call_getter_int(chara_class, chara_obj, "get_Half") };
     let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    let chara_id = call_getter_int(chara_class, chara_obj, "get_CardId");
     let chara_effect_ids = read_obscured_int_array(chara_class, chara_obj, "get_CharaEffectIdArray");
     let effect_ids_str: Vec<String> = chara_effect_ids.iter().map(|x| x.to_string()).collect();
     log_predict_step(&format!("S:stats sid={}", sid));
