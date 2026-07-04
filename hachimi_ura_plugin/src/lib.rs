@@ -394,7 +394,7 @@ fn check_and_upload_crash_log() {
     let b64 = base64_encode(&content);
     let json = format!(r#"{{"message":"crash log auto-upload","content":"{}"}}"#, b64);
     let _ = std::fs::write("/data/data/jp.pokemon.pokeuma/files/uma_upload.json", &json);
-    let cmd = format!("curl -s -X PUT -H 'Authorization: token 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' -H 'Content-Type: application/json' -d @/data/data/jp.pokemon.pokeuma/files/uma_upload.json https://api.github.com/repos/xf8410/uma-hook/contents/crash_log.txt >/dev/null 2>&1");
+    let cmd = format!("curl -s -X PUT -H 'Authorization: token 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' -H 'Content-Type: application/json' -d @/data/data/jp.pokemon.pokeuma/files/uma_upload.json https://api.github.com/repos/xf8410/hlpatch/contents/crash_log.txt >/dev/null 2>&1");
     if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
         unsafe { sys_system(cmd_c.as_ptr() as *const i8); }
     }
@@ -439,7 +439,7 @@ fn upload_all_logs() -> String {
         let _ = std::fs::write(tmp_path, &json);
 
         let cmd = format!(
-            "curl -s -X PUT -H 'Authorization: token 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' -H 'Content-Type: application/json' -d @{} 'https://api.github.com/repos/xf8410/uma-hook/contents/{}' > /dev/null 2>&1",
+            "curl -s -X PUT -H 'Authorization: token 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' -H 'Content-Type: application/json' -d @{} 'https://api.github.com/repos/xf8410/hlpatch/contents/{}' > /dev/null 2>&1",
             tmp_path, github_path
         );
         if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
@@ -7022,7 +7022,7 @@ fn update_so() -> String {
     };
 
     // Step 2: Query GitHub API
-    let api_url = "https://api.github.com/repos/xf8410/uma-hook/releases/latest";
+    let api_url = "https://api.github.com/repos/xf8410/hlpatch/releases/latest";
     let body = match ureq::get(api_url)
         .set("User-Agent", "URA-Plugin-Updater")
         .call()
