@@ -3809,7 +3809,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.39","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.40","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3990,7 +3990,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.39","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.40","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4135,6 +4135,20 @@ fn handle_http(mut stream: std::net::TcpStream) {
             result
         }
 
+    } else if path == "/debug/paramsincdec" {
+        // v3.22.40: Read DataSet CommandInfo ParamsIncDecInfoArray element class names
+        let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+        if jmp_result != 0 {
+            r#"{"error":"sigsegv_recovered","hint":"/debug/paramsincdec hit native crash, game protected"}"#.to_string()
+        } else {
+            SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                unsafe { debug_paramsincdec() }
+            })).unwrap_or_else(|_| r#"{"error":"paramsincdec_panic"}"#.to_string());
+            SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+            result
+        }
     } else if path == "/events" {
         read_events_data()
     } else if path == "/tables" {
@@ -4200,7 +4214,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/classes/search/keyword"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -5430,7 +5444,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.39","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.40","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5495,7 +5509,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.39","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.40","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5567,7 +5581,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.39","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.40","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5723,7 +5737,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.39","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.40","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6253,7 +6267,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.39","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.40","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6354,7 +6368,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.39","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.40","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6515,7 +6529,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.39","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.40","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6525,13 +6539,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.39","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.40","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.39","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.40","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -6811,7 +6825,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.39","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.40","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -6891,7 +6905,106 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.39","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.40","arrays":[{}]}}"#,
         results.join(",")
+    )
+}
+
+/// v3.22.40: /debug/paramsincdec - Read DataSet CommandInfoArray[0].ParamsIncDecInfoArray
+/// Purpose: find element class name inside ParamsIncDecInfoArray to locate gauge data
+unsafe fn debug_paramsincdec() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+    let scenario_id = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    if scenario_id != 14 { return format!(r#"{{"error":"not_ramen","sid":{}}}"#, scenario_id); }
+    let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
+    if ramen_sc_obj.is_null() { return r#"{"error":"no_ramen_sc_obj"}"#.to_string(); }
+    let sc_class = get_class_from_object(ramen_sc_obj);
+    let ds_obj = call_getter_ref(sc_class, ramen_sc_obj, "get_DataSet");
+    if ds_obj.is_null() { return r#"{"error":"no_ds"}"#.to_string(); }
+
+    // Read CommandInfoArray at offset 16 in DataSet
+    let cmd_list = read_ptr_at(ds_obj, 16);
+    if cmd_list.is_null() { return r#"{"error":"cmd_list_null"}"#.to_string(); }
+    let cmd_lb = cmd_list as *const u8;
+    let cmd_len = std::ptr::read_unaligned::<usize>(cmd_lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if cmd_len == 0 { return r#"{"error":"cmd_empty"}"#.to_string(); }
+    if cmd_len > 100 { return format!(r#"{{"error":"cmd_bad_len","len":{}}}"#, cmd_len); }
+
+    // Read first CommandInfo element
+    let cmd0 = std::ptr::read_unaligned::<*mut c_void>(
+        cmd_lb.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void
+    );
+    if cmd0.is_null() { return r#"{"error":"cmd0_null"}"#.to_string(); }
+    let cmd0_class = get_class_from_object(cmd0);
+    let cmd0_class_name = get_class_name_from_pointer(cmd0_class);
+
+    // ParamsIncDecInfoArray is at offset 56 in CommandInfo (3rd field: CommandType@16, CommandId@36, ParamsIncDecInfoArray@56)
+    let params_list = read_ptr_at(cmd0, 56);
+    if params_list.is_null() {
+        return format!(
+            r#"{{"cmd0_class":"{}","cmd_len":{},"params_list":"null"}}"#,
+            cmd0_class_name, cmd_len
+        );
+    }
+    let plb = params_list as *const u8;
+    let plen = std::ptr::read_unaligned::<usize>(plb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if plen > 1000 { return format!(r#"{{"error":"params_bad_len","len":{}}}"#, plen); }
+
+    let max_read = if plen < 3 { plen } else { 3 };
+    let mut classes: Vec<String> = Vec::new();
+    for i in 0..max_read {
+        let ep = std::ptr::read_unaligned::<*mut c_void>(
+            plb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+        );
+        if ep.is_null() {
+            classes.push("null".to_string());
+        } else {
+            let ep_class = get_class_from_object(ep);
+            classes.push(get_class_name_from_pointer(ep_class));
+        }
+    }
+    let sample_str = {
+        let mut quoted: Vec<String> = Vec::new();
+        for c in &classes { quoted.push(format!("\"{}\"", c)); }
+        quoted.join(",")
+    };
+
+    // Also check all 5 CommandInfo elements for their ParamsIncDecInfoArray lengths
+    let mut cmd_details: Vec<String> = Vec::new();
+    for ci in 0..cmd_len {
+        let ce = std::ptr::read_unaligned::<*mut c_void>(
+            cmd_lb.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+        );
+        if ce.is_null() {
+            cmd_details.push(format!(r#"{{"idx":{},"error":"null"}}"#, ci));
+            continue;
+        }
+        let ce_params = read_ptr_at(ce, 56);
+        if ce_params.is_null() {
+            cmd_details.push(format!(r#"{{"idx":{},"params_len":0}}"#, ci));
+            continue;
+        }
+        let ce_plb = ce_params as *const u8;
+        let ce_plen = std::ptr::read_unaligned::<usize>(ce_plb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        cmd_details.push(format!(r#"{{"idx":{},"params_len":{}}}"#, ci, ce_plen));
+    }
+
+    format!(
+        r#"{{"version":"3.22.40","cmd0_class":"{}","cmd_len":{},"params_count":{},"params_sample_classes":[{}],"all_cmds":[{}]}}"#,
+        cmd0_class_name, cmd_len, plen, sample_str, cmd_details.join(",")
     )
 }
