@@ -2968,7 +2968,7 @@ unsafe fn read_summary_inner_impl() -> String {
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
     log_predict_step("S:wdm");
 
-    let _sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
 
@@ -5766,7 +5766,7 @@ unsafe fn debug_ramenfields() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    let _sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
     let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
@@ -5876,7 +5876,7 @@ unsafe fn debug_cmdinfo() -> String {
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
     log_predict_step("P:wdm");
 
-    let _sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
 
@@ -5944,7 +5944,7 @@ unsafe fn read_ramen_info() -> String {
     if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_class);
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    let _sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
     let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
@@ -6011,7 +6011,7 @@ unsafe fn read_inherit_compat() -> String {
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
     log_predict_step("P:wdm");
 
-    let _sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
 
@@ -6151,7 +6151,7 @@ unsafe fn read_turn_log() -> String {
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
     log_predict_step("P:wdm");
 
-    let _sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
 
@@ -6247,7 +6247,7 @@ unsafe fn read_event_recommend() -> String {
     if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
     log_predict_step("P:wdm");
 
-    let _sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
     if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
 
