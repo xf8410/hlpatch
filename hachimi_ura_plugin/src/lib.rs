@@ -707,7 +707,7 @@ unsafe fn call_getter_bool(
     call_getter_int(class, instance, method_name) != 0
 }
 
-/// ★ v3.22.37: Call method with 1 int arg that returns int (value type - boxed by il2cpp_runtime_invoke)
+/// ★ v3.22.38: Call method with 1 int arg that returns int (value type - boxed by il2cpp_runtime_invoke)
 /// Used for TrainingFeelingEntity.GetGainCount(int FeelingId)
 /// IMPORTANT: il2cpp_runtime_invoke needs properly boxed args.
 /// We find Int32 klass, box our arg into it, then invoke.
@@ -1709,7 +1709,7 @@ unsafe fn read_chara_data(
     let motivation = call_getter_int(chara_data_class, chara_obj, "get_Motivation");
     let scenario_id = call_getter_int(chara_data_class, chara_obj, "get_ScenarioId");
     let fan_count = call_getter_int(chara_data_class, chara_obj, "get_FanCount");
-    // ★ v3.22.37: Read chara_id (card_id) for model inference input
+    // ★ v3.22.38: Read chara_id (card_id) for model inference input
     let chara_id = call_getter_int(chara_data_class, chara_obj, "get_CardId");
 
     // SkillPoint returns ObscuredInt - try the ObscuredInt decoder first,
@@ -3109,13 +3109,13 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_special_feeling_num: i32 = -1;
     let mut ramen_recommend_type: i32 = -1;
     let mut ramen_feeling_info_json = String::new();
-    // ★ v3.22.37: Aggregate sozai counts while reading FeelingInfo
+    // ★ v3.22.38: Aggregate sozai counts while reading FeelingInfo
     let mut ramen_sozai_counts: [i32; 3] = [0, 0, 0]; // [麺=1, スープ=2, トッピング=3]
     let mut ramen_selected_region_ids_json = String::new();
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
-    // ★ v3.22.37: Gauge gains per training command (from CommandFeelingInfoArray → TrainingFeelingEntity._gaugeGainCountDict)
+    // ★ v3.22.38: Gauge gains per training command (from CommandFeelingInfoArray → TrainingFeelingEntity._gaugeGainCountDict)
     let mut ramen_gauge_gains_json = String::new();
     // ★ v3.22.28: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
     // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
@@ -3205,7 +3205,7 @@ unsafe fn read_summary_inner_impl() -> String {
                         }
                     }
                 }
-                // ★ v3.22.37: CommandFeelingInfoArray — dump element class name + gauge data
+                // ★ v3.22.38: CommandFeelingInfoArray — dump element class name + gauge data
                 // Skip in /summary for now, use /debug/gauge for safe testing
                 // TODO: re-enable after /debug/gauge confirms element type and GetGainCount works
                 // FeelingInfoArray (List<FeelingInfo>)
@@ -3235,7 +3235,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                     if ep.is_null() { continue; }
                                     let ft = if ft_off >= 0 { read_obscured_int_at(ep, ft_off) } else { -1 };
                                     let fv = if fv_off >= 0 { read_obscured_int_at(ep, fv_off) } else { -1 };
-                                    // ★ v3.22.37: Count sozai by FeelingId (1=麺, 2=スープ, 3=トッピング)
+                                    // ★ v3.22.38: Count sozai by FeelingId (1=麺, 2=スープ, 3=トッピング)
                                     if fv >= 1 && fv <= 3 {
                                         ramen_sozai_counts[(fv - 1) as usize] += 1;
                                     }
@@ -3793,7 +3793,7 @@ unsafe fn read_summary_inner_impl() -> String {
         String::new()
     };
 
-    // ★ v3.22.37: Ramen scenario data — sozai counts aggregated during read
+    // ★ v3.22.38: Ramen scenario data — sozai counts aggregated during read
     let ramen_json = if sid == 14 && ramen_checkpoint_pt >= 0 {
         // Compute moriagari_level from checkpoint_pt thresholds
         let moriagari_level = if ramen_checkpoint_pt >= 480 { 5 }
@@ -3809,7 +3809,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.37","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.38","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3990,7 +3990,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.37","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.38","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4106,10 +4106,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
         })).unwrap_or_else(|_| r#"{"error":"ramenfields_panic"}"#.to_string())
 
     } else if path == "/debug/gauge" {
-        // ★ v3.22.37: Safe gauge gains debug — isolated from /summary
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            unsafe { debug_gauge() }
-        })).unwrap_or_else(|_| r#"{"error":"gauge_panic"}"#.to_string())
+        // ★ v3.22.38: sigsetjmp + READ_MUTEX protection — prevent game crash on SIGSEGV
+        let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+        if jmp_result != 0 {
+            r#"{"error":"sigsegv_recovered","hint":"/debug/gauge hit native crash, game protected"}"#.to_string()
+        } else {
+            SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                unsafe { debug_gauge() }
+            })).unwrap_or_else(|_| r#"{"error":"gauge_panic"}"#.to_string());
+            SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+            result
+        }
 
     } else if path == "/events" {
         read_events_data()
@@ -5406,7 +5415,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.37","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.38","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5471,7 +5480,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.37","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.38","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5543,7 +5552,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.37","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.38","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5699,7 +5708,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.37","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.38","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6229,7 +6238,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.37","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.38","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6330,7 +6339,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.37","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.38","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6491,7 +6500,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.37","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.38","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6501,13 +6510,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.37","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.38","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.37","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.38","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -6714,8 +6723,9 @@ unsafe fn debug_all() -> String {
     format!("{{{}}}", parts.join(","))
 }
 
-/// ★ v3.22.37: /debug/gauge — Safe gauge gains reading (isolated from /summary)
-/// Reads CommandFeelingInfoArray, checks element class name, tries GetGainCount
+/// ★ v3.22.38: /debug/gauge — MINIMAL SAFE VERSION
+/// Only reads element class names + count. NO dict hex, NO GetGainCount.
+/// Will incrementally add features after confirming this doesn't crash.
 unsafe fn debug_gauge() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = match get_image() {
@@ -6734,7 +6744,7 @@ unsafe fn debug_gauge() -> String {
     if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
 
     let scenario_id = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
-    if scenario_id != 14 { return r#"{"error":"not_ramen_scenario"}"#.to_string(); }
+    if scenario_id != 14 { return format!(r#"{{"error":"not_ramen","sid":{}}}"#, scenario_id); }
 
     let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
     if ramen_sc_obj.is_null() { return r#"{"error":"no_ramen_sc_obj"}"#.to_string(); }
@@ -6761,46 +6771,32 @@ unsafe fn debug_gauge() -> String {
             elems.push(format!(r#"{{"idx":{},"error":"null"}}"#, i));
             continue;
         }
+        // ★ MINIMAL: only read class name + check _gaugeGainCountDict pointer
         let ep_class = get_class_from_object(ep);
         let ep_class_name = get_class_name_from_pointer(ep_class);
-        let cmd_id = if !ep_class.is_null() { call_getter_obscured_int(ep_class, ep, "get_TrainingCommandId") } else { -1 };
-        let main_feeling = if !ep_class.is_null() { call_getter_obscured_int(ep_class, ep, "get_MainFeeling") } else { -1 };
-
-        // Try to read _gaugeGainCountDict raw hex first (no invoke)
-        let dict_ptr = read_ptr_at(ep, 16); // _gaugeGainCountDict at offset 16
-        let dict_info = if dict_ptr.is_null() {
-            "null".to_string()
-        } else {
-            let db = dict_ptr as *const u8;
-            let mut hex: Vec<String> = Vec::new();
-            for off in (0..0x30).step_by(8) {
-                let v = std::ptr::read_unaligned::<u64>(db.add(off) as *const u64);
-                hex.push(format!("0x{:02x}:0x{:016x}", off, v));
+        
+        // Read _gaugeGainCountDict pointer at offset 16 (only if TrainingFeelingEntity)
+        let dict_info = if ep_class_name == "TrainingFeelingEntity" {
+            let dict_ptr = read_ptr_at(ep, 16); // _gaugeGainCountDict at offset 16
+            if dict_ptr.is_null() {
+                "dict:null".to_string()
+            } else {
+                // Read dict _count field safely (Dictionary has count at a known offset)
+                // DON'T read hex — just report pointer value
+                format!("dict:ptr({:p})", dict_ptr)
             }
-            format!("{{\"ptr\":\"{:p}\",\"hex\":{{{}}}}}", dict_ptr, hex.join(","))
-        };
-
-        // Try GetGainCount with SIGSEGV-safe approach
-        // Only attempt if class name matches TrainingFeelingEntity
-        let gauge_results = if ep_class_name == "TrainingFeelingEntity" {
-            let mut gains: Vec<String> = Vec::new();
-            for fid in 1..=3i32 {
-                let gain = call_getter_int_with_arg(ep_class, ep, "GetGainCount", fid);
-                gains.push(format!("{}:{}", fid, gain));
-            }
-            format!("{{{}}}", gains.join(","))
         } else {
-            format!("skipped(class={})", ep_class_name)
+            format!("not_tfe({})", ep_class_name)
         };
 
         elems.push(format!(
-            r#"{{"idx":{},"class":"{}","cmd_id":{},"main_feeling":{},"dict":{},"gauge":{}}}"#,
-            i, ep_class_name, cmd_id, main_feeling, dict_info, gauge_results
+            r#"{{"idx":{},"class":"{}","dict_info":"{}"}}"#,
+            i, ep_class_name, dict_info
         ));
     }
 
     format!(
-        r#"{{"version":"3.22.37","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.38","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
