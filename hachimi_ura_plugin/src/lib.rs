@@ -3478,7 +3478,7 @@ unsafe fn read_summary_inner_impl() -> String {
     // Method 1: cached_find_field_offset on chara_class (handles <X>k__BackingField)
     let sc_off = cached_find_field_offset(chara_class, "SupportCardArray");
     if sc_off >= 0 {
-        sc_arr = read_ptr_at(chara_obj as *const c_void, sc_off as usize);
+        sc_arr = read_ptr_at(chara_obj as *const c_void, sc_off);
         ura_log(3, &format!("sc: offset={} ptr={}", sc_off, !sc_arr.is_null()));
     }
     // Method 2: getter on chara_class
@@ -3490,7 +3490,7 @@ unsafe fn read_summary_inner_impl() -> String {
     if sc_arr.is_null() {
         let sc_off2 = cached_find_field_offset(sm_class, "SupportCardArray");
         if sc_off2 >= 0 {
-            sc_arr = read_ptr_at(sm_obj as *const c_void, sc_off2 as usize);
+            sc_arr = read_ptr_at(sm_obj as *const c_void, sc_off2);
             ura_log(3, &format!("sc: sm offset={} ptr={}", sc_off2, !sc_arr.is_null()));
         }
     }
