@@ -6881,7 +6881,10 @@ unsafe fn debug_gauge2() -> String {
         }
         results.push(format!(
             r#"{{"field":"{}","count":{},"sample_classes":[{}]}}"#,
-            fname, llen, classes.iter().map(|c| format!(""{}"", c)).collect::<Vec<_>>().join(",")
+            fname, llen, {
+                let quoted: Vec<String> = classes.iter().map(|c| format!(""{}"", c)).collect();
+                quoted.join(",")
+            }
         ));
     }
 
