@@ -6879,12 +6879,14 @@ unsafe fn debug_gauge2() -> String {
                 classes.push(get_class_name_from_pointer(ep_class));
             }
         }
+        let sample_str = {
+            let mut quoted: Vec<String> = Vec::new();
+            for c in &classes { quoted.push(format!("\"{}\"", c)); }
+            quoted.join(",")
+        };
         results.push(format!(
             r#"{{"field":"{}","count":{},"sample_classes":[{}]}}"#,
-            fname, llen, {
-                let quoted: Vec<String> = classes.iter().map(|c| format!(""{}"", c)).collect();
-                quoted.join(",")
-            }
+            fname, llen, sample_str
         ));
     }
 
