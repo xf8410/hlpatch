@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.52
+//! URA Plugin v3.22.53
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3470,32 +3470,37 @@ unsafe fn read_summary_inner_impl() -> String {
     ura_log(3, "★ read_summary phase3: support cards");
     log_predict_step("S:p3 cards");
     let mut sc_json = "[]".to_string();
-    let sc_arr = read_field_value(chara_class, chara_obj, "support_card_array");
+    // ★ v3.22.52: Fix support_cards always empty
+    // Root cause: il2cpp_get_field_from_name can't find C# auto-property backing fields
+    // (<SupportCardArray>k__BackingField). Use cached_find_field_offset instead which
+    // normalizes names and matches backing fields.
+    let mut sc_arr: *mut c_void = ptr::null_mut();
+    // Method 1: cached_find_field_offset on chara_class (handles <X>k__BackingField)
+    let sc_off = cached_find_field_offset(chara_class, "SupportCardArray");
+    if sc_off >= 0 {
+        sc_arr = read_ptr_at(chara_obj as *const c_void, sc_off as usize);
+        ura_log(3, &format!("sc: offset={} ptr={}", sc_off, !sc_arr.is_null()));
+    }
+    // Method 2: getter on chara_class
     if sc_arr.is_null() {
-        // Try getter
-        let arr = call_getter_on_instance(chara_class, chara_obj, "get_SupportCardArray");
-        if !arr.is_null() {
-            let ab = arr as *const u8;
-            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-            if al > 0 && al < 100 {
-                let mut scs = Vec::new();
-                for i in 0..al {
-                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                    if ep.is_null() { continue; }
-                    let b = ep as *const u8;
-                    let position = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_POSITION_OFF) as *const i32);
-                    let support_card_id = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_ID_OFF) as *const i32);
-                    let limit_break_count = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_LIMIT_OFF) as *const i32);
-                    let training_partner_state = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_LIST_ITEMS_OFF) as *const i32);
-                    scs.push(format!(
-                        r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{}}}"#,
-                        position, support_card_id, limit_break_count, training_partner_state
-                    ));
-                }
-                sc_json = format!("[{}]", scs.join(","));
-            }
+        sc_arr = call_getter_on_instance(chara_class, chara_obj, "get_SupportCardArray");
+        ura_log(3, &format!("sc: getter chara_class={}", !sc_arr.is_null()));
+    }
+    // Method 3: cached_find_field_offset on sm_class
+    if sc_arr.is_null() {
+        let sc_off2 = cached_find_field_offset(sm_class, "SupportCardArray");
+        if sc_off2 >= 0 {
+            sc_arr = read_ptr_at(sm_obj as *const c_void, sc_off2 as usize);
+            ura_log(3, &format!("sc: sm offset={} ptr={}", sc_off2, !sc_arr.is_null()));
         }
-    } else {
+    }
+    // Method 4: getter on sm_class
+    if sc_arr.is_null() {
+        sc_arr = call_getter_on_instance(sm_class, sm_obj, "get_SupportCardArray");
+        ura_log(3, &format!("sc: getter sm_class={}", !sc_arr.is_null()));
+    }
+    // Parse the List<SingleModeEquipSupportCard>
+    if !sc_arr.is_null() {
         let ab = sc_arr as *const u8;
         let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
         if al > 0 && al < 100 {
@@ -3514,61 +3519,7 @@ unsafe fn read_summary_inner_impl() -> String {
                 ));
             }
             sc_json = format!("[{}]", scs.join(","));
-        }
-    }
-
-    // ★ v3.18.4: Fallback - try WorkSingleModeData if support_cards still empty
-    if sc_json == "[]" {
-        let arr2 = read_field_value(sm_class, sm_obj, "support_card_array");
-        if arr2.is_null() {
-            let arr3 = call_getter_on_instance(sm_class, sm_obj, "get_SupportCardArray");
-            if !arr3.is_null() {
-                let ab = arr3 as *const u8;
-                let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-                if al > 0 && al < 100 {
-                    let mut scs = Vec::new();
-                    for i in 0..al {
-                        let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                        if ep.is_null() { continue; }
-                        let b = ep as *const u8;
-                        let position = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_POSITION_OFF) as *const i32);
-                        let support_card_id = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_ID_OFF) as *const i32);
-                        let limit_break_count = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_LIMIT_OFF) as *const i32);
-                        let training_partner_state = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_LIST_ITEMS_OFF) as *const i32);
-                        scs.push(format!(
-                            r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{}}}"#,
-                            position, support_card_id, limit_break_count, training_partner_state
-                        ));
-                    }
-                    if !scs.is_empty() {
-                        sc_json = format!("[{}]", scs.join(","));
-                        ura_log(3, &format!("★ support_cards fallback (sm_class): {} cards", scs.len()));
-                    }
-                }
-            }
-        } else {
-            let ab = arr2 as *const u8;
-            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-            if al > 0 && al < 100 {
-                let mut scs = Vec::new();
-                for i in 0..al {
-                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                    if ep.is_null() { continue; }
-                    let b = ep as *const u8;
-                    let position = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_POSITION_OFF) as *const i32);
-                    let support_card_id = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_ID_OFF) as *const i32);
-                    let limit_break_count = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_SUPPORT_CARD_LIMIT_OFF) as *const i32);
-                    let training_partner_state = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_LIST_ITEMS_OFF) as *const i32);
-                    scs.push(format!(
-                        r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{}}}"#,
-                        position, support_card_id, limit_break_count, training_partner_state
-                    ));
-                }
-                if !scs.is_empty() {
-                    sc_json = format!("[{}]", scs.join(","));
-                    ura_log(3, &format!("★ support_cards fallback (sm_class field): {} cards", scs.len()));
-                }
-            }
+            ura_log(3, &format!("sc: {} cards found", scs.len()));
         }
     }
 
@@ -3871,7 +3822,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.52","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.53","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -4052,7 +4003,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.52","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.53","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4529,7 +4480,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.52").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.53").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -4736,10 +4687,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.52 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.53 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.52 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.53 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -5519,7 +5470,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.52","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.53","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5584,7 +5535,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.52","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.53","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5656,7 +5607,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.52","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.53","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5812,7 +5763,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.52","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.53","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6342,7 +6293,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.52","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.53","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6443,7 +6394,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.52","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.53","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6604,7 +6555,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.52","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.53","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6614,13 +6565,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.52","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.53","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.52","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.53","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -6900,7 +6851,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.52","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.53","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -6980,7 +6931,7 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.52","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.53","arrays":[{}]}}"#,
         results.join(",")
     )
 }
@@ -7077,7 +7028,7 @@ unsafe fn debug_paramsincdec() -> String {
     } else { -1 };
 
     format!(
-        r#"{{"version":"3.22.52","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
+        r#"{{"version":"3.22.53","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
@@ -7127,8 +7078,8 @@ fn update_so() -> String {
         None => return format!(r#"{{"error":"no_so_asset_url","tag":"{}"}}"#, tag_name),
     };
 
-    // Compare versions: current is "3.22.52"
-    let current_ver = "3.22.52";
+    // Compare versions: current is "3.22.53"
+    let current_ver = "3.22.53";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
