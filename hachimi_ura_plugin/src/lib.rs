@@ -707,6 +707,81 @@ unsafe fn call_getter_bool(
     call_getter_int(class, instance, method_name) != 0
 }
 
+/// ★ v3.22.37: Call method with 1 int arg that returns int (value type - boxed by il2cpp_runtime_invoke)
+/// Used for TrainingFeelingEntity.GetGainCount(int FeelingId)
+/// IMPORTANT: il2cpp_runtime_invoke needs properly boxed args.
+/// We find Int32 klass, box our arg into it, then invoke.
+unsafe fn call_getter_int_with_arg(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+    int_arg: i32,
+) -> i32 {
+    if class.is_null() || instance.is_null() { return -1; }
+
+    let get_method_fn: Option<FnClassGetMethodFromName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p)) }
+    };
+    let invoke_fn: Option<FnRuntimeInvoke> = {
+        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+        if p.is_null() { None } else { Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p)) }
+    };
+    if get_method_fn.is_none() || invoke_fn.is_none() { return -1; }
+
+    let method_name_c = to_cstr(method_name);
+    let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 1); // 1 parameter
+    if method_info.is_null() {
+        ura_log(4, &format!("call_int_with_arg: '{}' not found", method_name));
+        return -1;
+    }
+
+    // Find System.Int32 klass to properly box the argument
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return -1,
+    };
+    let int32_class = find_class(image, to_cstr("System").as_ptr(), to_cstr("Int32").as_ptr());
+    if int32_class.is_null() {
+        ura_log(2, "call_int_with_arg: Int32 class not found");
+        return -1;
+    }
+
+    // Use il2cpp_object_new to allocate a proper boxed Int32
+    let object_new_fn: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_object_new");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if object_new_fn.is_none() {
+        ura_log(2, "call_int_with_arg: il2cpp_object_new not found");
+        return -1;
+    }
+
+    let boxed_arg = object_new_fn.unwrap()(int32_class);
+    if boxed_arg.is_null() {
+        ura_log(2, "call_int_with_arg: failed to allocate boxed int");
+        return -1;
+    }
+    // Write int value at offset +16 (after Il2CppObject header)
+    std::ptr::write_unaligned::<i32>((boxed_arg as *mut u8).add(16) as *mut i32, int_arg);
+
+    let mut args: [*mut c_void; 1] = [boxed_arg];
+    let mut exc: *mut c_void = ptr::null_mut();
+    let result = invoke_fn.unwrap()(
+        method_info,
+        instance as *mut c_void,
+        args.as_mut_ptr(),
+        &mut exc,
+    );
+    if !exc.is_null() {
+        ura_log(2, &format!("call_int_with_arg: '{}' threw exception", method_name));
+        return -1;
+    }
+    if result.is_null() { return -1; }
+    // Result is boxed int, value at +16
+    std::ptr::read_unaligned::<i32>((result as *const u8).add(16) as *const i32)
+}
+
 /// ★ ObscuredInt getter: The C# property returns ObscuredInt struct,
 /// but il2cpp_runtime_invoke boxes it. We need to call the implicit
 /// conversion operator to get a plain int.
@@ -3130,73 +3205,9 @@ unsafe fn read_summary_inner_impl() -> String {
                         }
                     }
                 }
-                // ★ v3.22.37: CommandFeelingInfoArray (List<TrainingFeelingEntity>)
-                // Each TrainingFeelingEntity has _gaugeGainCountDict (Dict<int,FeelingGaugeGainCountVO>)
-                // key=FeelingId(1=麺,2=スープ,3=トッピ), value=gauge增量
-                let cf_off = cached_find_field_offset(ds_class, "CommandFeelingInfoArray");
-                if cf_off >= 0 {
-                    let list_obj = read_ptr_at(dataset_obj, cf_off);
-                    if !list_obj.is_null() {
-                        let lb = list_obj as *const u8;
-                        let llen = std::ptr::read_unaligned::<usize>(
-                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
-                        );
-                        if llen > 0 && llen < 100 {
-                            let mut cf_elems: Vec<String> = Vec::new();
-                            for i in 0..llen {
-                                let ep = std::ptr::read_unaligned::<*mut c_void>(
-                                    lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
-                                );
-                                if ep.is_null() { continue; }
-                                // Read TrainingFeelingEntity fields
-                                let ep_class = get_class_from_object(ep);
-                                if ep_class.is_null() { continue; }
-                                let cmd_id = call_getter_obscured_int(ep_class, ep, "get_TrainingCommandId");
-                                let main_feeling = call_getter_obscured_int(ep_class, ep, "get_MainFeeling");
-                                // Read _gaugeGainCountDict (offset 16)
-                                let dict_ptr = read_ptr_at(ep, 16);
-                                let mut gauge_gains: Vec<String> = Vec::new();
-                                if !dict_ptr.is_null() {
-                                    let db = dict_ptr as *const u8;
-                                    let dict_count = std::ptr::read_unaligned::<i32>(db.add(0x20) as *const i32);
-                                    let entries_ptr = std::ptr::read_unaligned::<*mut c_void>(db.add(0x18) as *const *mut c_void);
-                                    if dict_count > 0 && !entries_ptr.is_null() {
-                                        let arr_base = entries_ptr as *const u8;
-                                        let entry_size: usize = 0x18;
-                                        let max_e = if dict_count as usize > 30 { 30 } else { dict_count as usize };
-                                        for j in 0..max_e {
-                                            let e_off = 0x20 + j * entry_size;
-                                            let hash_code = std::ptr::read_unaligned::<i32>(arr_base.add(e_off) as *const i32);
-                                            if hash_code == 0 { continue; } // empty slot
-                                            let key_ptr = std::ptr::read_unaligned::<*mut c_void>(arr_base.add(e_off + 0x08) as *const *mut c_void);
-                                            let val_ptr = std::ptr::read_unaligned::<*mut c_void>(arr_base.add(e_off + 0x10) as *const *mut c_void);
-                                            // key is int (FeelingId), boxed → value at +16
-                                            let feeling_id = if !key_ptr.is_null() {
-                                                std::ptr::read_unaligned::<i32>((key_ptr as *const u8).add(16) as *const i32)
-                                            } else { -1 };
-                                            // val is FeelingGaugeGainCountVO, FeelingGaugeGainCount at offset 16
-                                            let gauge_gain = if !val_ptr.is_null() {
-                                                let val_class = get_class_from_object(val_ptr);
-                                                if !val_class.is_null() {
-                                                    let fgc_off = cached_find_field_offset(val_class, "FeelingGaugeGainCount");
-                                                    if fgc_off >= 0 { read_obscured_int_at(val_ptr, fgc_off) } else { -1 }
-                                                } else { -1 }
-                                            } else { -1 };
-                                            if feeling_id >= 0 {
-                                                gauge_gains.push(format!("{}:{}", feeling_id, gauge_gain));
-                                            }
-                                        }
-                                    }
-                                }
-                                cf_elems.push(format!(
-                                    r#"{{"cmd_id":{},"main_feeling":{},"gauge_gains":{{{}}}}}"#,
-                                    cmd_id, main_feeling, gauge_gains.join(",")
-                                ));
-                            }
-                            ramen_gauge_gains_json = cf_elems.join(",");
-                        }
-                    }
-                }
+                // ★ v3.22.37: CommandFeelingInfoArray — dump element class name + gauge data
+                // Skip in /summary for now, use /debug/gauge for safe testing
+                // TODO: re-enable after /debug/gauge confirms element type and GetGainCount works
                 // FeelingInfoArray (List<FeelingInfo>)
                 let fi_off = cached_find_field_offset(ds_class, "FeelingInfoArray");
                 if fi_off >= 0 {
@@ -3979,7 +3990,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.37","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.37","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4093,6 +4104,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { debug_ramenfields() }
         })).unwrap_or_else(|_| r#"{"error":"ramenfields_panic"}"#.to_string())
+
+    } else if path == "/debug/gauge" {
+        // ★ v3.22.37: Safe gauge gains debug — isolated from /summary
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unsafe { debug_gauge() }
+        })).unwrap_or_else(|_| r#"{"error":"gauge_panic"}"#.to_string())
 
     } else if path == "/events" {
         read_events_data()
@@ -6695,4 +6712,95 @@ unsafe fn debug_all() -> String {
     SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
 
     format!("{{{}}}", parts.join(","))
+}
+
+/// ★ v3.22.37: /debug/gauge — Safe gauge gains reading (isolated from /summary)
+/// Reads CommandFeelingInfoArray, checks element class name, tries GetGainCount
+unsafe fn debug_gauge() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() { return r#"{"error":"no_sm"}"#.to_string(); }
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    let scenario_id = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
+    if scenario_id != 14 { return r#"{"error":"not_ramen_scenario"}"#.to_string(); }
+
+    let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
+    if ramen_sc_obj.is_null() { return r#"{"error":"no_ramen_sc_obj"}"#.to_string(); }
+    let sc_class = get_class_from_object(ramen_sc_obj);
+    let ds_obj = call_getter_ref(sc_class, ramen_sc_obj, "get_DataSet");
+    if ds_obj.is_null() { return r#"{"error":"no_ds"}"#.to_string(); }
+    let ds_class = get_class_from_object(ds_obj);
+
+    // Read CommandFeelingInfoArray
+    let cf_off = cached_find_field_offset(ds_class, "CommandFeelingInfoArray");
+    if cf_off < 0 { return r#"{"error":"no_CommandFeelingInfoArray_field"}"#.to_string(); }
+    let list_obj = read_ptr_at(ds_obj, cf_off);
+    if list_obj.is_null() { return r#"{"error":"list_null"}"#.to_string(); }
+    let lb = list_obj as *const u8;
+    let llen = std::ptr::read_unaligned::<usize>(lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if llen == 0 || llen > 100 { return format!(r#"{{"error":"bad_len","len":{}}}"#, llen); }
+
+    let mut elems: Vec<String> = Vec::new();
+    for i in 0..llen {
+        let ep = std::ptr::read_unaligned::<*mut c_void>(
+            lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+        );
+        if ep.is_null() {
+            elems.push(format!(r#"{{"idx":{},"error":"null"}}"#, i));
+            continue;
+        }
+        let ep_class = get_class_from_object(ep);
+        let ep_class_name = get_class_name_from_pointer(ep_class);
+        let cmd_id = if !ep_class.is_null() { call_getter_obscured_int(ep_class, ep, "get_TrainingCommandId") } else { -1 };
+        let main_feeling = if !ep_class.is_null() { call_getter_obscured_int(ep_class, ep, "get_MainFeeling") } else { -1 };
+
+        // Try to read _gaugeGainCountDict raw hex first (no invoke)
+        let dict_ptr = read_ptr_at(ep, 16); // _gaugeGainCountDict at offset 16
+        let dict_info = if dict_ptr.is_null() {
+            "null".to_string()
+        } else {
+            let db = dict_ptr as *const u8;
+            let mut hex: Vec<String> = Vec::new();
+            for off in (0..0x30).step_by(8) {
+                let v = std::ptr::read_unaligned::<u64>(db.add(off) as *const u64);
+                hex.push(format!("0x{:02x}:0x{:016x}", off, v));
+            }
+            format!("{{\"ptr\":\"{:p}\",\"hex\":{{{}}}}}", dict_ptr, hex.join(","))
+        };
+
+        // Try GetGainCount with SIGSEGV-safe approach
+        // Only attempt if class name matches TrainingFeelingEntity
+        let gauge_results = if ep_class_name == "TrainingFeelingEntity" {
+            let mut gains: Vec<String> = Vec::new();
+            for fid in 1..=3i32 {
+                let gain = call_getter_int_with_arg(ep_class, ep, "GetGainCount", fid);
+                gains.push(format!("{}:{}", fid, gain));
+            }
+            format!("{{{}}}", gains.join(","))
+        } else {
+            format!("skipped(class={})", ep_class_name)
+        };
+
+        elems.push(format!(
+            r#"{{"idx":{},"class":"{}","cmd_id":{},"main_feeling":{},"dict":{},"gauge":{}}}"#,
+            i, ep_class_name, cmd_id, main_feeling, dict_info, gauge_results
+        ));
+    }
+
+    format!(
+        r#"{{"version":"3.22.37","count":{},"elements":[{}]}}"#,
+        llen, elems.join(",")
+    )
 }
