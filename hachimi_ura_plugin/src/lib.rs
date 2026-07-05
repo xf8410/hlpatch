@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.62
+//! URA Plugin v3.22.63
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3803,7 +3803,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.62","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.63","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3990,7 +3990,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.62","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.63","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4169,6 +4169,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         debug_mdb_all_tables()
     } else if path == "/debug/hint_gain" {
         debug_hint_gain()
+    } else if path == "/debug/sc_effect" {
+        debug_sc_effect()
     } else if path == "/tables" {
         read_mdb_tables()
     } else if path == "/carddb" {
@@ -5394,7 +5396,7 @@ fn debug_unique_skills() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.62","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.63","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
         matched_tables.len(),
         results.join(","),
         sc_columns.join(",")
@@ -5406,6 +5408,144 @@ fn debug_unique_skills() -> String {
 /// plus search for tables related to skill unlock conditions (bond thresholds, prerequisites)
 /// /debug/hint_gain - Dump single_mode_hint_gain table (support card skill hint acquisition conditions)
 /// Plus resolve condition_set_id -> single_mode_story_condition_set details
+/// /debug/sc_effect - Dump support_card_effect_table + effect_filter + effect_filter_group
+/// These tables likely contain the activation conditions for support card unique effects
+fn debug_sc_effect() -> String {
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
+    };
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
+    };
+
+    // Helper: dump table schema as column names
+    fn get_columns(conn: &Connection, table: &str) -> Vec<String> {
+        let safe = table.replace("]", "]]");
+        match conn.prepare(&format!("PRAGMA table_info([{}])", safe)) {
+            Ok(mut stmt) => stmt.query_map([], |row| {
+                Ok(row.get::<_, String>(1).unwrap_or_default())
+            }).unwrap().filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    // Helper: dump first N rows as JSON array
+    fn get_rows(conn: &Connection, table: &str, cols: &[String], limit: usize) -> Vec<String> {
+        let safe = table.replace("]", "]]");
+        let col_list = cols.iter().map(|c| format!("[{}]", c.replace("]", "]]"))).collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT {} FROM [{}] LIMIT {}", col_list, safe, limit);
+        match conn.prepare(&sql) {
+            Ok(mut stmt) => {
+                let n_cols = cols.len();
+                stmt.query_map([], |row| {
+                    let mut pairs: Vec<String> = Vec::new();
+                    for ci in 0..n_cols {
+                        let cn = cols.get(ci).unwrap_or(&String::new()).clone();
+                        let val = row.get::<_, Option<i64>>(ci).unwrap_or(None)
+                            .map(|v| v.to_string())
+                            .or_else(|| row.get::<_, Option<String>>(ci).unwrap_or(None))
+                            .unwrap_or_else(|| "null".to_string());
+                        pairs.push(format!(r#""{}":{}"#, json_escape(&cn), if val == "null" { val } else { format!(r#""{}""#, json_escape(&val)) }));
+                    }
+                    Ok(format!(r#"{{{}}}"#, pairs.join(",")))
+                }).unwrap().filter_map(|r| r.ok()).collect()
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    // 1. support_card_effect_table (4931 rows) - schema + first 5 rows + 5 rows with unique_effect_id
+    let scet_cols = get_columns(&conn, "support_card_effect_table");
+    let scet_rows = get_rows(&conn, "support_card_effect_table", &scet_cols, 5);
+    // Get rows where effect_table_id matches a known unique card
+    let mut scet_unique: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT * FROM support_card_effect_table WHERE effect_table_id IN (SELECT unique_effect_id FROM support_card_data WHERE unique_effect_id > 0 LIMIT 5) LIMIT 20"
+    ) {
+        scet_unique = stmt.query_map([], |row| {
+            let n = scet_cols.len();
+            let mut pairs: Vec<String> = Vec::new();
+            for ci in 0..n {
+                let cn = scet_cols.get(ci).unwrap_or(&String::new()).clone();
+                let val = row.get::<_, Option<i64>>(ci).unwrap_or(None)
+                    .map(|v| v.to_string())
+                    .or_else(|| row.get::<_, Option<String>>(ci).unwrap_or(None))
+                    .unwrap_or_else(|| "null".to_string());
+                pairs.push(format!(r#""{}":{}"#, json_escape(&cn), if val == "null" { val } else { format!(r#""{}""#, json_escape(&val)) }));
+            }
+            Ok(format!(r#"{{{}}}"#, pairs.join(",")))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+
+    // 2. support_card_effect_filter (26 rows) - full dump
+    let scef_cols = get_columns(&conn, "support_card_effect_filter");
+    let scef_rows = get_rows(&conn, "support_card_effect_filter", &scef_cols, 30);
+
+    // 3. support_card_effect_filter_group (4 rows) - full dump
+    let scefg_cols = get_columns(&conn, "support_card_effect_filter_group");
+    let scefg_rows = get_rows(&conn, "support_card_effect_filter_group", &scefg_cols, 10);
+
+    // 4. support_card_unique_effect - dump more rows to see type patterns
+    let scue_cols = get_columns(&conn, "support_card_unique_effect");
+    let mut scue_dist: Vec<String> = Vec::new();
+    // type_0 distribution
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT type_0, COUNT(*) as cnt FROM support_card_unique_effect GROUP BY type_0 ORDER BY cnt DESC"
+    ) {
+        scue_dist = stmt.query_map([], |row| {
+            let t: i64 = row.get(0).unwrap_or(0);
+            let c: i64 = row.get(1).unwrap_or(0);
+            Ok(format!(r#"{{"type_0":{},"count":{}}}"#, t, c))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+    let mut scue_type1_dist: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT type_1, COUNT(*) as cnt FROM support_card_unique_effect GROUP BY type_1 ORDER BY cnt DESC"
+    ) {
+        scue_type1_dist = stmt.query_map([], |row| {
+            let t: i64 = row.get(0).unwrap_or(0);
+            let c: i64 = row.get(1).unwrap_or(0);
+            Ok(format!(r#"{{"type_1":{},"count":{}}}"#, t, c))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+    // Sample rows with type_0 or type_1 matching potential condition types
+    let mut scue_cond_rows: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT * FROM support_card_unique_effect WHERE type_0 IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20) OR type_1 IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20) LIMIT 30"
+    ) {
+        scue_cond_rows = stmt.query_map([], |row| {
+            let n = scue_cols.len();
+            let mut pairs: Vec<String> = Vec::new();
+            for ci in 0..n {
+                let cn = scue_cols.get(ci).unwrap_or(&String::new()).clone();
+                let val = row.get::<_, Option<i64>>(ci).unwrap_or(None)
+                    .map(|v| v.to_string())
+                    .or_else(|| row.get::<_, Option<String>>(ci).unwrap_or(None))
+                    .unwrap_or_else(|| "null".to_string());
+                pairs.push(format!(r#""{}":{}"#, json_escape(&cn), if val == "null" { val } else { format!(r#""{}""#, json_escape(&val)) }));
+            }
+            Ok(format!(r#"{{{}}}"#, pairs.join(",")))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+
+    drop(conn);
+
+    let scet_col_json: Vec<String> = scet_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
+    let scef_col_json: Vec<String> = scef_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
+    let scefg_col_json: Vec<String> = scefg_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
+    let scue_col_json: Vec<String> = scue_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
+
+    format!(
+        r#"{{"ok":true,"version":"3.22.63","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
+        scet_col_json.join(","), scet_rows.join(","), scet_unique.join(","),
+        scef_col_json.join(","), scef_rows.join(","),
+        scefg_col_json.join(","), scefg_rows.join(","),
+        scue_col_json.join(","), scue_dist.join(","), scue_type1_dist.join(","), scue_cond_rows.join(",")
+    )
+}
+
 fn debug_hint_gain() -> String {
     let mdb_path = match find_mdb_path() {
         Some(p) => p,
@@ -5538,7 +5678,7 @@ fn debug_hint_gain() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.62","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.63","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
         hint_rows.join(","),
         hint_with_cond.join(","),
         type_dist.join(","),
@@ -5611,7 +5751,7 @@ fn debug_mdb_all_tables() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.62","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.63","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
         all_tables.len(),
         tables_json.join(","),
         cond_tables.len(),
@@ -5776,7 +5916,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.62","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.63","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5841,7 +5981,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.62","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.63","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5913,7 +6053,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.62","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.63","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -6069,7 +6209,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.62","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.63","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6599,7 +6739,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.62","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.63","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6700,7 +6840,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.62","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.63","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6861,7 +7001,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.62","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.63","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6871,13 +7011,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.62","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.63","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.62","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.63","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -7157,7 +7297,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.62","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.63","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -7237,7 +7377,7 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.62","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.63","arrays":[{}]}}"#,
         results.join(",")
     )
 }
@@ -7334,7 +7474,7 @@ unsafe fn debug_paramsincdec() -> String {
     } else { -1 };
 
     format!(
-        r#"{{"version":"3.22.62","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
+        r#"{{"version":"3.22.63","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
@@ -7384,8 +7524,8 @@ fn update_so() -> String {
         None => return format!(r#"{{"error":"no_so_asset_url","tag":"{}"}}"#, tag_name),
     };
 
-    // Compare versions: current is "3.22.62"
-    let current_ver = "3.22.62";
+    // Compare versions: current is "3.22.63"
+    let current_ver = "3.22.63";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
