@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.69
+//! URA Plugin v3.22.70
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3813,7 +3813,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.69","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.70","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -4000,7 +4000,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.69","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.70","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4195,6 +4195,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
             full_uri[q+7..].split("&").next().unwrap_or("0").parse::<usize>().unwrap_or(0)
         } else { 0usize };
         debug_table_query(table_name, limit.min(1000).max(1), offset)
+    } else if path == "/debug/download_table" {
+        let table_name = if let Some(q) = full_uri.find("?name=") {
+            let rest = &full_uri[q+6..];
+            rest.split('&').next().unwrap_or(rest)
+        } else { "" };
+        debug_download_table(table_name)
     } else if path == "/debug/push_table" {
         let table_name = if let Some(q) = full_uri.find("?name=") {
             let rest = &full_uri[q+6..];
@@ -4270,7 +4276,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/classes/search/keyword"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -5432,7 +5438,7 @@ fn debug_unique_skills() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
         matched_tables.len(),
         results.join(","),
         sc_columns.join(",")
@@ -5519,7 +5525,7 @@ fn debug_table_query(table_name: &str, limit: usize, offset: usize) -> String {
 
     let col_json: Vec<String> = cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
     format!(
-        r#"{{"ok":true,"version":"3.22.69","table":"{}","columns":[{}],"row_count":{},"limit":{},"offset":{},"rows":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","table":"{}","columns":[{}],"row_count":{},"limit":{},"offset":{},"rows":[{}]}}"#,
         json_escape(table_name),
         col_json.join(","),
         total,
@@ -5529,7 +5535,7 @@ fn debug_table_query(table_name: &str, limit: usize, offset: usize) -> String {
     )
 }
 
-/// /debug/push_table?name=<table_name>&batch=<N>&offset=<M>
+/// /debug/push_table?name=<table_name>&batch=<N>&offset=<M>\n/// /debug/download_table?name=<table_name>
 /// Single-batch query: each call processes one batch of rows, appends to local file.
 /// On the final batch, base64-encodes the whole file and pushes to GitHub.
 fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
@@ -5633,40 +5639,15 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
                 let _ = f.write_all(b"]}");
             }
         }
-        let file_content = match std::fs::read(&tmp_path) {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp_path);
-                return format!(r#"{{"ok":false,"error":"read_tmp_failed","detail":"{}"}}"#, e);
-            }
-        };
-        let b64 = base64_encode(&file_content);
-        let github_path = format!("mdb/{}.json", table_name);
-        let payload_path = format!("{}/uma_push_gh_payload.json", tmp_dir);
+        // Close JSON - file stays for download
         {
-            if let Ok(mut f) = std::fs::File::create(&payload_path) {
-                let _ = f.write_all(br#"{"message":"push "#);
-                let _ = f.write_all(table_name.as_bytes());
-                let _ = f.write_all(br#" from SO v3.22.69","content":""#);
-                let _ = f.write_all(b64.as_bytes());
-                let _ = f.write_all(&[b'"', b'}']);
-
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&tmp_path) {
+                let _ = f.write_all(b"]}");
             }
         }
-        let cmd = format!(
-            "curl -s -X PUT -H 'Authorization: token {}' -H 'Content-Type: application/json' -d @{} 'https://api.github.com/repos/xf8410/uma-data/contents/{}' > /dev/null 2>&1",
-            read_github_token(), payload_path, github_path
-        );
-        if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
-            unsafe {
-                sys_system(cmd_c.as_ptr() as *const i8);
-            }
-        }
-        let _ = std::fs::remove_file(&tmp_path);
-        let _ = std::fs::remove_file(&payload_path);
         return format!(
-            r#"{{"ok":true,"version":"3.22.69","table":"{}","total_rows":{},"offset":{},"rows_queried":0,"complete":true,"pushed":true,"github_path":"{}"}}"#,
-            json_escape(table_name), total, offset, github_path
+            r#"{{"ok":true,"version":"3.22.70","table":"{}","total_rows":{},"offset":{},"rows_queried":0,"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
+            json_escape(table_name), total, offset, json_escape(table_name)
         );
     }
 
@@ -5691,60 +5672,21 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
     if !is_last_batch {
         // Not done yet - return progress
         return format!(
-            r#"{{"ok":true,"version":"3.22.69","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"next_offset":{},"complete":false}}"#,
+            r#"{{"ok":true,"version":"3.22.70","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"next_offset":{},"complete":false}}"#,
             json_escape(table_name), total, offset, rows_queried, next_offset
         );
     }
 
-    // Last batch! Close JSON and push to GitHub
+    // Last batch! Close JSON - file stays for download
     {
         if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&tmp_path) {
             let _ = f.write_all(b"]}");
         }
     }
 
-    // Read file, base64 encode, push to GitHub
-    let file_content = match std::fs::read(&tmp_path) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            return format!(r#"{{"ok":false,"error":"read_tmp_failed","detail":"{}"}}"#, e);
-        }
-    };
-
-    let b64 = base64_encode(&file_content);
-    let github_path = format!("mdb/{}.json", table_name);
-
-    // Build push payload in parts to avoid huge format! string
-    let payload_path = format!("{}/uma_push_gh_payload.json", tmp_dir);
-    {
-        if let Ok(mut f) = std::fs::File::create(&payload_path) {
-            let _ = f.write_all(br#"{"message":"push "#);
-            let _ = f.write_all(table_name.as_bytes());
-            let _ = f.write_all(br#" from SO v3.22.69","content":""#);
-            let _ = f.write_all(b64.as_bytes());
-            let _ = f.write_all(&[b'"', b'}']);
-
-        }
-    }
-
-    let cmd = format!(
-        "curl -s -X PUT -H 'Authorization: token {}' -H 'Content-Type: application/json' -d @{} 'https://api.github.com/repos/xf8410/uma-data/contents/{}' > /dev/null 2>&1",
-        read_github_token(), payload_path, github_path
-    );
-    if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
-        unsafe {
-            sys_system(cmd_c.as_ptr() as *const i8);
-        }
-    }
-
-    // Cleanup
-    let _ = std::fs::remove_file(&tmp_path);
-    let _ = std::fs::remove_file(&payload_path);
-
     format!(
-        r#"{{"ok":true,"version":"3.22.69","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"complete":true,"pushed":true,"github_path":"{}"}}"#,
-        json_escape(table_name), total, offset, rows_queried, github_path
+        r#"{{"ok":true,"version":"3.22.70","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
+        json_escape(table_name), total, offset, rows_queried, json_escape(table_name)
     )
 }
 
@@ -5756,6 +5698,21 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
 /// These tables likely contain the activation conditions for support card unique effects
 /// /debug/unique_detail - Join support_card_data + support_card_unique_effect
 /// Shows each card with its unique effect types and values for decoding
+
+/// /debug/download_table?name=<table_name>
+/// Returns the complete JSON file built by push_table for browser download
+fn debug_download_table(table_name: &str) -> String {
+    if table_name.is_empty() {
+        return r#"{"ok":false,"error":"missing_name"}"#.to_string();
+    }
+    let tmp_dir = "/data/data/jp.pokemon.pokeuma/files";
+    let tmp_path = format!("{}/uma_push_{}.json", tmp_dir, table_name);
+    match std::fs::read_to_string(&tmp_path) {
+        Ok(content) => content,
+        Err(e) => format!(r#"{{"ok":false,"error":"file_not_found","detail":"{}","hint":"call push_table first to build the file"}}"#, e),
+    }
+}
+
 fn debug_unique_detail() -> String {
     let mdb_path = match find_mdb_path() {
         Some(p) => p,
@@ -5910,7 +5867,7 @@ fn debug_unique_detail() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
         cards.join(","),
         effects.join(","),
         combo_dist.join(","),
@@ -6048,7 +6005,7 @@ fn debug_sc_effect() -> String {
     let scue_col_json: Vec<String> = scue_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
+        r#"{{"ok":true,"version":"3.22.70","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
         scet_col_json.join(","), scet_rows.join(","), scet_unique.join(","),
         scef_col_json.join(","), scef_rows.join(","),
         scefg_col_json.join(","), scefg_rows.join(","),
@@ -6188,7 +6145,7 @@ fn debug_hint_gain() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
         hint_rows.join(","),
         hint_with_cond.join(","),
         type_dist.join(","),
@@ -6261,7 +6218,7 @@ fn debug_mdb_all_tables() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
         all_tables.len(),
         tables_json.join(","),
         cond_tables.len(),
@@ -6426,7 +6383,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -6491,7 +6448,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -6563,7 +6520,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -6719,7 +6676,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.69","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.70","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -7249,7 +7206,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.69","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.70","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -7350,7 +7307,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.69","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.70","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -7511,7 +7468,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.69","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.70","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -7521,13 +7478,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.69","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.70","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.69","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.70","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -7807,7 +7764,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.69","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.70","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -7887,7 +7844,7 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.69","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.70","arrays":[{}]}}"#,
         results.join(",")
     )
 }
@@ -7984,7 +7941,7 @@ unsafe fn debug_paramsincdec() -> String {
     } else { -1 };
 
     format!(
-        r#"{{"version":"3.22.69","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
+        r#"{{"version":"3.22.70","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
@@ -8034,8 +7991,8 @@ fn update_so() -> String {
         None => return format!(r#"{{"error":"no_so_asset_url","tag":"{}"}}"#, tag_name),
     };
 
-    // Compare versions: current is "3.22.69"
-    let current_ver = "3.22.69";
+    // Compare versions: current is "3.22.70"
+    let current_ver = "3.22.70";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
