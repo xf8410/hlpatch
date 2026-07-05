@@ -4200,7 +4200,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
             let rest = &full_uri[q+6..];
             rest.split('&').next().unwrap_or(rest)
         } else { "" };
-        debug_download_table(table_name)
+        let batch = if let Some(q) = full_uri.find("batch=") {
+            full_uri[q+6..].split('&').next().unwrap_or("500").parse::<usize>().unwrap_or(500)
+        } else { 500usize };
+        debug_download_table(table_name, batch.min(1000).max(1))
     } else if path == "/debug/push_table" {
         let table_name = if let Some(q) = full_uri.find("?name=") {
             let rest = &full_uri[q+6..];
@@ -5699,17 +5702,111 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
 /// /debug/unique_detail - Join support_card_data + support_card_unique_effect
 /// Shows each card with its unique effect types and values for decoding
 
-/// /debug/download_table?name=<table_name>
-/// Returns the complete JSON file built by push_table for browser download
-fn debug_download_table(table_name: &str) -> String {
+/// /debug/download_table?name=<table_name>&batch=<N>
+/// Auto-batch build + download: queries all rows in batches, writes to local file, returns full JSON.
+/// If file already exists (from previous push_table calls), returns it directly.
+/// Set batch=30 for large-row tables (skill_data ~2KB/row), batch=500 for small rows.
+fn debug_download_table(table_name: &str, batch: usize) -> String {
     if table_name.is_empty() {
         return r#"{"ok":false,"error":"missing_name"}"#.to_string();
     }
+    if table_name.chars().any(|c| !c.is_alphanumeric() && c != '_' && c != '-') {
+        return format!(r#"{{"ok":false,"error":"invalid_table_name","table":"{}"}}"#, json_escape(table_name));
+    }
     let tmp_dir = "/data/data/jp.pokemon.pokeuma/files";
     let tmp_path = format!("{}/uma_push_{}.json", tmp_dir, table_name);
+
+    // If file already exists, return it directly
+    if std::path::Path::new(&tmp_path).exists() {
+        return match std::fs::read_to_string(&tmp_path) {
+            Ok(content) => content,
+            Err(e) => format!(r#"{{"ok":false,"error":"read_failed","detail":"{}"}}"#, e),
+        };
+    }
+
+    // Auto-batch: query all rows and build JSON file
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return r#"{"ok":false,"error":"mdb_not_found"}"#.to_string(),
+    };
+    let conn = match Connection::open(&mdb_path) {
+        Ok(c) => c,
+        Err(e) => return format!(r#"{{"ok":false,"error":"db_open_failed","detail":"{}"}}"#, e),
+    };
+    let total: i64 = match conn.query_row(
+        &format!("SELECT COUNT(*) FROM {}", table_name), [], |row| row.get(0)
+    ) {
+        Ok(t) => t,
+        Err(e) => return format!(r#"{{"ok":false,"error":"count_failed","detail":"{}"}}"#, e),
+    };
+
+    // Write JSON header
+    {
+        if let Ok(mut f) = std::fs::File::create(&tmp_path) {
+            let _ = f.write_all(format!(r#"{{"table":"{}","total_rows":{},"rows":["#, json_escape(table_name), total).as_bytes());
+        }
+    }
+
+    let mut offset = 0usize;
+    let mut need_comma = false;
+    loop {
+        let query = format!("SELECT * FROM {} LIMIT {} OFFSET {}", table_name, batch, offset);
+        let rows = match conn.prepare(&query) {
+            Ok(mut stmt) => {
+                let column_count = stmt.column_count();
+                let mut batch_rows: Vec<String> = Vec::new();
+                let mut rows_iter = stmt.query([]).unwrap();
+                while let Ok(Some(row)) = rows_iter.next() {
+                    let mut parts: Vec<String> = Vec::new();
+                    for i in 0..column_count {
+                        let val: String = match row.get_ref(i) {
+                            Ok(ValueRef::Null) => "null".to_string(),
+                            Ok(ValueRef::Integer(n)) => n.to_string(),
+                            Ok(ValueRef::Real(f)) => format!("{}", f),
+                            Ok(ValueRef::Text(s)) => format!(r#""{}""#, json_escape(&String::from_utf8_lossy(s))),
+                            Ok(ValueRef::Blob(_)) => "null".to_string(),
+                            Err(_) => "null".to_string(),
+                        };
+                        parts.push(val);
+                    }
+                    batch_rows.push(format!("[{}]", parts.join(",")));
+                }
+                batch_rows
+            },
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp_path);
+                return format!(r#"{{"ok":false,"error":"query_failed","detail":"{}"}}"#, e);
+            }
+        };
+
+        if rows.is_empty() { break; }
+
+        // Append rows
+        let mut append_data = String::new();
+        if need_comma { append_data.push(','); }
+        append_data.push_str(&rows.join(","));
+        {
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&tmp_path) {
+                let _ = f.write_all(append_data.as_bytes());
+            }
+        }
+        need_comma = true;
+
+        offset += rows.len();
+        if offset as i64 >= total || rows.len() < batch { break; }
+    }
+
+    // Close JSON
+    {
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&tmp_path) {
+            let _ = f.write_all(b"]}");
+        }
+    }
+
+    // Return the file
     match std::fs::read_to_string(&tmp_path) {
         Ok(content) => content,
-        Err(e) => format!(r#"{{"ok":false,"error":"file_not_found","detail":"{}","hint":"call push_table first to build the file"}}"#, e),
+        Err(e) => format!(r#"{{"ok":false,"error":"read_failed","detail":"{}"}}"#, e),
     }
 }
 
