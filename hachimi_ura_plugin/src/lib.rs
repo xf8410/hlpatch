@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.63
+//! URA Plugin v3.22.64
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3803,7 +3803,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.63","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.64","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3990,7 +3990,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.63","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.64","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4171,6 +4171,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         debug_hint_gain()
     } else if path == "/debug/sc_effect" {
         debug_sc_effect()
+    } else if path == "/debug/unique_detail" {
+        debug_unique_detail()
     } else if path == "/tables" {
         read_mdb_tables()
     } else if path == "/carddb" {
@@ -5396,7 +5398,7 @@ fn debug_unique_skills() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.63","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.64","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
         matched_tables.len(),
         results.join(","),
         sc_columns.join(",")
@@ -5410,6 +5412,120 @@ fn debug_unique_skills() -> String {
 /// Plus resolve condition_set_id -> single_mode_story_condition_set details
 /// /debug/sc_effect - Dump support_card_effect_table + effect_filter + effect_filter_group
 /// These tables likely contain the activation conditions for support card unique effects
+/// /debug/unique_detail - Join support_card_data + support_card_unique_effect
+/// Shows each card with its unique effect types and values for decoding
+fn debug_unique_detail() -> String {
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
+    };
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
+    };
+
+    // 1. Get all support_card_data rows with unique_effect_id > 0
+    let mut cards: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, chara_id, rarity, command_id, unique_effect_id, support_card_type \
+         FROM support_card_data WHERE unique_effect_id > 0 ORDER BY id"
+    ) {
+        cards = stmt.query_map([], |row| {
+            let id: i64 = row.get(0).unwrap_or(0);
+            let cid: i64 = row.get(1).unwrap_or(0);
+            let rar: i64 = row.get(2).unwrap_or(0);
+            let cmd: i64 = row.get(3).unwrap_or(0);
+            let ueid: i64 = row.get(4).unwrap_or(0);
+            let sct: i64 = row.get(5).unwrap_or(0);
+            Ok(format!(
+                r#"{{"id":{},"chara":{},"rarity":{},"cmd":{},"ueid":{},"sct":{}}}"#,
+                id, cid, rar, cmd, ueid, sct
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+
+    // 2. Get all unique_effect rows, grouped by id
+    let mut effects: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, lv, type_0, value_0, type_1, value_1 FROM support_card_unique_effect ORDER BY id, lv"
+    ) {
+        effects = stmt.query_map([], |row| {
+            let id: i64 = row.get(0).unwrap_or(0);
+            let lv: i64 = row.get(1).unwrap_or(0);
+            let t0: i64 = row.get(2).unwrap_or(0);
+            let v0: i64 = row.get(3).unwrap_or(0);
+            let t1: i64 = row.get(4).unwrap_or(0);
+            let v1: i64 = row.get(5).unwrap_or(0);
+            Ok(format!(
+                r#"{{"id":{},"lv":{},"t0":{},"v0":{},"t1":{},"v1":{}}}"#,
+                id, lv, t0, v0, t1, v1
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+
+    // 3. type_0 + type_1 combo distribution (the key to decoding)
+    let mut combo_dist: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT type_0, type_1, COUNT(*) as cnt FROM support_card_unique_effect GROUP BY type_0, type_1 ORDER BY cnt DESC"
+    ) {
+        combo_dist = stmt.query_map([], |row| {
+            let t0: i64 = row.get(0).unwrap_or(0);
+            let t1: i64 = row.get(1).unwrap_or(0);
+            let c: i64 = row.get(2).unwrap_or(0);
+            Ok(format!(r#"{{"t0":{},"t1":{},"count":{}}}"#, t0, t1, c))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+
+    // 4. Also dump effect_filter for reference (type -> group mapping)
+    let mut filters: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT type, group_id, sort_id FROM support_card_effect_filter ORDER BY type"
+    ) {
+        filters = stmt.query_map([], |row| {
+            let t: i64 = row.get(0).unwrap_or(0);
+            let g: i64 = row.get(1).unwrap_or(0);
+            let s: i64 = row.get(2).unwrap_or(0);
+            Ok(format!(r#"{{"type":{},"grp":{},"sort":{}}}"#, t, g, s))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+
+    // 5. Sample: cards with type_0=101 (the most common "conditional effect" type)
+    // These are likely "per X skill, +Y" effects like Mejiro Top Roman
+    let mut t101_samples: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT ue.id, ue.lv, ue.type_0, ue.value_0, ue.type_1, ue.value_1, sc.id as sc_id, sc.chara_id \
+         FROM support_card_unique_effect ue \
+         JOIN support_card_data sc ON ue.id = sc.unique_effect_id \
+         WHERE ue.type_0 = 101 ORDER BY sc.id LIMIT 10"
+    ) {
+        t101_samples = stmt.query_map([], |row| {
+            let eid: i64 = row.get(0).unwrap_or(0);
+            let lv: i64 = row.get(1).unwrap_or(0);
+            let t0: i64 = row.get(2).unwrap_or(0);
+            let v0: i64 = row.get(3).unwrap_or(0);
+            let t1: i64 = row.get(4).unwrap_or(0);
+            let v1: i64 = row.get(5).unwrap_or(0);
+            let scid: i64 = row.get(6).unwrap_or(0);
+            let chid: i64 = row.get(7).unwrap_or(0);
+            Ok(format!(
+                r#"{{"eid":{},"lv":{},"t0":{},"v0":{},"t1":{},"v1":{},"sc_id":{},"chara":{}}}"#,
+                eid, lv, t0, v0, t1, v1, scid, chid
+            ))
+        }).unwrap().filter_map(|r| r.ok()).collect();
+    }
+
+    drop(conn);
+
+    format!(
+        r#"{{"ok":true,"version":"3.22.64","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}]}}"#,
+        cards.join(","),
+        effects.join(","),
+        combo_dist.join(","),
+        filters.join(","),
+        t101_samples.join(",")
+    )
+}
+
 fn debug_sc_effect() -> String {
     let mdb_path = match find_mdb_path() {
         Some(p) => p,
@@ -5538,7 +5654,7 @@ fn debug_sc_effect() -> String {
     let scue_col_json: Vec<String> = scue_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
 
     format!(
-        r#"{{"ok":true,"version":"3.22.63","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
+        r#"{{"ok":true,"version":"3.22.64","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
         scet_col_json.join(","), scet_rows.join(","), scet_unique.join(","),
         scef_col_json.join(","), scef_rows.join(","),
         scefg_col_json.join(","), scefg_rows.join(","),
@@ -5678,7 +5794,7 @@ fn debug_hint_gain() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.63","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.64","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
         hint_rows.join(","),
         hint_with_cond.join(","),
         type_dist.join(","),
@@ -5751,7 +5867,7 @@ fn debug_mdb_all_tables() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.63","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.64","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
         all_tables.len(),
         tables_json.join(","),
         cond_tables.len(),
@@ -5916,7 +6032,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.63","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.64","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5981,7 +6097,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.63","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.64","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -6053,7 +6169,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.63","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.64","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -6209,7 +6325,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.63","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.64","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6739,7 +6855,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.63","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.64","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6840,7 +6956,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.63","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.64","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -7001,7 +7117,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.63","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.64","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -7011,13 +7127,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.63","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.64","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.63","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.64","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -7297,7 +7413,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.63","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.64","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -7377,7 +7493,7 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.63","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.64","arrays":[{}]}}"#,
         results.join(",")
     )
 }
@@ -7474,7 +7590,7 @@ unsafe fn debug_paramsincdec() -> String {
     } else { -1 };
 
     format!(
-        r#"{{"version":"3.22.63","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
+        r#"{{"version":"3.22.64","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
@@ -7524,8 +7640,8 @@ fn update_so() -> String {
         None => return format!(r#"{{"error":"no_so_asset_url","tag":"{}"}}"#, tag_name),
     };
 
-    // Compare versions: current is "3.22.63"
-    let current_ver = "3.22.63";
+    // Compare versions: current is "3.22.64"
+    let current_ver = "3.22.64";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
