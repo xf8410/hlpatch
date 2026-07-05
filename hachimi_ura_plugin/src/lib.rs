@@ -5716,12 +5716,16 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
     let tmp_dir = "/data/data/jp.pokemon.pokeuma/files";
     let tmp_path = format!("{}/uma_push_{}.json", tmp_dir, table_name);
 
-    // If file already exists, return it directly
+    // If file already exists from a previous successful build, return it directly
+    // (check if it ends with "]}" to confirm it's complete)
     if std::path::Path::new(&tmp_path).exists() {
-        return match std::fs::read_to_string(&tmp_path) {
-            Ok(content) => content,
-            Err(e) => format!(r#"{{"ok":false,"error":"read_failed","detail":"{}"}}"#, e),
-        };
+        if let Ok(content) = std::fs::read_to_string(&tmp_path) {
+            if content.ends_with("]}") {
+                return content;
+            }
+        }
+        // Incomplete or corrupt file, delete and rebuild
+        let _ = std::fs::remove_file(&tmp_path);
     }
 
     // Auto-batch: query all rows and build JSON file
@@ -5729,7 +5733,7 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
         Some(p) => p,
         None => return r#"{"ok":false,"error":"mdb_not_found"}"#.to_string(),
     };
-    let conn = match Connection::open(&mdb_path) {
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(c) => c,
         Err(e) => return format!(r#"{{"ok":false,"error":"db_open_failed","detail":"{}"}}"#, e),
     };
@@ -5741,10 +5745,13 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
     };
 
     // Write JSON header
-    {
-        if let Ok(mut f) = std::fs::File::create(&tmp_path) {
-            let _ = f.write_all(format!(r#"{{"table":"{}","total_rows":{},"rows":["#, json_escape(table_name), total).as_bytes());
-        }
+    let mut f = match std::fs::File::create(&tmp_path) {
+        Ok(file) => file,
+        Err(e) => return format!(r#"{{"ok":false,"error":"file_create_failed","detail":"{}"}}"#, e),
+    };
+    if let Err(e) = f.write_all(format!(r#"{{"table":"{}","total_rows":{},"rows":["#, json_escape(table_name), total).as_bytes()) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return format!(r#"{{"ok":false,"error":"header_write_failed","detail":"{}"}}"#, e);
     }
 
     let mut offset = 0usize;
@@ -5798,8 +5805,16 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
         if need_comma { append_data.push(','); }
         append_data.push_str(&rows.join(","));
         {
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&tmp_path) {
-                let _ = f.write_all(append_data.as_bytes());
+            let mut f = match std::fs::OpenOptions::new().append(true).open(&tmp_path) {
+                Ok(file) => file,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return format!(r#"{{"ok":false,"error":"append_open_failed","detail":"{}"}}"#, e);
+                }
+            };
+            if let Err(e) = f.write_all(append_data.as_bytes()) {
+                let _ = std::fs::remove_file(&tmp_path);
+                return format!(r#"{{"ok":false,"error":"append_write_failed","detail":"{}"}}"#, e);
             }
         }
         need_comma = true;
@@ -5813,6 +5828,19 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
         if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&tmp_path) {
             let _ = f.write_all(b"]}");
         }
+    }
+    // For very large tables, don't try to read the whole file into memory.
+    // Return a pointer instead - the user can access it via the file path.
+    let file_size = match std::fs::metadata(&tmp_path) {
+        Ok(m) => m.len() as usize,
+        Err(e) => return format!(r#"{{"ok":false,"error":"stat_failed","detail":"{}"}}"#, e),
+    };
+    // If file > 2MB, return metadata instead of reading into memory
+    if file_size > 2_000_000 {
+        return format!(
+            r#"{{"ok":true,"version":"3.22.70","table":"{}","total_rows":{},"file_size":{},"file_path":"{}","hint":"file too large for HTTP response, use push_table batch mode instead"}}"#,
+            json_escape(table_name), total, file_size, tmp_path
+        );
     }
 
     // Return the file
