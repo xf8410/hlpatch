@@ -5750,26 +5750,38 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
     let mut offset = 0usize;
     let mut need_comma = false;
     loop {
-        let query = format!("SELECT * FROM {} LIMIT {} OFFSET {}", table_name, batch, offset);
+        let query = format!("SELECT * FROM [{}] LIMIT {} OFFSET {}", table_name, batch, offset);
         let rows = match conn.prepare(&query) {
             Ok(mut stmt) => {
                 let column_count = stmt.column_count();
                 let mut batch_rows: Vec<String> = Vec::new();
-                let mut rows_iter = stmt.query([]).unwrap();
-                while let Ok(Some(row)) = rows_iter.next() {
+                let rows_result = stmt.query_map([], |row| {
                     let mut parts: Vec<String> = Vec::new();
-                    for i in 0..column_count {
-                        let val: String = match row.get_ref(i) {
-                            Ok(ValueRef::Null) => "null".to_string(),
-                            Ok(ValueRef::Integer(n)) => n.to_string(),
-                            Ok(ValueRef::Real(f)) => format!("{}", f),
-                            Ok(ValueRef::Text(s)) => format!(r#""{}""#, json_escape(&String::from_utf8_lossy(s))),
-                            Ok(ValueRef::Blob(_)) => "null".to_string(),
-                            Err(_) => "null".to_string(),
+                    for ci in 0..column_count {
+                        let int_val = row.get::<_, Option<i64>>(ci).unwrap_or(None);
+                        let val = if let Some(v) = int_val {
+                            v.to_string()
+                        } else {
+                            let str_val = row.get::<_, Option<String>>(ci).unwrap_or(None);
+                            match str_val {
+                                Some(s) => format!(r#""{}""#, json_escape(&s)),
+                                None => "null".to_string(),
+                            }
                         };
                         parts.push(val);
                     }
-                    batch_rows.push(format!("[{}]", parts.join(",")));
+                    Ok(format!("[{}]", parts.join(",")))
+                });
+                match rows_result {
+                    Ok(mapped) => {
+                        for r in mapped.flatten() {
+                            batch_rows.push(r);
+                        }
+                    },
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&tmp_path);
+                        return format!(r#"{{"ok":false,"error":"row_iter_failed","detail":"{}"}}"#, e);
+                    }
                 }
                 batch_rows
             },
