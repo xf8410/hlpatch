@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.56
+//! URA Plugin v3.22.57
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3118,7 +3118,7 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
-    // ★ v3.22.56: Gauge gains per training command (from DataSet CommandInfoArray, target_type=30)
+    // ★ v3.22.57: Gauge gains per training command (from DataSet CommandInfoArray, target_type=30)
     let mut ramen_gauge_gains_json = String::new();
     // ★ v3.22.51: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
     // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
@@ -3276,6 +3276,8 @@ unsafe fn read_summary_inner_impl() -> String {
                             let mut sg = [0i32; 5]; // [Speed, Stamina, Power, Guts, Wisdom]
                             let mut spt = 0i32;
                             let mut vc = 0i32;
+                            // ★ v3.22.57: Merged gauge_gain into single loop (was separate redundant loop)
+                            let mut gauge_gain = 0i32;
                             for pi in 0..ce_plen {
                                 let pe = std::ptr::read_unaligned::<*mut c_void>(
                                     ce_plb.add(IL2CPP_LIST_ITEMS_OFF + pi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
@@ -3283,6 +3285,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                 if pe.is_null() { continue; }
                                 let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(16) as *const i32);
                                 let vv = std::ptr::read_unaligned::<i32>((pe as *const u8).add(20) as *const i32);
+                                if tt == 30 { gauge_gain += vv; }
                                 if vv == 0 { continue; }
                                 let tn = match tt {
                                     1=>"Speed", 2=>"Stamina", 3=>"Guts",
@@ -3307,24 +3310,13 @@ unsafe fn read_summary_inner_impl() -> String {
                                 ramen_skill_pt_map.insert(cmd_id, spt);
                                 ramen_vital_cost_map.insert(cmd_id, vc);
                             }
-                            // ★ v3.22.56: Collect gauge gains (target_type=30) for gauge_gains output
-                            let mut gauge_gain = 0i32;
-                            for pi in 0..ce_plen {
-                                let pe = std::ptr::read_unaligned::<*mut c_void>(
-                                    ce_plb.add(IL2CPP_LIST_ITEMS_OFF + pi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
-                                );
-                                if pe.is_null() { continue; }
-                                let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(16) as *const i32);
-                                let vv = std::ptr::read_unaligned::<i32>((pe as *const u8).add(20) as *const i32);
-                                if tt == 30 { gauge_gain += vv; }
-                            }
                             if gauge_gain > 0 {
                                 ramen_gauge_gains_map.insert(cmd_id, gauge_gain);
                             }
                         }
                     }
                 }
-                // ★ v3.22.56: Build gauge_gains JSON from ramen_gauge_gains_map
+                // ★ v3.22.57: Build gauge_gains JSON from ramen_gauge_gains_map
                 if !ramen_gauge_gains_map.is_empty() {
                     let mut gg_parts: Vec<String> = Vec::new();
                     for (&cmd_id, &gauge_val) in &ramen_gauge_gains_map {
@@ -3461,7 +3453,7 @@ unsafe fn read_summary_inner_impl() -> String {
                             }
                         }
 
-                        // ★ v3.22.56: Ramen gains — always use DataSet CommandInfoArray gains
+                        // ★ v3.22.57: Ramen gains — always use DataSet CommandInfoArray gains
                         // HomeInfoData.ParamsIncDecInfoArray gives wrong values for Ramen
                         // (ObscuredInt vs plain int mismatch, values like Speed:1 instead of 14)
                         if sid == 14 {
@@ -3513,9 +3505,9 @@ unsafe fn read_summary_inner_impl() -> String {
     ura_log(3, "★ read_summary phase3: support cards");
     log_predict_step("S:p3 cards");
     let mut sc_json = "[]".to_string();
-    // ★ v3.22.56: Fix support_cards — use get_EquipSupportCardArray getter
+    // ★ v3.22.57: Fix support_cards — use get_EquipSupportCardArray getter
     // Root cause: field name is "EquipSupportCardArray" not "SupportCardArray"
-    // v3.22.56's cached_find_field_offset("SupportCardArray") hit wrong field via substring match
+    // v3.22.57's cached_find_field_offset("SupportCardArray") hit wrong field via substring match
     // Also: position/supportCardId/limitBreakCount are ObscuredInt, not plain int
     let mut sc_arr: *mut c_void = ptr::null_mut();
     // Method 1: getter on chara_class (most reliable)
@@ -3538,7 +3530,7 @@ unsafe fn read_summary_inner_impl() -> String {
             for i in 0..al {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                 if ep.is_null() { continue; }
-                // ★ v3.22.56: Use getter methods for ObscuredInt fields
+                // ★ v3.22.57: Use getter methods for ObscuredInt fields
                 // position/supportCardId/limitBreakCount are ObscuredInt, can't read as plain int
                 let sc_elem_class = get_class_from_object(ep);
                 let (position, support_card_id, limit_break_count, training_partner_state) = if !sc_elem_class.is_null() {
@@ -3710,55 +3702,9 @@ unsafe fn read_summary_inner_impl() -> String {
                                 }
                             }
                         }
-                        // ★ Ramen ActiveEffects → generate buffs from pre-read data
-                        // (v3.18.7: Use ramen_active_effects_raw_json instead of re-reading from memory,
-                        //  because call_getter_on_instance(get_DataSet) can fail in this code path)
-                        if sid == 14 && !ramen_active_effects_raw_json.is_empty() {
-                            // Convert raw {"category":1,"id":36,"value":50} to named buffs
-                            let mut buffs = Vec::new();
-                            for ae_part in ramen_active_effects_raw_json.split("},{") {
-                                let mut cat: i32 = -1;
-                                let mut eid: i32 = 0;
-                                let mut val: i32 = 0;
-                                // Simple field extraction from {"category":1,"id":36,"value":50}
-                                for field in ae_part.trim_start_matches('{').trim_end_matches('}').split(',') {
-                                    let fv: Vec<&str> = field.splitn(2, ':').collect();
-                                    if fv.len() == 2 {
-                                        let key = fv[0].trim();
-                                        if key.contains("category") { cat = fv[1].parse().unwrap_or(-1); }
-                                        else if key.contains("id") && !key.contains("Eff") { eid = fv[1].parse().unwrap_or(0); }
-                                        else if key.contains("value") { val = fv[1].parse().unwrap_or(0); }
-                                    }
-                                }
-                                if cat >= 0 {
-                                    // ★ v3.18.8: readable effect name with ID + desc
-                                    let cat_name = match cat {
-                                        1 => "試食会", 2 => "地域", 4 => "隠し味", _ => "他",
-                                    };
-                                    let name = format!("{}#{}", cat_name, eid);
-                                    // EffectValue = 加成率(%)，试食会/地域効果是训练效果UP百分比
-                                    let desc = format!("+{}%", val);
-                                    buffs.push(format!(
-                                        r#"{{"name":"{}","EffectId":{},"EffectValue":{},"desc":"{}","type":"Ramen"}}"#,
-                                        name, eid, val, desc
-                                    ));
-                                }
-                            }
-                            // Add UrafEffect from pre-read
-                            if ramen_uraf_type >= 0 {
-                                let ut_name = match ramen_uraf_type {
-                                    1 => "試食会", 2 => "地域", 4 => "隠し味", _ => "?",
-                                };
-                                let state_name = match ramen_uraf_state {
-                                    0 => "無効", 1 => "有効", _ => "?",
-                                };
-                                buffs.push(format!(r#"{{"name":"裏風:{}","UrafEffectType":{},"type":"Ramen"}}"#, ut_name, ramen_uraf_type));
-                                buffs.push(format!(r#"{{"name":"裏風状態","state":"{}","UrafEffectState":{},"type":"Ramen"}}"#, state_name, ramen_uraf_state));
-                            }
-                            if !buffs.is_empty() {
-                                buff_json = format!("[{}]", buffs.join(","));
-                            }
-                        }
+                        // ★ v3.22.57: Removed dead Ramen buffs code here
+                        // (sid==14 sets scenario_obj=null, so this block never executes for Ramen.
+                        //  Ramen buffs are handled below after the scenario_obj block.)
                     }
                 }
             }
@@ -3857,7 +3803,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.56","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.57","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3944,7 +3890,7 @@ fn push_loop() {
         let summary = read_summary();
         if summary.contains("\"error\"") {
             consecutive_errors += 1;
-            // ★ v3.22.56: Extra cooldown for SIGSEGV recovery — game state transition
+            // ★ v3.22.57: Extra cooldown for SIGSEGV recovery — game state transition
             if summary.contains("sigsegv") {
                 let cool = std::time::Duration::from_secs(60);
                 unsafe { ura_log(2, "Push: SIGSEGV recovered, cooling 60s for game state transition"); }
@@ -4044,7 +3990,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.56","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.57","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4521,7 +4467,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.56").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.57").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -4728,10 +4674,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.56 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.57 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.56 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.57 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -5511,7 +5457,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.56","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.57","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -5576,7 +5522,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.56","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.57","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -5648,7 +5594,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.56","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.57","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -5804,7 +5750,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.56","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.57","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -6334,7 +6280,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.56","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.57","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -6435,7 +6381,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.56","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.57","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -6596,7 +6542,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.56","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.57","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -6606,13 +6552,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.56","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.57","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.56","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.57","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -6892,7 +6838,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.56","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.57","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -6972,7 +6918,7 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.56","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.57","arrays":[{}]}}"#,
         results.join(",")
     )
 }
@@ -7069,7 +7015,7 @@ unsafe fn debug_paramsincdec() -> String {
     } else { -1 };
 
     format!(
-        r#"{{"version":"3.22.56","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
+        r#"{{"version":"3.22.57","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
@@ -7119,8 +7065,8 @@ fn update_so() -> String {
         None => return format!(r#"{{"error":"no_so_asset_url","tag":"{}"}}"#, tag_name),
     };
 
-    // Compare versions: current is "3.22.56"
-    let current_ver = "3.22.56";
+    // Compare versions: current is "3.22.57"
+    let current_ver = "3.22.57";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
@@ -7161,57 +7107,55 @@ fn update_so() -> String {
 
     // Step 5: Try to write directly next to the old SO first
     // If that fails (read-only directory), write to a writable fallback location
-    let write_result = std::fs::write(&tmp_path, &data);
-    let final_path = if write_result.is_ok() {
-        // Try replacing the original
-        if let Err(e) = std::fs::remove_file(&so_path) {
-            let _ = std::fs::remove_file(&tmp_path);
-            // Original dir not writable, try fallback
-            format!(r#"{{"error":"unlink_old_failed","detail":"{}"}}"#, e)
-        } else if let Err(e) = std::fs::rename(&tmp_path, &so_path) {
-            format!(r#"{{"error":"rename_failed","detail":"{}"}}"#, e)
+    // ★ v3.22.57: Extract fallback write into helper to avoid code duplication
+    // When direct write + remove/rename fails, try fallback paths instead of returning error
+    let direct_ok = std::fs::write(&tmp_path, &data).is_ok();
+    let replaced = if direct_ok {
+        if std::fs::remove_file(&so_path).is_ok() && std::fs::rename(&tmp_path, &so_path).is_ok() {
+            true
         } else {
-            return format!(
-                r#"{{"status":"updated","old":"{}","new":"{}","so_path":"{}","hint":"restart_game_to_apply"}}"#,
-                current_ver, tag_name, so_path
-            );
+            // Tmp written but can't replace original — clean up tmp, try fallback
+            let _ = std::fs::remove_file(&tmp_path);
+            false
         }
     } else {
-        // Direct write failed — try fallback path
-        let fb_dir = "/data/local/tmp";
-        let fb_path = format!("{}/libhachimi_ura.so", fb_dir);
-        let fb_tmp = format!("{}.tmp", fb_path);
-        match std::fs::write(&fb_tmp, &data) {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&fb_path);
-                match std::fs::rename(&fb_tmp, &fb_path) {
-                    Ok(_) => {},
-                    Err(e) => return format!(r#"{{"error":"rename_fallback_failed","detail":"{}"}}"#, e),
-                }
-            },
-            Err(_) => {
-                // Last resort: /sdcard/Download
-                let sd_path = "/sdcard/Download/libhachimi_ura.so";
-                match std::fs::write(sd_path, &data) {
-                    Ok(_) => {
-                        return format!(
-                            r#"{{"status":"downloaded_to_sdcard","old":"{}","new":"{}","path":"{}","hint":"install_manually_then_restart"}}"#,
-                            current_ver, tag_name, sd_path
-                        );
-                    },
-                    Err(e) => return format!(r#"{{"error":"write_all_failed","detail":"{}"}}"#, e),
-                }
+        false
+    };
+    if replaced {
+        return format!(
+            r#"{{"status":"updated","old":"{}","new":"{}","so_path":"{}","hint":"restart_game_to_apply"}}"#,
+            current_ver, tag_name, so_path
+        );
+    }
+    // Fallback: try /data/local/tmp, then /sdcard/Download
+    let fb_dir = "/data/local/tmp";
+    let fb_path = format!("{}/libhachimi_ura.so", fb_dir);
+    let fb_tmp = format!("{}.tmp", fb_path);
+    match std::fs::write(&fb_tmp, &data) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&fb_path);
+            match std::fs::rename(&fb_tmp, &fb_path) {
+                Ok(_) => {},
+                Err(e) => return format!(r#"{{"error":"rename_fallback_failed","detail":"{}"}}"#, e),
+            }
+        },
+        Err(_) => {
+            // Last resort: /sdcard/Download
+            let sd_path = "/sdcard/Download/libhachimi_ura.so";
+            match std::fs::write(sd_path, &data) {
+                Ok(_) => {
+                    return format!(
+                        r#"{{"status":"downloaded_to_sdcard","old":"{}","new":"{}","path":"{}","hint":"install_manually_then_restart"}}"#,
+                        current_ver, tag_name, sd_path
+                    );
+                },
+                Err(e) => return format!(r#"{{"error":"write_all_failed","detail":"{}"}}"#, e),
             }
         }
-        fb_path
-    };
-    // If we get here with a string starting with {, it's an error
-    if final_path.starts_with('{') {
-        return final_path;
     }
     format!(
         r#"{{"status":"updated_to_fallback","old":"{}","new":"{}","so_path":"{}","hint":"restart_game_to_apply"}}"#,
-        current_ver, tag_name, final_path
+        current_ver, tag_name, fb_path
     )
 }
 
