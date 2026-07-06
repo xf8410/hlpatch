@@ -9175,22 +9175,7 @@ unsafe fn il2cpp_read_static_fields(class_name: &str) -> String {
         if p.is_null() { None } else { Some(std::mem::transmute(p)) }
     };
 
-    // ★ v3.22.79: 解析il2cpp_field_get_default_value
-    // 正确签名: void il2cpp_field_get_default_value(FieldInfo* field, void** value)
-    // 之前写错了签名(1个参数返回指针)，实际是2个参数返回void
-    let field_get_default_value: Option<unsafe extern "C" fn(*const c_void, *mut *const c_void)> = {
-        // 先用il2cpp_resolve_symbol
-        let p = resolve_il2cpp_symbol("il2cpp_field_get_default_value");
-        if p.is_null() {
-            // 回退：用dlsym直接搜索所有已加载SO（RTLD_DEFAULT=0）
-            extern "C" { fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void; }
-            let sym = to_cstr("il2cpp_field_get_default_value");
-            let p2 = unsafe { dlsym(ptr::null_mut(), sym.as_ptr()) };
-            if p2.is_null() { None } else { Some(std::mem::transmute(p2)) }
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
+    // ★ v3.22.79: il2cpp_field_get_default_value API不存在，enum值改为C#规范推算
 
     // ★ v3.22.79: 检查类是否是enum — enum类的字段没有运行时静态存储
     // 对enum类调get_static_field_value会闪退，需要特殊处理
@@ -9205,75 +9190,30 @@ unsafe fn il2cpp_read_static_fields(class_name: &str) -> String {
     };
 
     if is_enum_class {
-        // enum类：遍历字段，从metadata的FieldDefaultValues读取常量值
-        // enum值的存储方式：底层int存在metadata的default_value表中
+        // ★ v3.22.79: enum值推算
+        // il2cpp_field_get_default_value API在此版本IL2CPP中不存在
+        // C# enum规范：字段按声明顺序赋值，从0递增（除非显式赋值）
+        // 排除内部字段(value__/enumSeperatorCharArray/enumSeperator)，
+        // 剩余命名常量按顺序编号
+        let internal_names = ["value__", "enumSeperatorCharArray", "enumSeperator"];
+        let mut enum_idx: i32 = 0;
         for (fname, offset, type_ptr) in &fields {
             let type_enum = il2cpp_type_get_type_enum(*type_ptr);
-            // 尝试从field_get_default_value读取（如果可用）
-            let field_info = match (*API).il2cpp_get_field_from_name_fn {
-                Some(f) => f(class, to_cstr(fname).as_ptr()),
-                None => ptr::null_mut(),
-            };
-            if field_info.is_null() {
+            // 内部字段标记为internal
+            if internal_names.contains(&fname.as_str()) {
                 results.push(format!(
-                    r#"{{"name":"{}","offset":{},"type":{},"value":null,"enum":true}}"#,
+                    r#"{{"name":"{}","offset":{},"type":{},"value":null,"enum":true,"internal":true}}"#,
                     json_escape(fname), offset, type_enum
                 ));
                 continue;
             }
-            // ★ v3.22.79: 用正确签名调用il2cpp_field_get_default_value
-            // void il2cpp_field_get_default_value(FieldInfo* field, void** value)
-            let val_str = match field_get_default_value {
-                Some(get_default) => {
-                    // 第二个参数是 void**，函数把默认值指针写入 *value
-                    let mut default_ptr: *const c_void = ptr::null();
-                    get_default(field_info, &mut default_ptr as *mut *const c_void);
-                    if default_ptr.is_null() {
-                        "null".to_string()
-                    } else {
-                        // enum底层类型通常是I4，从metadata默认值指针读
-                        match type_enum {
-                            IL2CPP_TYPE_I4 | IL2CPP_TYPE_VALUETYPE => {
-                                let v = std::ptr::read_unaligned::<i32>(default_ptr as *const i32);
-                                format!("{}", v)
-                            }
-                            IL2CPP_TYPE_U4 => {
-                                let v = std::ptr::read_unaligned::<u32>(default_ptr as *const u32);
-                                format!("{}", v)
-                            }
-                            IL2CPP_TYPE_I8 => {
-                                let v = std::ptr::read_unaligned::<i64>(default_ptr as *const i64);
-                                format!("{}", v)
-                            }
-                            IL2CPP_TYPE_U8 => {
-                                let v = std::ptr::read_unaligned::<u64>(default_ptr as *const u64);
-                                format!("{}", v)
-                            }
-                            IL2CPP_TYPE_R4 => {
-                                let v = std::ptr::read_unaligned::<f32>(default_ptr as *const f32);
-                                format!("{}", v)
-                            }
-                            IL2CPP_TYPE_R8 => {
-                                let v = std::ptr::read_unaligned::<f64>(default_ptr as *const f64);
-                                format!("{}", v)
-                            }
-                            IL2CPP_TYPE_BOOLEAN => {
-                                let v = std::ptr::read_unaligned::<u8>(default_ptr as *const u8);
-                                if v != 0 { "true".to_string() } else { "false".to_string() }
-                            }
-                            _ => {
-                                let raw = std::ptr::read_unaligned::<i64>(default_ptr as *const i64);
-                                format!(r#"{{"raw":{}}}"#, raw)
-                            }
-                        }
-                    }
-                }
-                None => "null".to_string(),
-            };
+            // ★ 命名常量：按C#规范推算值 = 声明顺序索引
+            // 如果有显式赋值（非默认），此处推算值会不准确，标注inferred
             results.push(format!(
-                r#"{{"name":"{}","offset":{},"type":{},"value":{},"enum":true}}"#,
-                json_escape(fname), offset, type_enum, val_str
+                r#"{{"name":"{}","offset":{},"type":{},"value":{},"enum":true,"inferred":true}}"#,
+                json_escape(fname), offset, type_enum, enum_idx
             ));
+            enum_idx += 1;
         }
         return format!(
             r#"{{"ok":true,"requested":"{}","found":"{}","field_count":{},"is_enum":true,"fields":[{}]}}"#,
