@@ -6674,47 +6674,58 @@ fn mdb_raw_query(sql: &str) -> String {
         format!("{} LIMIT 1000", sql_trimmed)
     };
 
-    match conn.prepare(&final_sql) {
-        Ok(mut stmt) => {
-            let col_count = stmt.column_count();
-            let col_names: Vec<String> = (0..col_count).map(|i| {
-                stmt.column_name(i).unwrap_or("?").to_string()
-            }).collect();
+    // 用 if let Ok 模式避免 conn 生命周期问题（与现有代码风格一致）
+    let mut col_names: Vec<String> = Vec::new();
+    let mut rows: Vec<String> = Vec::new();
+    let mut prepare_ok = false;
 
-            let rows: Vec<String> = stmt.query_map([], |row| {
-                let mut pairs: Vec<String> = Vec::new();
-                for ci in 0..col_count {
-                    let cn = col_names.get(ci).unwrap_or(&String::new()).clone();
-                    let int_val = row.get::<_, Option<i64>>(ci).unwrap_or(None);
-                    let val = if let Some(v) = int_val {
-                        v.to_string()
-                    } else {
-                        let str_val = row.get::<_, Option<String>>(ci).unwrap_or(None);
-                        match str_val {
-                            Some(s) => format!(r#""{}""#, json_escape(&s)),
-                            None => {
-                                // 尝试读f64
-                                let float_val = row.get::<_, Option<f64>>(ci).unwrap_or(None);
-                                match float_val {
-                                    Some(f) => format!("{}", f),
-                                    None => "null".to_string(),
-                                }
+    if let Ok(mut stmt) = conn.prepare(&final_sql) {
+        prepare_ok = true;
+        let col_count = stmt.column_count();
+        col_names = (0..col_count).map(|i| {
+            stmt.column_name(i).unwrap_or("?").to_string()
+        }).collect();
+
+        // query_map 返回的 Rows 借用 stmt，用 if let Ok 消费后释放借用
+        if let Ok(mapped) = stmt.query_map([], |row| {
+            let mut pairs: Vec<String> = Vec::new();
+            for ci in 0..col_count {
+                let cn = col_names.get(ci).unwrap_or(&String::new()).clone();
+                let int_val = row.get::<_, Option<i64>>(ci).unwrap_or(None);
+                let val = if let Some(v) = int_val {
+                    v.to_string()
+                } else {
+                    let str_val = row.get::<_, Option<String>>(ci).unwrap_or(None);
+                    match str_val {
+                        Some(s) => format!(r#""{}""#, json_escape(&s)),
+                        None => {
+                            // 尝试读f64
+                            let float_val = row.get::<_, Option<f64>>(ci).unwrap_or(None);
+                            match float_val {
+                                Some(f) => format!("{}", f),
+                                None => "null".to_string(),
                             }
                         }
-                    };
-                    pairs.push(format!(r#""{}":{}"#, json_escape(&cn), val));
-                }
-                Ok(format!(r#"{{{}}}"#, pairs.join(",")))
-            }).ok().map(|iter| iter.filter_map(|r| r.ok()).collect()).unwrap_or_default();
-
-            let col_json: Vec<String> = col_names.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
-            format!(
-                r#"{{"ok":true,"sql":"{}","columns":[{}],"row_count":{},"rows":[{}]}}"#,
-                json_escape(&final_sql), col_json.join(","), rows.len(), rows.join(",")
-            )
+                    }
+                };
+                pairs.push(format!(r#""{}":{}"#, json_escape(&cn), val));
+            }
+            Ok(format!(r#"{{{}}}"#, pairs.join(",")))
+        }) {
+            rows = mapped.filter_map(|r| r.ok()).collect();
         }
-        Err(e) => format!(r#"{{"ok":false,"error":"query_failed","detail":"{}"}}"#, e),
     }
+    // stmt 在这里已 drop，conn 的借用释放
+
+    if !prepare_ok {
+        return format!(r#"{{"ok":false,"error":"query_failed"}}"#);
+    }
+
+    let col_json: Vec<String> = col_names.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
+    format!(
+        r#"{{"ok":true,"sql":"{}","columns":[{}],"row_count":{},"rows":[{}]}}"#,
+        json_escape(&final_sql), col_json.join(","), rows.len(), rows.join(",")
+    )
 }
 
 
