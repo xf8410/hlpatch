@@ -4323,14 +4323,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // v3.22.84: 在代码段搜索浮点常量（方案D）
         let value_str = parse_query(&full_uri, "value");
         unsafe { il2cpp_search_float(&value_str) }
+    } else if path == "/il2cpp/search_methods_page" {
+        // v3.22.84: 搜索方法名HTML页面（A-Z分组）
+        search_methods_page()
     } else if path.starts_with("/il2cpp/search_methods_dl") {
         // v3.22.84: 跨类搜索方法名（下载JSON文件）
         let keyword = parse_query(&full_uri, "keyword");
-        unsafe { il2cpp_search_methods(&keyword) }
+        let letter = parse_query(&full_uri, "letter");
+        unsafe { il2cpp_search_methods(&keyword, &letter) }
     } else if path.starts_with("/il2cpp/search_methods") {
         // v3.22.84: 跨类搜索方法名关键词
         let keyword = parse_query(&full_uri, "keyword");
-        unsafe { il2cpp_search_methods(&keyword) }
+        let letter = parse_query(&full_uri, "letter");
+        unsafe { il2cpp_search_methods(&keyword, &letter) }
     } else if path == "/mdb" {
         // v3.22.51: Serve raw MasterDB file for client-side processing
         // Uses marker string; binary file sent in response handler below
@@ -4339,7 +4344,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_methods","/il2cpp/search_methods_dl"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -9671,10 +9676,23 @@ fn type_enum_to_name(te: u8) -> String {
     }
 }
 
+/// v3.22.84: /il2cpp/search_methods_page — 搜索方法名HTML页面（A-Z分组下载）
+fn search_methods_page() -> String {
+    let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut btns = String::new();
+    for ch in letters.chars() {
+        btns.push_str(&format!(
+            r#"<button class="g" onclick="goLetter('{}')">{}</button> "#,
+            ch, ch
+        ));
+    }
+    format!(r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Search Methods</title><style>body{{font-family:system-ui;max-width:600px;margin:12px auto;padding:0 8px;background:#1a1a2e;color:#e0e0e0}}h1{{color:#4fc3f7;font-size:1.2em;margin:8px 0}}.g{{display:inline-block;margin:4px 2px;padding:8px 12px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;cursor:pointer;font-size:14px;min-width:36px;text-align:center}}.g:disabled{{background:#555;color:#333;cursor:default}}.g.ok{{background:#2e7d32;border-color:#4caf50}}.g.run{{background:#e65100;border-color:#ff9800}}input{{width:100%;padding:8px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;box-sizing:border-box;font-size:16px}}.p{{margin:8px 0;font-size:0.95em}}.ok{{color:#4caf50}}.err{{color:#ff5252}}#lst{{margin:8px 0;font-size:0.8em;color:#aaa;max-height:300px;overflow-y:auto}}</style></head><body><h1>IL2CPP Method Search</h1><input id="kw" placeholder="keyword (e.g. Motivation)" value="Motivation"><div style="margin:8px 0">{}</div><div class="p">Click a letter to search classes starting with that letter, or click ALL for all classes. Results download as JSON.</div><div class="p" id="pg">Ready</div><div id="lst"></div><script>function goLetter(ch){{var kw=document.getElementById("kw").value;if(!kw){{document.getElementById("pg").innerHTML='<span class="err">Enter a keyword first</span>';return;}}var btn=event.target;btn.disabled=true;btn.className="g run";var url="/il2cpp/search_methods_dl?keyword="+encodeURIComponent(kw)+"&letter="+ch;document.getElementById("pg").innerHTML='<span class="ok">Searching '+ch+'...</span>';fetch(url).then(r=>{{if(!r.ok)throw new Error("HTTP "+r.status);return r.blob();}}).then(blob=>{{var url2=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url2;a.download="search_methods_"+ch+"_"+kw+".json";a.click();URL.revokeObjectURL(url2);btn.className="g ok";btn.disabled=false;document.getElementById("pg").innerHTML='<span class="ok">'+ch+': downloaded!</span>';}}).catch(e=>{{btn.className="g ok";btn.disabled=false;document.getElementById("pg").innerHTML='<span class="err">Error: '+e+'</span>';}});}}</script></body></html>"#, btns)
+}
+
 /// v3.22.84: /il2cpp/search_methods?keyword=X — 跨类搜索方法名
 /// 遍历所有IL2CPP类的方法表，按方法名关键词过滤，返回匹配的类名+方法名
 /// 用于定位やる気系数等散落在各类中的计算方法
-unsafe fn il2cpp_search_methods(keyword: &str) -> String {
+unsafe fn il2cpp_search_methods(keyword: &str, letter: &str) -> String {
     if keyword.is_empty() {
         return r#"{"error":"missing ?keyword= parameter"}"#.to_string();
     }
@@ -9748,6 +9766,13 @@ unsafe fn il2cpp_search_methods(keyword: &str) -> String {
         } else {
             String::new()
         };
+
+        // 按类名首字母过滤（letter参数，A-Z分组下载对策）
+        if !letter.is_empty() {
+            let first = class_name.chars().next().unwrap_or('_').to_ascii_uppercase();
+            let target = letter.chars().next().unwrap_or('_').to_ascii_uppercase();
+            if first != target { continue; }
+        }
 
         // 遍历该类的所有方法
         let mut iter: *mut c_void = ptr::null_mut();
