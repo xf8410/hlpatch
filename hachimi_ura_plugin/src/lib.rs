@@ -4000,7 +4000,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.85","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/search_float","/il2cpp/search_methods","/il2cpp/search_methods_dl"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.85","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/search_float","/il2cpp/search_methods","/il2cpp/search_methods_dl"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4319,6 +4319,13 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // v3.22.85: 列出类的所有方法名和参数数量
         let class_name = parse_query(&full_uri, "name");
         unsafe { il2cpp_list_methods(&class_name) }
+    } else if path.starts_with("/il2cpp/disassemble_dl") {
+        // v3.22.85: 反汇编结果下载JSON文件（手机浏览器复制上限对策）
+        let class_name = parse_query(&full_uri, "class");
+        let method_name = parse_query(&full_uri, "method");
+        let bytes_str = parse_query(&full_uri, "bytes");
+        let bytes_limit = bytes_str.parse::<usize>().unwrap_or(2048);
+        unsafe { il2cpp_disassemble(&class_name, &method_name, bytes_limit) }
     } else if path.starts_with("/il2cpp/disassemble") {
         // v3.22.85: 反汇编IL2CPP方法的ARM64指令体
         let class_name = parse_query(&full_uri, "class");
@@ -4384,6 +4391,20 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"saddles.json\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(), body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+    } else if path == "/il2cpp/disassemble_dl" {
+        // v3.22.85: 反汇编结果下载为JSON文件
+        let cn = parse_query(&full_uri, "class");
+        let mn = parse_query(&full_uri, "method");
+        let safe_name: String = format!("{}_{}", 
+            cn.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect::<String>(),
+            mn.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect::<String>()
+        );
+        let fname = format!("disassemble_{}.json", if safe_name.is_empty() { "output" } else { safe_name });
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            fname, body.len(), body
         );
         let _ = stream.write_all(resp.as_bytes());
     } else if path == "/il2cpp/search_methods_dl" {
