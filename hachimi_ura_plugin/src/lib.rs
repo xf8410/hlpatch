@@ -9175,11 +9175,98 @@ unsafe fn il2cpp_read_static_fields(class_name: &str) -> String {
         if p.is_null() { None } else { Some(std::mem::transmute(p)) }
     };
 
-    // ★ v3.22.78: 解析il2cpp_field_get_default_value，用于读取literal字段的编译期常量
+    // ★ v3.22.78: 解析il2cpp_field_get_default_value，用于读取literal/enum字段的编译期常量
     let field_get_default_value: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> = {
         let p = resolve_il2cpp_symbol("il2cpp_field_get_default_value");
         if p.is_null() { None } else { Some(std::mem::transmute(p)) }
     };
+
+    // ★ v3.22.78: 检查类是否是enum — enum类的字段没有运行时静态存储
+    // 对enum类调get_static_field_value会闪退，需要特殊处理
+    let is_enum_class: bool = {
+        let is_enum_fn = resolve_il2cpp_symbol("il2cpp_class_is_enum");
+        if !is_enum_fn.is_null() {
+            let f: unsafe extern "C" fn(*mut c_void) -> bool = std::mem::transmute(is_enum_fn);
+            f(class)
+        } else {
+            false
+        }
+    };
+
+    if is_enum_class {
+        // enum类：遍历字段，从metadata的FieldDefaultValues读取常量值
+        // enum值的存储方式：底层int存在metadata的default_value表中
+        for (fname, offset, type_ptr) in &fields {
+            let type_enum = il2cpp_type_get_type_enum(*type_ptr);
+            // 尝试从field_get_default_value读取（如果可用）
+            let field_info = match (*API).il2cpp_get_field_from_name_fn {
+                Some(f) => f(class, to_cstr(fname).as_ptr()),
+                None => ptr::null_mut(),
+            };
+            if field_info.is_null() {
+                results.push(format!(
+                    r#"{{"name":"{}","offset":{},"type":{},"value":null,"enum":true}}"#,
+                    json_escape(fname), offset, type_enum
+                ));
+                continue;
+            }
+            // 尝试用field_get_default_value读取enum值
+            let val_str = match field_get_default_value {
+                Some(get_default) => {
+                    let default_ptr = get_default(field_info);
+                    if default_ptr.is_null() {
+                        "null".to_string()
+                    } else {
+                        match type_enum {
+                            IL2CPP_TYPE_I4 | IL2CPP_TYPE_VALUETYPE => {
+                                let v = std::ptr::read_unaligned::<i32>(default_ptr as *const i32);
+                                format!("{}", v)
+                            }
+                            IL2CPP_TYPE_U4 => {
+                                let v = std::ptr::read_unaligned::<u32>(default_ptr as *const u32);
+                                format!("{}", v)
+                            }
+                            IL2CPP_TYPE_I8 => {
+                                let v = std::ptr::read_unaligned::<i64>(default_ptr as *const i64);
+                                format!("{}", v)
+                            }
+                            IL2CPP_TYPE_U8 => {
+                                let v = std::ptr::read_unaligned::<u64>(default_ptr as *const u64);
+                                format!("{}", v)
+                            }
+                            IL2CPP_TYPE_R4 => {
+                                let v = std::ptr::read_unaligned::<f32>(default_ptr as *const f32);
+                                format!("{}", v)
+                            }
+                            IL2CPP_TYPE_R8 => {
+                                let v = std::ptr::read_unaligned::<f64>(default_ptr as *const f64);
+                                format!("{}", v)
+                            }
+                            IL2CPP_TYPE_BOOLEAN => {
+                                let v = std::ptr::read_unaligned::<u8>(default_ptr as *const u8);
+                                if v != 0 { "true".to_string() } else { "false".to_string() }
+                            }
+                            _ => {
+                                let raw = std::ptr::read_unaligned::<i64>(default_ptr as *const i64);
+                                format!(r#"{{"raw":{}}}"#, raw)
+                            }
+                        }
+                    }
+                }
+                None => "null".to_string(),
+            };
+            results.push(format!(
+                r#"{{"name":"{}","offset":{},"type":{},"value":{},"enum":true}}"#,
+                json_escape(fname), offset, type_enum, val_str
+            ));
+        }
+        return format!(
+            r#"{{"ok":true,"requested":"{}","found":"{}","field_count":{},"is_enum":true,"fields":[{}]}}"#,
+            class_name, real_name, results.len(), results.join(",")
+        );
+    }
+
+
 
     for (fname, offset, type_ptr) in &fields {
         let type_enum = il2cpp_type_get_type_enum(*type_ptr);
