@@ -4376,9 +4376,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let _ = stream.write_all(resp.as_bytes());
     } else if path == "/il2cpp/search_methods_dl" {
         // v3.22.84: 搜索方法结果下载为JSON文件（手机浏览器复制上限对策）
+        let kw = parse_query(&full_uri, "keyword");
+        let safe_kw: String = kw.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
+        let fname = format!("search_methods_{}.json", if safe_kw.is_empty() { "all".into() } else { safe_kw });
         let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"search_methods.json\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(), body
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            fname, body.len(), body
         );
         let _ = stream.write_all(resp.as_bytes());
     } else {
