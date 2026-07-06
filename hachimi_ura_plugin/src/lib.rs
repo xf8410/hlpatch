@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.74
+//! URA Plugin v3.22.75
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3128,7 +3128,7 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
-    // ★ v3.22.74: Gauge gains per training command (from DataSet CommandInfoArray, target_type=30)
+    // ★ v3.22.75: Gauge gains per training command (from DataSet CommandInfoArray, target_type=30)
     let mut ramen_gauge_gains_json = String::new();
     // ★ v3.22.51: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
     // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
@@ -3286,7 +3286,7 @@ unsafe fn read_summary_inner_impl() -> String {
                             let mut sg = [0i32; 5]; // [Speed, Stamina, Power, Guts, Wisdom]
                             let mut spt = 0i32;
                             let mut vc = 0i32;
-                            // ★ v3.22.74: Merged gauge_gain into single loop (was separate redundant loop)
+                            // ★ v3.22.75: Merged gauge_gain into single loop (was separate redundant loop)
                             let mut gauge_gain = 0i32;
                             for pi in 0..ce_plen {
                                 let pe = std::ptr::read_unaligned::<*mut c_void>(
@@ -3326,7 +3326,7 @@ unsafe fn read_summary_inner_impl() -> String {
                         }
                     }
                 }
-                // ★ v3.22.74: Build gauge_gains JSON from ramen_gauge_gains_map
+                // ★ v3.22.75: Build gauge_gains JSON from ramen_gauge_gains_map
                 if !ramen_gauge_gains_map.is_empty() {
                     let mut gg_parts: Vec<String> = Vec::new();
                     for (&cmd_id, &gauge_val) in &ramen_gauge_gains_map {
@@ -3463,7 +3463,7 @@ unsafe fn read_summary_inner_impl() -> String {
                             }
                         }
 
-                        // ★ v3.22.74: Ramen gains — always use DataSet CommandInfoArray gains
+                        // ★ v3.22.75: Ramen gains — always use DataSet CommandInfoArray gains
                         // HomeInfoData.ParamsIncDecInfoArray gives wrong values for Ramen
                         // (ObscuredInt vs plain int mismatch, values like Speed:1 instead of 14)
                         if sid == 14 {
@@ -3515,9 +3515,9 @@ unsafe fn read_summary_inner_impl() -> String {
     ura_log(3, "★ read_summary phase3: support cards");
     log_predict_step("S:p3 cards");
     let mut sc_json = "[]".to_string();
-    // ★ v3.22.74: Fix support_cards — use get_EquipSupportCardArray getter
+    // ★ v3.22.75: Fix support_cards — use get_EquipSupportCardArray getter
     // Root cause: field name is "EquipSupportCardArray" not "SupportCardArray"
-    // v3.22.74's cached_find_field_offset("SupportCardArray") hit wrong field via substring match
+    // v3.22.75's cached_find_field_offset("SupportCardArray") hit wrong field via substring match
     // Also: position/supportCardId/limitBreakCount are ObscuredInt, not plain int
     let mut sc_arr: *mut c_void = ptr::null_mut();
     // Method 1: getter on chara_class (most reliable)
@@ -3540,7 +3540,7 @@ unsafe fn read_summary_inner_impl() -> String {
             for i in 0..al {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                 if ep.is_null() { continue; }
-                // ★ v3.22.74: Use getter methods for ObscuredInt fields
+                // ★ v3.22.75: Use getter methods for ObscuredInt fields
                 // position/supportCardId/limitBreakCount are ObscuredInt, can't read as plain int
                 let sc_elem_class = get_class_from_object(ep);
                 let (position, support_card_id, limit_break_count, training_partner_state) = if !sc_elem_class.is_null() {
@@ -3712,7 +3712,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                 }
                             }
                         }
-                        // ★ v3.22.74: Removed dead Ramen buffs code here
+                        // ★ v3.22.75: Removed dead Ramen buffs code here
                         // (sid==14 sets scenario_obj=null, so this block never executes for Ramen.
                         //  Ramen buffs are handled below after the scenario_obj block.)
                     }
@@ -3813,7 +3813,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.74","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.75","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3900,7 +3900,7 @@ fn push_loop() {
         let summary = read_summary();
         if summary.contains("\"error\"") {
             consecutive_errors += 1;
-            // ★ v3.22.74: Extra cooldown for SIGSEGV recovery — game state transition
+            // ★ v3.22.75: Extra cooldown for SIGSEGV recovery — game state transition
             if summary.contains("sigsegv") {
                 let cool = std::time::Duration::from_secs(60);
                 unsafe { ura_log(2, "Push: SIGSEGV recovered, cooling 60s for game state transition"); }
@@ -4000,7 +4000,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.74","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.75","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4255,8 +4255,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
             format!(r#"{{"ok":true,"config":{}}}"#, unsafe { get_config() }.to_json())
         }
     } else if path == "/debug/dump" {
-        // v3.22.74: Dump tool - group tables by first letter, one file per group
-        let html = r#"<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dump</title><style>body{font-family:system-ui;max-width:600px;margin:12px auto;padding:0 8px;background:#1a1a2e;color:#e0e0e0}h1{color:#4fc3f7;font-size:1.2em;margin:8px 0}.g{display:inline-block;margin:4px 2px;padding:8px 12px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;cursor:pointer;font-size:14px;min-width:36px;text-align:center}.g:disabled{background:#555;color:#333;cursor:default}.g.ok{background:#2e7d32;border-color:#4caf50}.g.err{background:#b71c1c;border-color:#ff5252}.g.run{background:#e65100;border-color:#ff9800}select{padding:8px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;font-size:16px;width:100%}button{padding:12px 24px;border:none;border-radius:4px;color:#000;font-weight:bold;cursor:pointer;font-size:16px;margin:4px}#btn{background:#4fc3f7}#btn:disabled{background:#555;color:#333}.p{margin:8px 0;font-size:0.95em}.ok{color:#4caf50}.err{color:#ff5252}progress{width:100%;height:20px;margin:8px 0}#lst{margin:8px 0;font-size:0.8em;color:#aaa;max-height:300px;overflow-y:auto}</style></head><body><h1>MDB Dump Tool</h1><div class="p" id="pg2">Loading table list...</div><div id="groups"></div><hr><select id="tn"><option value="">-- loading --</option></select><button id="btn" onclick="goOne()" disabled>Dump 1 Table</button><div class="p" id="pg">Press a letter group to dump all tables in that group as one file</div><progress id="pb" value="0" max="100"></progress><div id="lst"></div><script>var tables=[];var groups={};async function loadTables(){try{var r=await fetch("/debug/mdb_all_tables");var j=await r.json();if(!j.ok){document.getElementById("pg2").innerHTML=`<span class="err">Error: ${j.error||"unknown"}</span>`;return;}tables=j.all_tables||[];var sel=document.getElementById("tn");sel.innerHTML="";groups={};for(var i=0;i<tables.length;i++){var t=tables[i];var o=document.createElement("option");o.value=t.name;o.textContent=t.name+" ("+t.rows+")";sel.appendChild(o);var fl=t.name[0].toUpperCase();if(!groups[fl])groups[fl]=[];groups[fl].push(t);}document.getElementById("btn").disabled=false;document.getElementById("pg2").innerHTML=`<span class="ok">${tables.length} tables in ${Object.keys(groups).length} groups</span>`;renderGroups();}catch(e){document.getElementById("pg2").innerHTML=`<span class="err">Fetch error: ${e}</span>`;}}function renderGroups(){var div=document.getElementById("groups");div.innerHTML="";var keys=Object.keys(groups).sort();for(var k=0;k<keys.length;k++){var key=keys[k];var btn=document.createElement("button");btn.className="g";btn.textContent=key+" ("+groups[key].length+")";btn.setAttribute("data-key",key);btn.onclick=function(){goGroup(this.getAttribute("data-key"),this);};div.appendChild(btn);}}async function dumpTable(n,onProgress){var allRows=[];var off=0;var total=0;var batch=100;var done=false;while(!done){try{var r=await fetch("/debug/table?name="+n+"&limit="+batch+"&offset="+off);var j=await r.json();if(!j.ok){return{ok:false,error:j.error||"unknown"};}total=j.row_count||total;var nr=j.rows?j.rows.length:0;if(nr===0){done=true;break;}allRows=allRows.concat(j.rows);off+=nr;if(onProgress)onProgress(off,total);done=off>=total||nr<batch;}catch(e){return{ok:false,error:""+e};}}return{ok:true,table:n,row_count:total,rows_merged:allRows.length,rows:allRows};}function downloadJson(data,filename){var result=JSON.stringify(data);var blob=new Blob([result],{type:"application/json"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);}async function goGroup(key,btn){btn.disabled=true;btn.className="g run";var tbls=groups[key];var result={group:key,tables:{}};var log=document.getElementById("lst");log.innerHTML="";var ok=0,fail=0;for(var i=0;i<tbls.length;i++){var t=tbls[i];document.getElementById("pg").innerHTML=`<span class="ok">[${key}] ${(i+1)}/${tbls.length} ${t.name} (${t.rows} rows)...</span>`;document.getElementById("pb").value=Math.round((i+1)/tbls.length*100);if(t.rows===0){result.tables[t.name]={ok:true,rows:0,data:[]};log.innerHTML+=t.name+": skip (0)<br>";ok++;continue;}var res=await dumpTable(t.name);if(res.ok&&res.rows_merged>0){result.tables[t.name]={ok:true,row_count:res.row_count,rows_merged:res.rows_merged,rows:res.rows};log.innerHTML+=t.name+`: <span class="ok">${res.rows_merged}</span><br>`;ok++;}else{result.tables[t.name]={ok:false,error:res.error||"no rows"};log.innerHTML+=t.name+`: <span class="err">${res.error||"no rows"}</span><br>`;fail++;}}var fname="mdb_"+key.toLowerCase()+".json";downloadJson(result,fname);btn.className=ok>0&&fail===0?"g ok":"g err";btn.disabled=false;document.getElementById("pg").innerHTML=`<span class="ok">${key}: ${ok} OK, ${fail} fail -> ${fname}</span>`;document.getElementById("pb").value=0;}async function goOne(){var b=document.getElementById("btn");var n=document.getElementById("tn").value;if(!n)return;b.disabled=true;document.getElementById("pg").innerHTML=`<span class="ok">Dumping ${n}...</span>`;var res=await dumpTable(n,function(off,total){var pct=total>0?Math.round(off/total*100):0;document.getElementById("pb").value=pct;document.getElementById("pg").innerHTML="Dumping "+n+": "+off+"/"+total+" ("+pct+"%)";});if(res.ok&&res.rows_merged>0){downloadJson(res,n+".json");document.getElementById("pg").innerHTML=`<span class="ok">Done! ${res.rows_merged}/${res.row_count} -> ${n}.json</span>`;}else{document.getElementById("pg").innerHTML=`<span class="err">${res.error?"Error: "+res.error:"No rows found"}</span>`;}document.getElementById("pb").value=0;b.disabled=false;}loadTables();</script></body></html>"#.to_string();
+        // v3.22.75: Dump tool - group tables by first letter, one file per group
+        let html = r#"<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dump</title><style>body{font-family:system-ui;max-width:600px;margin:12px auto;padding:0 8px;background:#1a1a2e;color:#e0e0e0}h1{color:#4fc3f7;font-size:1.2em;margin:8px 0}.g{display:inline-block;margin:4px 2px;padding:8px 12px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;cursor:pointer;font-size:14px;min-width:36px;text-align:center}.g:disabled{background:#555;color:#333;cursor:default}.g.ok{background:#2e7d32;border-color:#4caf50}.g.err{background:#b71c1c;border-color:#ff5252}.g.run{background:#e65100;border-color:#ff9800}select{padding:8px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;font-size:16px;width:100%}button{padding:12px 24px;border:none;border-radius:4px;color:#000;font-weight:bold;cursor:pointer;font-size:16px;margin:4px}#btn{background:#4fc3f7}#btn:disabled{background:#555;color:#333}.p{margin:8px 0;font-size:0.95em}.ok{color:#4caf50}.err{color:#ff5252}progress{width:100%;height:20px;margin:8px 0}#lst{margin:8px 0;font-size:0.8em;color:#aaa;max-height:300px;overflow-y:auto}</style></head><body><h1>MDB Dump Tool</h1><div class="p" id="pg2">Loading table list...</div><div id="groups"></div><hr><select id="tn"><option value="">-- loading --</option></select><button id="btn" onclick="goOne()" disabled>Dump 1 Table</button><div class="p" id="pg">Press a letter group to dump all tables in that group as one file</div><progress id="pb" value="0" max="100"></progress><div id="lst"></div><script>function safeJson(t){try{return JSON.parse(t)}catch(e){return JSON.parse(t.replace(/[\x00-\x1f]/g,function(c){return"\\u"+("0000"+c.charCodeAt(0).toString(16)).slice(-4)}))}}var tables=[];var groups={};async function loadTables(){try{var r=await fetch("/debug/mdb_all_tables");var j=safeJson(await r.text());if(!j.ok){document.getElementById("pg2").innerHTML=`<span class="err">Error: ${j.error||"unknown"}</span>`;return;}tables=j.all_tables||[];var sel=document.getElementById("tn");sel.innerHTML="";groups={};for(var i=0;i<tables.length;i++){var t=tables[i];var o=document.createElement("option");o.value=t.name;o.textContent=t.name+" ("+t.rows+")";sel.appendChild(o);var fl=t.name[0].toUpperCase();if(!groups[fl])groups[fl]=[];groups[fl].push(t);}document.getElementById("btn").disabled=false;document.getElementById("pg2").innerHTML=`<span class="ok">${tables.length} tables in ${Object.keys(groups).length} groups</span>`;renderGroups();}catch(e){document.getElementById("pg2").innerHTML=`<span class="err">Fetch error: ${e}</span>`;}}function renderGroups(){var div=document.getElementById("groups");div.innerHTML="";var keys=Object.keys(groups).sort();for(var k=0;k<keys.length;k++){var key=keys[k];var btn=document.createElement("button");btn.className="g";btn.textContent=key+" ("+groups[key].length+")";btn.setAttribute("data-key",key);btn.onclick=function(){goGroup(this.getAttribute("data-key"),this);};div.appendChild(btn);}}async function dumpTable(n,onProgress){var allRows=[];var off=0;var total=0;var batch=100;var done=false;while(!done){try{var r=await fetch("/debug/table?name="+n+"&limit="+batch+"&offset="+off);var j=safeJson(await r.text());if(!j.ok){return{ok:false,error:j.error||"unknown"};}total=j.row_count||total;var nr=j.rows?j.rows.length:0;if(nr===0){done=true;break;}allRows=allRows.concat(j.rows);off+=nr;if(onProgress)onProgress(off,total);done=off>=total||nr<batch;}catch(e){return{ok:false,error:""+e};}}return{ok:true,table:n,row_count:total,rows_merged:allRows.length,rows:allRows};}function downloadJson(data,filename){var result=JSON.stringify(data);var blob=new Blob([result],{type:"application/json"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);}async function goGroup(key,btn){btn.disabled=true;btn.className="g run";var tbls=groups[key];var result={group:key,tables:{}};var log=document.getElementById("lst");log.innerHTML="";var ok=0,fail=0;for(var i=0;i<tbls.length;i++){var t=tbls[i];document.getElementById("pg").innerHTML=`<span class="ok">[${key}] ${(i+1)}/${tbls.length} ${t.name} (${t.rows} rows)...</span>`;document.getElementById("pb").value=Math.round((i+1)/tbls.length*100);if(t.rows===0){result.tables[t.name]={ok:true,rows:0,data:[]};log.innerHTML+=t.name+": skip (0)<br>";ok++;continue;}var res=await dumpTable(t.name);if(res.ok&&res.rows_merged>0){result.tables[t.name]={ok:true,row_count:res.row_count,rows_merged:res.rows_merged,rows:res.rows};log.innerHTML+=t.name+`: <span class="ok">${res.rows_merged}</span><br>`;ok++;}else{result.tables[t.name]={ok:false,error:res.error||"no rows"};log.innerHTML+=t.name+`: <span class="err">${res.error||"no rows"}</span><br>`;fail++;}}var fname="mdb_"+key.toLowerCase()+".json";downloadJson(result,fname);btn.className=ok>0&&fail===0?"g ok":"g err";btn.disabled=false;document.getElementById("pg").innerHTML=`<span class="ok">${key}: ${ok} OK, ${fail} fail -> ${fname}</span>`;document.getElementById("pb").value=0;}async function goOne(){var b=document.getElementById("btn");var n=document.getElementById("tn").value;if(!n)return;b.disabled=true;document.getElementById("pg").innerHTML=`<span class="ok">Dumping ${n}...</span>`;var res=await dumpTable(n,function(off,total){var pct=total>0?Math.round(off/total*100):0;document.getElementById("pb").value=pct;document.getElementById("pg").innerHTML="Dumping "+n+": "+off+"/"+total+" ("+pct+"%)";});if(res.ok&&res.rows_merged>0){downloadJson(res,n+".json");document.getElementById("pg").innerHTML=`<span class="ok">Done! ${res.rows_merged}/${res.row_count} -> ${n}.json</span>`;}else{document.getElementById("pg").innerHTML=`<span class="err">${res.error?"Error: "+res.error:"No rows found"}</span>`;}document.getElementById("pb").value=0;b.disabled=false;}loadTables();</script></body></html>"#.to_string();
         html
         } else if path == "/config.html" {
         // Serve a simple HTML form for config editing - open in any browser
@@ -4524,7 +4524,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.74").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.75").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -4731,10 +4731,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.74 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.75 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.74 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.75 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -5445,7 +5445,7 @@ fn debug_unique_skills() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
         matched_tables.len(),
         results.join(","),
         sc_columns.join(",")
@@ -5532,7 +5532,7 @@ fn debug_table_query(table_name: &str, limit: usize, offset: usize) -> String {
 
     let col_json: Vec<String> = cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
     format!(
-        r#"{{"ok":true,"version":"3.22.74","table":"{}","columns":[{}],"row_count":{},"limit":{},"offset":{},"rows":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","table":"{}","columns":[{}],"row_count":{},"limit":{},"offset":{},"rows":[{}]}}"#,
         json_escape(table_name),
         col_json.join(","),
         total,
@@ -5653,7 +5653,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
             }
         }
         return format!(
-            r#"{{"ok":true,"version":"3.22.74","table":"{}","total_rows":{},"offset":{},"rows_queried":0,"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
+            r#"{{"ok":true,"version":"3.22.75","table":"{}","total_rows":{},"offset":{},"rows_queried":0,"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
             json_escape(table_name), total, offset, json_escape(table_name)
         );
     }
@@ -5679,7 +5679,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
     if !is_last_batch {
         // Not done yet - return progress
         return format!(
-            r#"{{"ok":true,"version":"3.22.74","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"next_offset":{},"complete":false}}"#,
+            r#"{{"ok":true,"version":"3.22.75","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"next_offset":{},"complete":false}}"#,
             json_escape(table_name), total, offset, rows_queried, next_offset
         );
     }
@@ -5692,7 +5692,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
     }
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
+        r#"{{"ok":true,"version":"3.22.75","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
         json_escape(table_name), total, offset, rows_queried, json_escape(table_name)
     )
 }
@@ -5842,7 +5842,7 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
     // If file > 2MB, return metadata instead of reading into memory
     if file_size > 2_000_000 {
         return format!(
-            r#"{{"ok":true,"version":"3.22.74","table":"{}","total_rows":{},"file_size":{},"file_path":"{}","hint":"file too large for HTTP response, use push_table batch mode instead"}}"#,
+            r#"{{"ok":true,"version":"3.22.75","table":"{}","total_rows":{},"file_size":{},"file_path":"{}","hint":"file too large for HTTP response, use push_table batch mode instead"}}"#,
             json_escape(table_name), total, file_size, tmp_path
         );
     }
@@ -6008,7 +6008,7 @@ fn debug_unique_detail() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
         cards.join(","),
         effects.join(","),
         combo_dist.join(","),
@@ -6146,7 +6146,7 @@ fn debug_sc_effect() -> String {
     let scue_col_json: Vec<String> = scue_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
+        r#"{{"ok":true,"version":"3.22.75","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
         scet_col_json.join(","), scet_rows.join(","), scet_unique.join(","),
         scef_col_json.join(","), scef_rows.join(","),
         scefg_col_json.join(","), scefg_rows.join(","),
@@ -6286,7 +6286,7 @@ fn debug_hint_gain() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
         hint_rows.join(","),
         hint_with_cond.join(","),
         type_dist.join(","),
@@ -6359,7 +6359,7 @@ fn debug_mdb_all_tables() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
         all_tables.len(),
         tables_json.join(","),
         cond_tables.len(),
@@ -6524,7 +6524,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -6589,7 +6589,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -6661,7 +6661,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -6817,7 +6817,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.74","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.75","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -7347,7 +7347,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.74","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.75","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -7448,7 +7448,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.74","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.75","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -7609,7 +7609,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.74","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.75","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -7619,13 +7619,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.74","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.75","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.74","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.75","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -7905,7 +7905,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.74","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.75","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -7985,7 +7985,7 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.74","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.75","arrays":[{}]}}"#,
         results.join(",")
     )
 }
@@ -8082,7 +8082,7 @@ unsafe fn debug_paramsincdec() -> String {
     } else { -1 };
 
     format!(
-        r#"{{"version":"3.22.74","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
+        r#"{{"version":"3.22.75","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
@@ -8132,8 +8132,8 @@ fn update_so() -> String {
         None => return format!(r#"{{"error":"no_so_asset_url","tag":"{}"}}"#, tag_name),
     };
 
-    // Compare versions: current is "3.22.74"
-    let current_ver = "3.22.74";
+    // Compare versions: current is "3.22.75"
+    let current_ver = "3.22.75";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
@@ -8174,7 +8174,7 @@ fn update_so() -> String {
 
     // Step 5: Try to write directly next to the old SO first
     // If that fails (read-only directory), write to a writable fallback location
-    // ★ v3.22.74: Extract fallback write into helper to avoid code duplication
+    // ★ v3.22.75: Extract fallback write into helper to avoid code duplication
     // When direct write + remove/rename fails, try fallback paths instead of returning error
     let direct_ok = std::fs::write(&tmp_path, &data).is_ok();
     let replaced = if direct_ok {
