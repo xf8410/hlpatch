@@ -4321,12 +4321,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { il2cpp_list_methods(&class_name) }
     } else if path.starts_with("/il2cpp/search_float") {
         // v3.22.84: 在代码段搜索浮点常量（方案D）
+        let value_str = parse_query(&full_uri, "value");
+        unsafe { il2cpp_search_float(&value_str) }
     } else if path.starts_with("/il2cpp/search_methods") {
         // v3.22.84: 跨类搜索方法名关键词
         let keyword = parse_query(&full_uri, "keyword");
         unsafe { il2cpp_search_methods(&keyword) }
-        let value_str = parse_query(&full_uri, "value");
-        unsafe { il2cpp_search_float(&value_str) }
     } else if path == "/mdb" {
         // v3.22.51: Serve raw MasterDB file for client-side processing
         // Uses marker string; binary file sent in response handler below
