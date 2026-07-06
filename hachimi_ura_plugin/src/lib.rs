@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.76
+//! URA Plugin v3.22.77
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3128,7 +3128,7 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
-    // ★ v3.22.76: Gauge gains per training command (from DataSet CommandInfoArray, target_type=30)
+    // ★ v3.22.77: Gauge gains per training command (from DataSet CommandInfoArray, target_type=30)
     let mut ramen_gauge_gains_json = String::new();
     // ★ v3.22.51: Ramen direct memory read — only 2 il2cpp_runtime_invoke calls
     // (try_get_scenario_obj + get_DataSet), then zero il2cpp calls
@@ -3286,7 +3286,7 @@ unsafe fn read_summary_inner_impl() -> String {
                             let mut sg = [0i32; 5]; // [Speed, Stamina, Power, Guts, Wisdom]
                             let mut spt = 0i32;
                             let mut vc = 0i32;
-                            // ★ v3.22.76: Merged gauge_gain into single loop (was separate redundant loop)
+                            // ★ v3.22.77: Merged gauge_gain into single loop (was separate redundant loop)
                             let mut gauge_gain = 0i32;
                             for pi in 0..ce_plen {
                                 let pe = std::ptr::read_unaligned::<*mut c_void>(
@@ -3326,7 +3326,7 @@ unsafe fn read_summary_inner_impl() -> String {
                         }
                     }
                 }
-                // ★ v3.22.76: Build gauge_gains JSON from ramen_gauge_gains_map
+                // ★ v3.22.77: Build gauge_gains JSON from ramen_gauge_gains_map
                 if !ramen_gauge_gains_map.is_empty() {
                     let mut gg_parts: Vec<String> = Vec::new();
                     for (&cmd_id, &gauge_val) in &ramen_gauge_gains_map {
@@ -3463,7 +3463,7 @@ unsafe fn read_summary_inner_impl() -> String {
                             }
                         }
 
-                        // ★ v3.22.76: Ramen gains — always use DataSet CommandInfoArray gains
+                        // ★ v3.22.77: Ramen gains — always use DataSet CommandInfoArray gains
                         // HomeInfoData.ParamsIncDecInfoArray gives wrong values for Ramen
                         // (ObscuredInt vs plain int mismatch, values like Speed:1 instead of 14)
                         if sid == 14 {
@@ -3515,9 +3515,9 @@ unsafe fn read_summary_inner_impl() -> String {
     ura_log(3, "★ read_summary phase3: support cards");
     log_predict_step("S:p3 cards");
     let mut sc_json = "[]".to_string();
-    // ★ v3.22.76: Fix support_cards — use get_EquipSupportCardArray getter
+    // ★ v3.22.77: Fix support_cards — use get_EquipSupportCardArray getter
     // Root cause: field name is "EquipSupportCardArray" not "SupportCardArray"
-    // v3.22.76's cached_find_field_offset("SupportCardArray") hit wrong field via substring match
+    // v3.22.77's cached_find_field_offset("SupportCardArray") hit wrong field via substring match
     // Also: position/supportCardId/limitBreakCount are ObscuredInt, not plain int
     let mut sc_arr: *mut c_void = ptr::null_mut();
     // Method 1: getter on chara_class (most reliable)
@@ -3540,7 +3540,7 @@ unsafe fn read_summary_inner_impl() -> String {
             for i in 0..al {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                 if ep.is_null() { continue; }
-                // ★ v3.22.76: Use getter methods for ObscuredInt fields
+                // ★ v3.22.77: Use getter methods for ObscuredInt fields
                 // position/supportCardId/limitBreakCount are ObscuredInt, can't read as plain int
                 let sc_elem_class = get_class_from_object(ep);
                 let (position, support_card_id, limit_break_count, training_partner_state) = if !sc_elem_class.is_null() {
@@ -3712,7 +3712,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                 }
                             }
                         }
-                        // ★ v3.22.76: Removed dead Ramen buffs code here
+                        // ★ v3.22.77: Removed dead Ramen buffs code here
                         // (sid==14 sets scenario_obj=null, so this block never executes for Ramen.
                         //  Ramen buffs are handled below after the scenario_obj block.)
                     }
@@ -3813,7 +3813,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.76","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.77","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3900,7 +3900,7 @@ fn push_loop() {
         let summary = read_summary();
         if summary.contains("\"error\"") {
             consecutive_errors += 1;
-            // ★ v3.22.76: Extra cooldown for SIGSEGV recovery — game state transition
+            // ★ v3.22.77: Extra cooldown for SIGSEGV recovery — game state transition
             if summary.contains("sigsegv") {
                 let cool = std::time::Duration::from_secs(60);
                 unsafe { ura_log(2, "Push: SIGSEGV recovered, cooling 60s for game state transition"); }
@@ -4000,7 +4000,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.76","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.77","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/search_float"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4255,7 +4255,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             format!(r#"{{"ok":true,"config":{}}}"#, unsafe { get_config() }.to_json())
         }
     } else if path == "/debug/dump" {
-        // v3.22.76: Dump tool - group tables by first letter, one file per group
+        // v3.22.77: Dump tool - group tables by first letter, one file per group
         let html = r#"<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dump</title><style>body{font-family:system-ui;max-width:600px;margin:12px auto;padding:0 8px;background:#1a1a2e;color:#e0e0e0}h1{color:#4fc3f7;font-size:1.2em;margin:8px 0}.g{display:inline-block;margin:4px 2px;padding:8px 12px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;cursor:pointer;font-size:14px;min-width:36px;text-align:center}.g:disabled{background:#555;color:#333;cursor:default}.g.ok{background:#2e7d32;border-color:#4caf50}.g.err{background:#b71c1c;border-color:#ff5252}.g.run{background:#e65100;border-color:#ff9800}select{padding:8px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;font-size:16px;width:100%}button{padding:12px 24px;border:none;border-radius:4px;color:#000;font-weight:bold;cursor:pointer;font-size:16px;margin:4px}#btn{background:#4fc3f7}#btn:disabled{background:#555;color:#333}.p{margin:8px 0;font-size:0.95em}.ok{color:#4caf50}.err{color:#ff5252}progress{width:100%;height:20px;margin:8px 0}#lst{margin:8px 0;font-size:0.8em;color:#aaa;max-height:300px;overflow-y:auto}</style></head><body><h1>MDB Dump Tool</h1><div class="p" id="pg2">Loading table list...</div><div id="groups"></div><hr><select id="tn"><option value="">-- loading --</option></select><button id="btn" onclick="goOne()" disabled>Dump 1 Table</button><div class="p" id="pg">Press a letter group to dump all tables in that group as one file</div><progress id="pb" value="0" max="100"></progress><div id="lst"></div><script>function safeJson(t){try{return JSON.parse(t)}catch(e){return JSON.parse(t.replace(/[\x00-\x1f]/g,function(c){return"\\u"+("0000"+c.charCodeAt(0).toString(16)).slice(-4)}))}}var tables=[];var groups={};async function loadTables(){try{var r=await fetch("/debug/mdb_all_tables");var j=safeJson(await r.text());if(!j.ok){document.getElementById("pg2").innerHTML=`<span class="err">Error: ${j.error||"unknown"}</span>`;return;}tables=j.all_tables||[];var sel=document.getElementById("tn");sel.innerHTML="";groups={};for(var i=0;i<tables.length;i++){var t=tables[i];var o=document.createElement("option");o.value=t.name;o.textContent=t.name+" ("+t.rows+")";sel.appendChild(o);var fl=t.name[0].toUpperCase();if(!groups[fl])groups[fl]=[];groups[fl].push(t);}document.getElementById("btn").disabled=false;document.getElementById("pg2").innerHTML=`<span class="ok">${tables.length} tables in ${Object.keys(groups).length} groups</span>`;renderGroups();}catch(e){document.getElementById("pg2").innerHTML=`<span class="err">Fetch error: ${e}</span>`;}}function renderGroups(){var div=document.getElementById("groups");div.innerHTML="";var keys=Object.keys(groups).sort();for(var k=0;k<keys.length;k++){var key=keys[k];var btn=document.createElement("button");btn.className="g";btn.textContent=key+" ("+groups[key].length+")";btn.setAttribute("data-key",key);btn.onclick=function(){goGroup(this.getAttribute("data-key"),this);};div.appendChild(btn);}}async function dumpTable(n,onProgress){var allRows=[];var off=0;var total=0;var batch=100;var done=false;while(!done){try{var r=await fetch("/debug/table?name="+n+"&limit="+batch+"&offset="+off);var j=safeJson(await r.text());if(!j.ok){return{ok:false,error:j.error||"unknown"};}total=j.row_count||total;var nr=j.rows?j.rows.length:0;if(nr===0){done=true;break;}allRows=allRows.concat(j.rows);off+=nr;if(onProgress)onProgress(off,total);done=off>=total||nr<batch;}catch(e){return{ok:false,error:""+e};}}return{ok:true,table:n,row_count:total,rows_merged:allRows.length,rows:allRows};}function downloadJson(data,filename){var result=JSON.stringify(data);var blob=new Blob([result],{type:"application/json"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);}async function goGroup(key,btn){btn.disabled=true;btn.className="g run";var tbls=groups[key];var result={group:key,tables:{}};var log=document.getElementById("lst");log.innerHTML="";var ok=0,fail=0;for(var i=0;i<tbls.length;i++){var t=tbls[i];document.getElementById("pg").innerHTML=`<span class="ok">[${key}] ${(i+1)}/${tbls.length} ${t.name} (${t.rows} rows)...</span>`;document.getElementById("pb").value=Math.round((i+1)/tbls.length*100);if(t.rows===0){result.tables[t.name]={ok:true,rows:0,data:[]};log.innerHTML+=t.name+": skip (0)<br>";ok++;continue;}var res=await dumpTable(t.name);if(res.ok&&res.rows_merged>0){result.tables[t.name]={ok:true,row_count:res.row_count,rows_merged:res.rows_merged,rows:res.rows};log.innerHTML+=t.name+`: <span class="ok">${res.rows_merged}</span><br>`;ok++;}else{result.tables[t.name]={ok:false,error:res.error||"no rows"};log.innerHTML+=t.name+`: <span class="err">${res.error||"no rows"}</span><br>`;fail++;}}var fname="mdb_"+key.toLowerCase()+".json";downloadJson(result,fname);btn.className=ok>0&&fail===0?"g ok":"g err";btn.disabled=false;document.getElementById("pg").innerHTML=`<span class="ok">${key}: ${ok} OK, ${fail} fail -> ${fname}</span>`;document.getElementById("pb").value=0;}async function goOne(){var b=document.getElementById("btn");var n=document.getElementById("tn").value;if(!n)return;b.disabled=true;document.getElementById("pg").innerHTML=`<span class="ok">Dumping ${n}...</span>`;var res=await dumpTable(n,function(off,total){var pct=total>0?Math.round(off/total*100):0;document.getElementById("pb").value=pct;document.getElementById("pg").innerHTML="Dumping "+n+": "+off+"/"+total+" ("+pct+"%)";});if(res.ok&&res.rows_merged>0){downloadJson(res,n+".json");document.getElementById("pg").innerHTML=`<span class="ok">Done! ${res.rows_merged}/${res.row_count} -> ${n}.json</span>`;}else{document.getElementById("pg").innerHTML=`<span class="err">${res.error?"Error: "+res.error:"No rows found"}</span>`;}document.getElementById("pb").value=0;b.disabled=false;}loadTables();</script></body></html>"#.to_string();
         html
         } else if path == "/config.html" {
@@ -4276,37 +4276,49 @@ fn handle_http(mut stream: std::net::TcpStream) {
         };
         unsafe { enumerate_all_classes(search) }
     } else if path.starts_with("/mdb/schema") {
-        // v3.22.76: 表结构
+        // v3.22.77: 表结构
         let table_name = parse_query(&full_uri, "name");
         mdb_schema(&table_name)
     } else if path.starts_with("/mdb/search") {
-        // v3.22.76: 搜索表名和列名
+        // v3.22.77: 搜索表名和列名
         let keyword = parse_query(&full_uri, "keyword");
         mdb_search(&keyword)
     } else if path.starts_with("/mdb/raw") {
-        // v3.22.76: 执行只读SQL
+        // v3.22.77: 执行只读SQL
         let sql = parse_query(&full_uri, "sql");
         mdb_raw_query(&sql)
     } else if path.starts_with("/il2cpp/dump") {
-        // v3.22.76: dump单例实例（带运行时值）
+        // v3.22.77: dump单例实例（带运行时值）
         let class_name = parse_query(&full_uri, "name");
         unsafe { il2cpp_dump_singleton(&class_name) }
     } else if path.starts_with("/il2cpp/call") {
-        // v3.22.76: 调用单例上的getter方法
+        // v3.22.77: 调用单例上的getter方法
         let class_name = parse_query(&full_uri, "class");
         let method_name = parse_query(&full_uri, "method");
         unsafe { il2cpp_call_method(&class_name, &method_name) }
     } else if path.starts_with("/il2cpp/tree") {
-        // v3.22.76: 递归dump引用类型字段
+        // v3.22.77: 递归dump引用类型字段
         let class_name = parse_query(&full_uri, "name");
         let depth_str = parse_query(&full_uri, "depth");
         let depth = depth_str.parse::<usize>().unwrap_or(2);
         unsafe { il2cpp_tree_dump(&class_name, depth) }
     } else if path.starts_with("/il2cpp/field") {
-        // v3.22.76: 读取单例的指定字段值
+        // v3.22.77: 读取单例的指定字段值
         let class_name = parse_query(&full_uri, "class");
         let field_name = parse_query(&full_uri, "field");
         unsafe { il2cpp_read_single_field(&class_name, &field_name) }
+    } else if path.starts_with("/il2cpp/classes") {
+        // v3.22.77: 搜索IL2CPP类名（方案A）
+        let keyword = parse_query(&full_uri, "keyword");
+        unsafe { il2cpp_search_classes(&keyword) }
+    } else if path.starts_with("/il2cpp/static") {
+        // v3.22.77: 读取静态类常量值（方案B）
+        let class_name = parse_query(&full_uri, "name");
+        unsafe { il2cpp_read_static_fields(&class_name) }
+    } else if path.starts_with("/il2cpp/search_float") {
+        // v3.22.77: 在代码段搜索浮点常量（方案D）
+        let value_str = parse_query(&full_uri, "value");
+        unsafe { il2cpp_search_float(&value_str) }
     } else if path == "/mdb" {
         // v3.22.51: Serve raw MasterDB file for client-side processing
         // Uses marker string; binary file sent in response handler below
@@ -4315,7 +4327,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/search_float"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -4556,7 +4568,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.76").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.77").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -4763,10 +4775,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.76 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.77 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.76 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.77 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -5387,7 +5399,7 @@ fn json_escape(s: &str) -> String {
 }
 
 
-/// v3.22.76: 简易URL解码（处理+和%XX）
+/// v3.22.77: 简易URL解码（处理+和%XX）
 fn url_decode(s: &str) -> String {
     let mut result = String::new();
     let bytes = s.as_bytes();
@@ -5413,7 +5425,7 @@ fn url_decode(s: &str) -> String {
     result
 }
 
-/// v3.22.76: 解析query参数值
+/// v3.22.77: 解析query参数值
 fn parse_query(full_uri: &str, key: &str) -> String {
     let pattern = format!("{}=", key);
     if let Some(q) = full_uri.find(&format!("?{}", pattern)) {
@@ -5519,7 +5531,7 @@ fn debug_unique_skills() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
         matched_tables.len(),
         results.join(","),
         sc_columns.join(",")
@@ -5606,7 +5618,7 @@ fn debug_table_query(table_name: &str, limit: usize, offset: usize) -> String {
 
     let col_json: Vec<String> = cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
     format!(
-        r#"{{"ok":true,"version":"3.22.76","table":"{}","columns":[{}],"row_count":{},"limit":{},"offset":{},"rows":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","table":"{}","columns":[{}],"row_count":{},"limit":{},"offset":{},"rows":[{}]}}"#,
         json_escape(table_name),
         col_json.join(","),
         total,
@@ -5727,7 +5739,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
             }
         }
         return format!(
-            r#"{{"ok":true,"version":"3.22.76","table":"{}","total_rows":{},"offset":{},"rows_queried":0,"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
+            r#"{{"ok":true,"version":"3.22.77","table":"{}","total_rows":{},"offset":{},"rows_queried":0,"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
             json_escape(table_name), total, offset, json_escape(table_name)
         );
     }
@@ -5753,7 +5765,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
     if !is_last_batch {
         // Not done yet - return progress
         return format!(
-            r#"{{"ok":true,"version":"3.22.76","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"next_offset":{},"complete":false}}"#,
+            r#"{{"ok":true,"version":"3.22.77","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"next_offset":{},"complete":false}}"#,
             json_escape(table_name), total, offset, rows_queried, next_offset
         );
     }
@@ -5766,7 +5778,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
     }
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
+        r#"{{"ok":true,"version":"3.22.77","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
         json_escape(table_name), total, offset, rows_queried, json_escape(table_name)
     )
 }
@@ -5916,7 +5928,7 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
     // If file > 2MB, return metadata instead of reading into memory
     if file_size > 2_000_000 {
         return format!(
-            r#"{{"ok":true,"version":"3.22.76","table":"{}","total_rows":{},"file_size":{},"file_path":"{}","hint":"file too large for HTTP response, use push_table batch mode instead"}}"#,
+            r#"{{"ok":true,"version":"3.22.77","table":"{}","total_rows":{},"file_size":{},"file_path":"{}","hint":"file too large for HTTP response, use push_table batch mode instead"}}"#,
             json_escape(table_name), total, file_size, tmp_path
         );
     }
@@ -6082,7 +6094,7 @@ fn debug_unique_detail() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
         cards.join(","),
         effects.join(","),
         combo_dist.join(","),
@@ -6220,7 +6232,7 @@ fn debug_sc_effect() -> String {
     let scue_col_json: Vec<String> = scue_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
+        r#"{{"ok":true,"version":"3.22.77","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
         scet_col_json.join(","), scet_rows.join(","), scet_unique.join(","),
         scef_col_json.join(","), scef_rows.join(","),
         scefg_col_json.join(","), scefg_rows.join(","),
@@ -6360,7 +6372,7 @@ fn debug_hint_gain() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
         hint_rows.join(","),
         hint_with_cond.join(","),
         type_dist.join(","),
@@ -6433,7 +6445,7 @@ fn debug_mdb_all_tables() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
         all_tables.len(),
         tables_json.join(","),
         cond_tables.len(),
@@ -6498,7 +6510,7 @@ fn read_mdb_tables() -> String {
     )
 }
 // ============================================================
-// v3.22.76: MDB增强端点
+// v3.22.77: MDB增强端点
 // /mdb/schema?name=X — 表结构（列名+类型+行数）
 // /mdb/search?keyword=X — 搜索所有表名和列名
 // /mdb/raw?sql=X — 执行只读SQL（带LIMIT安全限制）
@@ -6829,7 +6841,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -6894,7 +6906,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -6966,7 +6978,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -7122,7 +7134,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.76","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.77","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -7283,7 +7295,7 @@ unsafe fn debug_dumpclass(class_name: &str) -> String {
     )
 }
 // ============================================================
-// v3.22.76: IL2CPP运行时值dump — 新增端点
+// v3.22.77: IL2CPP运行时值dump — 新增端点
 // /il2cpp/dump?name=X  — dump单例实例，带运行时字段值
 // /il2cpp/call?class=X&method=Y — 调用单例上的getter
 // /il2cpp/tree?name=X&depth=N — 递归dump引用类型字段
@@ -8116,7 +8128,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.76","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.77","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -8217,7 +8229,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.76","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.77","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -8378,7 +8390,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.76","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.77","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -8388,13 +8400,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.76","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.77","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.76","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.77","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -8674,7 +8686,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.76","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.77","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -8754,7 +8766,7 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.76","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.77","arrays":[{}]}}"#,
         results.join(",")
     )
 }
@@ -8851,7 +8863,7 @@ unsafe fn debug_paramsincdec() -> String {
     } else { -1 };
 
     format!(
-        r#"{{"version":"3.22.76","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
+        r#"{{"version":"3.22.77","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
@@ -8901,8 +8913,8 @@ fn update_so() -> String {
         None => return format!(r#"{{"error":"no_so_asset_url","tag":"{}"}}"#, tag_name),
     };
 
-    // Compare versions: current is "3.22.76"
-    let current_ver = "3.22.76";
+    // Compare versions: current is "3.22.77"
+    let current_ver = "3.22.77";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
@@ -8943,7 +8955,7 @@ fn update_so() -> String {
 
     // Step 5: Try to write directly next to the old SO first
     // If that fails (read-only directory), write to a writable fallback location
-    // ★ v3.22.76: Extract fallback write into helper to avoid code duplication
+    // ★ v3.22.77: Extract fallback write into helper to avoid code duplication
     // When direct write + remove/rename fails, try fallback paths instead of returning error
     let direct_ok = std::fs::write(&tmp_path, &data).is_ok();
     let replaced = if direct_ok {
@@ -9054,4 +9066,339 @@ fn extract_so_asset_api_url(body: &str) -> Option<String> {
         if search_from >= body.len() { break; }
     }
     None
+}
+
+
+// ============================================================
+// v3.22.77: 新增3个IL2CPP端点
+// A: /il2cpp/classes?keyword=X — 搜索类名（关键词过滤）
+// B: /il2cpp/static?name=X — 读取静态类常量值（不依赖单例实例）
+// D: /il2cpp/search_float?value=X — 在代码段搜索浮点常量
+// ============================================================
+
+/// A: /il2cpp/classes?keyword=X — 搜索IL2CPP类名
+/// 遍历umamusume.dll所有类，按关键词过滤，返回匹配的类名+命名空间
+unsafe fn il2cpp_search_classes(keyword: &str) -> String {
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+
+    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
+    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
+    if get_count_fn.is_null() || get_class_fn.is_null() {
+        return r#"{"error":"class_enum_api_not_found"}"#.to_string();
+    }
+
+    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
+    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
+    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
+    let get_namespace_fn = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
+
+    let total = get_count(image);
+    let search_lower = keyword.to_lowercase();
+    let mut results = Vec::new();
+
+    for i in 0..total {
+        let cls = get_class(image, i);
+        if cls.is_null() { continue; }
+
+        // 读取类名
+        let name = if !get_name_fn.is_null() {
+            let name_fn: FnClassGetName = std::mem::transmute(get_name_fn);
+            let cstr = name_fn(cls);
+            if cstr.is_null() { continue; }
+            std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned()
+        } else {
+            continue;
+        };
+
+        // 读取命名空间
+        let namespace = if !get_namespace_fn.is_null() {
+            let ns_fn: FnClassGetName = std::mem::transmute(get_namespace_fn);
+            let cstr = ns_fn(cls);
+            if cstr.is_null() { String::new() } else { std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned() }
+        } else {
+            String::new()
+        };
+
+        // 关键词过滤（空关键词返回所有）
+        if !keyword.is_empty() {
+            let full = format!("{}.{}", namespace, name).to_lowercase();
+            if !full.contains(&search_lower) { continue; }
+        }
+
+        // 获取该类的字段数量，帮助判断类大小
+        let fields = collect_all_fields(cls);
+        let field_count = fields.len();
+        // 检查是否有单例
+        let has_singleton = !get_singleton(cls).is_null();
+
+        results.push(format!(
+            r#"{{"ns":"{}","name":"{}","fields":{},"singleton":{}}}"#,
+            namespace, name, field_count, has_singleton
+        ));
+    }
+
+    format!(
+        r#"{{"ok":true,"total_classes":{},"matched":{},"keyword":"{}","classes":[{}]}}"#,
+        total, results.len(), json_escape(keyword), results.join(",")
+    )
+}
+
+/// B: /il2cpp/static?name=X — 读取静态类常量值
+/// 不需要单例实例，直接用il2cpp_get_static_field_value读取静态字段
+/// 适用于SingleModeDefine等只有const/literal字段的静态类
+unsafe fn il2cpp_read_static_fields(class_name: &str) -> String {
+    if class_name.is_empty() {
+        return r#"{"error":"missing ?name= parameter"}"#.to_string();
+    }
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let class = find_class_by_short_name(image, class_name);
+    if class.is_null() {
+        return format!(r#"{{"error":"class_not_found","name":"{}"}}"#, class_name);
+    }
+
+    let real_name = get_class_name_from_pointer(class);
+
+    // 遍历所有字段（含父类）
+    let fields = collect_all_fields(class);
+    let mut results = Vec::new();
+
+    for (fname, offset, type_ptr) in &fields {
+        let type_enum = il2cpp_type_get_type_enum(*type_ptr);
+
+        // 对于静态/常量字段，用il2cpp_get_static_field_value_fn读取
+        // 先尝试通过field name获取FieldInfo
+        let field_info = match (*API).il2cpp_get_field_from_name_fn {
+            Some(f) => f(class, to_cstr(fname).as_ptr()),
+            None => ptr::null_mut(),
+        };
+
+        if field_info.is_null() {
+            // 无法获取FieldInfo，只输出元数据
+            results.push(format!(
+                r#"{{"name":"{}","offset":{},"type":{},"value":null,"error":"no_field_info"}}"#,
+                json_escape(fname), offset, type_enum
+            ));
+            continue;
+        }
+
+        // 用静态字段值函数读取
+        // il2cpp_get_static_field_value(field_info, &value)
+        match (*API).il2cpp_get_static_field_value_fn {
+            Some(get_static) => {
+                match type_enum {
+                    IL2CPP_TYPE_R4 => {
+                        let mut val: f32 = 0.0;
+                        get_static(field_info, &mut val as *mut f32 as *mut c_void);
+                        results.push(format!(
+                            r#"{{"name":"{}","offset":{},"type":{},"value":{}}}"#,
+                            json_escape(fname), offset, type_enum, val
+                        ));
+                    }
+                    IL2CPP_TYPE_R8 => {
+                        let mut val: f64 = 0.0;
+                        get_static(field_info, &mut val as *mut f64 as *mut c_void);
+                        results.push(format!(
+                            r#"{{"name":"{}","offset":{},"type":{},"value":{}}}"#,
+                            json_escape(fname), offset, type_enum, val
+                        ));
+                    }
+                    IL2CPP_TYPE_I4 | IL2CPP_TYPE_VALUETYPE => {
+                        let mut val: i32 = 0;
+                        get_static(field_info, &mut val as *mut i32 as *mut c_void);
+                        results.push(format!(
+                            r#"{{"name":"{}","offset":{},"type":{},"value":{}}}"#,
+                            json_escape(fname), offset, type_enum, val
+                        ));
+                    }
+                    IL2CPP_TYPE_U4 => {
+                        let mut val: u32 = 0;
+                        get_static(field_info, &mut val as *mut u32 as *mut c_void);
+                        results.push(format!(
+                            r#"{{"name":"{}","offset":{},"type":{},"value":{}}}"#,
+                            json_escape(fname), offset, type_enum, val
+                        ));
+                    }
+                    IL2CPP_TYPE_I8 => {
+                        let mut val: i64 = 0;
+                        get_static(field_info, &mut val as *mut i64 as *mut c_void);
+                        results.push(format!(
+                            r#"{{"name":"{}","offset":{},"type":{},"value":{}}}"#,
+                            json_escape(fname), offset, type_enum, val
+                        ));
+                    }
+                    IL2CPP_TYPE_U8 => {
+                        let mut val: u64 = 0;
+                        get_static(field_info, &mut val as *mut u64 as *mut c_void);
+                        results.push(format!(
+                            r#"{{"name":"{}","offset":{},"type":{},"value":{}}}"#,
+                            json_escape(fname), offset, type_enum, val
+                        ));
+                    }
+                    IL2CPP_TYPE_BOOLEAN => {
+                        let mut val: u8 = 0;
+                        get_static(field_info, &mut val as *mut u8 as *mut c_void);
+                        results.push(format!(
+                            r#"{{"name":"{}","offset":{},"type":{},"value":{}}}"#,
+                            json_escape(fname), offset, type_enum, if val != 0 { "true" } else { "false" }
+                        ));
+                    }
+                    IL2CPP_TYPE_STRING => {
+                        let mut val: *const c_void = ptr::null();
+                        get_static(field_info, &mut val as *mut *const c_void as *mut c_void);
+                        if val.is_null() {
+                            results.push(format!(
+                                r#"{{"name":"{}","offset":{},"type":{},"value":null}}"#,
+                                json_escape(fname), offset, type_enum
+                            ));
+                        } else {
+                            let s = read_il2cpp_string(val);
+                            results.push(format!(
+                                r#"{{"name":"{}","offset":{},"type":{},"value":"{}"}}"#,
+                                json_escape(fname), offset, type_enum, json_escape(&s)
+                            ));
+                        }
+                    }
+                    _ => {
+                        // 其他类型：尝试读8字节原始数据
+                        let mut buf: [u8; 8] = [0; 8];
+                        get_static(field_info, buf.as_mut_ptr() as *mut c_void);
+                        let raw_i64 = i64::from_ne_bytes(buf);
+                        results.push(format!(
+                            r#"{{"name":"{}","offset":{},"type":{},"raw":{}}}"#,
+                            json_escape(fname), offset, type_enum, raw_i64
+                        ));
+                    }
+                }
+            }
+            None => {
+                results.push(format!(
+                    r#"{{"name":"{}","offset":{},"type":{},"value":null,"error":"no_static_field_fn"}}"#,
+                    json_escape(fname), offset, type_enum
+                ));
+            }
+        }
+    }
+
+    format!(
+        r#"{{"ok":true,"requested":"{}","found":"{}","field_count":{},"fields":[{}]}}"#,
+        class_name, real_name, results.len(), results.join(",")
+    )
+}
+
+/// D: /il2cpp/search_float?value=X — 在代码段搜索浮点常量
+/// 扫描umamusume.dll的代码段(.text)，搜索指定浮点值的IEEE 754编码
+/// 用于定位硬编码的训练系数等常量
+unsafe fn il2cpp_search_float(value_str: &str) -> String {
+    let value: f64 = match value_str.parse::<f64>() {
+        Ok(v) => v,
+        Err(_) => return format!(r#"{{"error":"invalid_float","input":"{}"}}"#, json_escape(value_str)),
+    };
+
+    // 获取umamusume.dll基址和大小
+    // 通过il2cpp_get_assembly_image获取的image指针，再通过dlsym找到模块基址
+    // 更可靠的方式：扫描/proc/self/maps找到umamusume.dll
+    let mut base_addr: usize = 0;
+    let mut text_size: usize = 0;
+
+    // 读取/proc/self/maps找到umamusume.dll的内存映射
+    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+        for line in maps.lines() {
+            if line.contains("umamusume") && line.contains("r-xp") {
+                // 格式: start-end r-xp ... path
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.is_empty() { continue; }
+                let addr_parts: Vec<&str> = parts[0].split('-').collect();
+                if addr_parts.len() != 2 { continue; }
+                if let Ok(start) = usize::from_str_radix(addr_parts[0], 16) {
+                    if let Ok(end) = usize::from_str_radix(addr_parts[1], 16) {
+                        // 取第一个可执行段作为代码段
+                        if base_addr == 0 {
+                            base_addr = start;
+                            text_size = end - start;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if base_addr == 0 || text_size == 0 {
+        return r#"{"error":"cannot_find_umamusume_text_section"}"#.to_string();
+    }
+
+    // 限制搜索范围，避免越界（最大32MB代码段）
+    if text_size > 32 * 1024 * 1024 {
+        text_size = 32 * 1024 * 1024;
+    }
+
+    let base_ptr = base_addr as *const u8;
+    let f32_bytes = value as f32;  // 同时搜索f32和f64编码
+    let f32_bits = f32_bytes.to_bits().to_le_bytes();
+    let f64_bits = value.to_bits().to_le_bytes();
+
+    let mut f32_matches = Vec::new();
+    let mut f64_matches = Vec::new();
+
+    // 搜索f32（4字节对齐）
+    for off in (0..text_size.saturating_sub(4)).step_by(4) {
+        let ptr = base_ptr.add(off);
+        // 安全检查
+        if (ptr as usize) < base_addr || (ptr as usize) >= base_addr + text_size { continue; }
+        let b0 = std::ptr::read_unaligned::<u8>(ptr);
+        let b1 = std::ptr::read_unaligned::<u8>(ptr.add(1));
+        let b2 = std::ptr::read_unaligned::<u8>(ptr.add(2));
+        let b3 = std::ptr::read_unaligned::<u8>(ptr.add(3));
+        if b0 == f32_bits[0] && b1 == f32_bits[1] && b2 == f32_bits[2] && b3 == f32_bits[3] {
+            f32_matches.push(off);
+        }
+    }
+
+    // 搜索f64（8字节对齐）
+    for off in (0..text_size.saturating_sub(8)).step_by(4) {
+        let ptr = base_ptr.add(off);
+        if (ptr as usize) < base_addr || (ptr as usize) >= base_addr + text_size { continue; }
+        let b0 = std::ptr::read_unaligned::<u8>(ptr);
+        let b1 = std::ptr::read_unaligned::<u8>(ptr.add(1));
+        let b2 = std::ptr::read_unaligned::<u8>(ptr.add(2));
+        let b3 = std::ptr::read_unaligned::<u8>(ptr.add(3));
+        let b4 = std::ptr::read_unaligned::<u8>(ptr.add(4));
+        let b5 = std::ptr::read_unaligned::<u8>(ptr.add(5));
+        let b6 = std::ptr::read_unaligned::<u8>(ptr.add(6));
+        let b7 = std::ptr::read_unaligned::<u8>(ptr.add(7));
+        if b0 == f64_bits[0] && b1 == f64_bits[1] && b2 == f64_bits[2] && b3 == f64_bits[3]
+            && b4 == f64_bits[4] && b5 == f64_bits[5] && b6 == f64_bits[6] && b7 == f64_bits[7] {
+            f64_matches.push(off);
+        }
+    }
+
+    // 限制输出数量
+    let max_results = 50;
+    f32_matches.truncate(max_results);
+    f64_matches.truncate(max_results);
+
+    let f32_json: Vec<String> = f32_matches.iter().map(|&off| {
+        format!(r#"{{"offset":"0x{:x}","abs_addr":"0x{:x}"}}"#, off, base_addr + off)
+    }).collect();
+    let f64_json: Vec<String> = f64_matches.iter().map(|&off| {
+        format!(r#"{{"offset":"0x{:x}","abs_addr":"0x{:x}"}}"#, off, base_addr + off)
+    }).collect();
+
+    format!(
+        r#"{{"ok":true,"search_value":{},"f32_encoded":"0x{:08x}","f64_encoded":"0x{:016x}","base_addr":"0x{:x}","text_size":{},"f32_hits":{},"f64_hits":{},"f32_matches":[{}],"f64_matches":[{}]}}"#,
+        value,
+        (value as f32).to_bits(),
+        value.to_bits(),
+        base_addr,
+        text_size,
+        f32_json.len(),
+        f64_json.len(),
+        f32_json.join(","),
+        f64_json.join(",")
+    )
 }
