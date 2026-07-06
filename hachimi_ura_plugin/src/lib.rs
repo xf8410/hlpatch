@@ -9190,16 +9190,89 @@ unsafe fn il2cpp_read_static_fields(class_name: &str) -> String {
     };
 
     if is_enum_class {
-        // ★ v3.22.79: enum值推算
-        // il2cpp_field_get_default_value API在此版本IL2CPP中不存在
-        // C# enum规范：字段按声明顺序赋值，从0递增（除非显式赋值）
-        // 排除内部字段(value__/enumSeperatorCharArray/enumSeperator)，
-        // 剩余命名常量按顺序编号
+        // ★ v3.22.79: enum值双重策略
+        // 策略1: C#规范推算（字段声明顺序从0递增）
+        // 策略2: 用il2cpp_runtime_invoke调Enum.GetValues做交叉验证
         let internal_names = ["value__", "enumSeperatorCharArray", "enumSeperator"];
+
+        // ★ 策略2: 尝试用runtime_invoke调Enum.GetValues获取真实值
+        // 需要找到System.Enum类和GetValues方法
+        let mut runtime_values: Vec<(&str, i32)> = Vec::new(); // (name, value)
+        let get_method_fn: Option<FnClassGetMethodFromName> = {
+            let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        };
+        let invoke_fn: Option<FnRuntimeInvoke> = {
+            let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+            if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        };
+        // 找System.Enum类
+        let enum_class = find_class_by_short_name(image, "Enum");
+        if !enum_class.is_null() && get_method_fn.is_some() && invoke_fn.is_some() {
+            // GetValues(Type enumType) -> Array
+            // 参数个数=1，需要传Type对象
+            let get_values_method = get_method_fn.unwrap()(enum_class, to_cstr("GetValues").as_ptr(), 1);
+            if !get_values_method.is_null() {
+                // 需要构造Type参数：il2cpp_class_get_type返回Il2CppType*
+                // 然后il2cpp_type_get_object把它转成System.Type的运行时对象
+                // 但il2cpp_type_get_object可能不存在，先试另一种方式：
+                // 用typeof(GainParameterType) = class的type handle
+                // 直接传class指针作为type参数不行，需要Type对象
+                // 尝试找il2cpp_type_get_object
+                let type_get_object: Option<unsafe extern "C" fn(*const c_void) -> *mut c_void> = {
+                    let p = resolve_il2cpp_symbol("il2cpp_type_get_object");
+                    if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+                };
+                // 也尝试从class获取type: il2cpp_class_get_type
+                let class_get_type: Option<unsafe extern "C" fn(*mut c_void) -> *const c_void> = {
+                    let p = resolve_il2cpp_symbol("il2cpp_class_get_type");
+                    if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+                };
+                if type_get_object.is_some() && class_get_type.is_some() {
+                    let il2cpp_type = class_get_type.unwrap()(class);
+                    if !il2cpp_type.is_null() {
+                        let type_obj = type_get_object.unwrap()(il2cpp_type);
+                        if !type_obj.is_null() {
+                            // 调用Enum.GetValues(type_obj)
+                            let mut args: [*mut c_void; 1] = [type_obj as *mut c_void];
+                            let mut exc: *mut c_void = ptr::null_mut();
+                            let result = invoke_fn.unwrap()(
+                                get_values_method,
+                                ptr::null_mut(), // 静态方法，instance=null
+                                args.as_mut_ptr(),
+                                &mut exc,
+                            );
+                            if exc.is_null() && !result.is_null() {
+                                // result是Il2CppArray*，读取元素
+                                // Il2CppArray: header 32bytes, then max_length(u32), then data
+                                // 实际布局: Il2CppObject(16) + BoundsInfo*(8) + max_length(8) + data
+                                let arr_ptr = result as *const u8;
+                                let arr_len = std::ptr::read_unaligned::<i64>(arr_ptr.add(24) as *const i64);
+                                let data_start = arr_ptr.add(32);
+                                // 收集命名常量的字段名
+                                let named_fields: Vec<&str> = fields.iter()
+                                    .filter(|(n, _, _)| !internal_names.contains(&n.as_str()))
+                                    .map(|(n, _, _)| n.as_str())
+                                    .collect();
+                                for (i, &fname) in named_fields.iter().enumerate() {
+                                    if (i as i64) < arr_len {
+                                        let v = std::ptr::read_unaligned::<i32>(data_start.add(i * 4) as *const i32);
+                                        runtime_values.push((fname, v));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let has_runtime_values = !runtime_values.is_empty();
+
+        // 生成结果：如果runtime_values有数据则用真实值，否则用C#规范推算
         let mut enum_idx: i32 = 0;
         for (fname, offset, type_ptr) in &fields {
             let type_enum = il2cpp_type_get_type_enum(*type_ptr);
-            // 内部字段标记为internal
             if internal_names.contains(&fname.as_str()) {
                 results.push(format!(
                     r#"{{"name":"{}","offset":{},"type":{},"value":null,"enum":true,"internal":true}}"#,
@@ -9207,17 +9280,28 @@ unsafe fn il2cpp_read_static_fields(class_name: &str) -> String {
                 ));
                 continue;
             }
-            // ★ 命名常量：按C#规范推算值 = 声明顺序索引
-            // 如果有显式赋值（非默认），此处推算值会不准确，标注inferred
-            results.push(format!(
-                r#"{{"name":"{}","offset":{},"type":{},"value":{},"enum":true,"inferred":true}}"#,
-                json_escape(fname), offset, type_enum, enum_idx
-            ));
+            if has_runtime_values {
+                // 用runtime_invoke获取的真实值
+                let val = runtime_values.iter().find(|(n, _)| *n == fname.as_str())
+                    .map(|(_, v)| *v).unwrap_or(enum_idx);
+                results.push(format!(
+                    r#"{{"name":"{}","offset":{},"type":{},"value":{},"enum":true}}"#,
+                    json_escape(fname), offset, type_enum, val
+                ));
+            } else {
+                // 回退：C#规范推算，标注inferred
+                results.push(format!(
+                    r#"{{"name":"{}","offset":{},"type":{},"value":{},"enum":true,"inferred":true}}"#,
+                    json_escape(fname), offset, type_enum, enum_idx
+                ));
+            }
             enum_idx += 1;
         }
         return format!(
-            r#"{{"ok":true,"requested":"{}","found":"{}","field_count":{},"is_enum":true,"fields":[{}]}}"#,
-            class_name, real_name, results.len(), results.join(",")
+            r#"{{"ok":true,"requested":"{}","found":"{}","field_count":{},"is_enum":true,"values_source":"{}","fields":[{}]}}"#,
+            class_name, real_name, results.len(),
+            if has_runtime_values { "runtime_invoke" } else { "csharp_spec_inference" },
+            results.join(",")
         );
     }
 
