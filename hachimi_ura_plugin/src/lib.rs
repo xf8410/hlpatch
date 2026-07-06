@@ -4401,7 +4401,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             cn.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect::<String>(),
             mn.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect::<String>()
         );
-        let fname = format!("disassemble_{}.json", if safe_name.is_empty() { "output" } else { safe_name });
+        let fname = format!("disassemble_{}.json", if safe_name.is_empty() { "output" } else { &safe_name });
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             fname, body.len(), body
