@@ -4006,7 +4006,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.94","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.94","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4170,6 +4170,20 @@ fn handle_http(mut stream: std::net::TcpStream) {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 unsafe { debug_paramsincdec() }
             })).unwrap_or_else(|_| r#"{"error":"paramsincdec_panic"}"#.to_string());
+            SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+            result
+        }
+    } else if path == "/debug/training_seed" {
+        // 一键查找训练种子：自动完成 WorkDataManager → WorkSingleModeData → _fixedTurnCharaSeed
+        let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+        if jmp_result != 0 {
+            r#"{"error":"sigsegv_recovered","hint":"/debug/training_seed hit native crash, game protected"}"#.to_string()
+        } else {
+            SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                unsafe { debug_training_seed() }
+            })).unwrap_or_else(|_| r#"{"error":"training_seed_panic"}"#.to_string());
             SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
             result
         }
@@ -4465,7 +4479,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/debug/training_seed","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -9122,6 +9136,56 @@ unsafe fn debug_paramsincdec() -> String {
     format!(
         r#"{{"version":"3.22.91","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
+    )
+}
+
+/// 一键查找训练种子：WorkDataManager → WorkSingleModeData → _fixedTurnCharaSeed
+/// 自动完成 /singletons + read_mem(offset 96) + read_mem(offset 408) 的手动3步流程
+unsafe fn debug_training_seed() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+
+    // 1. 获取 WorkDataManager 单例
+    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
+    if wdm_cls.is_null() { return r#"{"error":"wdm_class_not_found"}"#.to_string(); }
+    let wdm_inst = get_singleton(wdm_cls);
+    if wdm_inst.is_null() { return r#"{"error":"wdm_null","hint":"game_not_loaded"}"#.to_string(); }
+
+    let wdm_addr = wdm_inst as usize;
+
+    // 2. 读取 offset 0x60 (96) → <SingleMode>k__BackingField → WorkSingleModeData 指针
+    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
+    if sm_ptr == 0 {
+        return format!(r#"{{"error":"single_mode_null","wdm_addr":"0x{:x}","hint":"not_in_training_scene"}}"#, wdm_addr);
+    }
+
+    // 3. 读取 offset 0x198 (408) → _fixedTurnCharaSeed (64 bytes)
+    let seed_addr = sm_ptr + 408;
+    let mut seed_bytes = [0u8; 64];
+    let src = seed_addr as *const u8;
+    for i in 0..64 {
+        seed_bytes[i] = std::ptr::read_unaligned::<u8>(src.add(i));
+    }
+
+    // 4. 解析为 u32 四元组
+    let s0 = u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]]);
+    let s1 = u32::from_le_bytes([seed_bytes[4], seed_bytes[5], seed_bytes[6], seed_bytes[7]]);
+    let s2 = u32::from_le_bytes([seed_bytes[8], seed_bytes[9], seed_bytes[10], seed_bytes[11]]);
+    let s3 = u32::from_le_bytes([seed_bytes[12], seed_bytes[13], seed_bytes[14], seed_bytes[15]]);
+
+    // 生成 hex dump
+    let mut hex_str = String::new();
+    for (i, b) in seed_bytes.iter().enumerate() {
+        if i > 0 && i % 16 == 0 { hex_str.push('\n'); }
+        hex_str.push_str(&format!("{:02x}", b));
+    }
+
+    format!(
+        r#"{{"ok":true,"wdm_addr":"0x{:x}","single_mode_addr":"0x{:x}","seed_addr":"0x{:x}","seed_s0":{},"seed_s1":{},"seed_s2":{},"seed_s3":{},"seed_hex":"{}"}}"#,
+        wdm_addr, sm_ptr, seed_addr,
+        s0, s1, s2, s3,
+        hex_str
     )
 }
 
