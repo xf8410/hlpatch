@@ -10039,7 +10039,7 @@ unsafe fn il2cpp_search_int(values_str: &str) -> String {
         .filter_map(|s| s.trim().parse::<u32>().ok())
         .collect();
     if values.is_empty() {
-        return r#"{"error":"no_valid_integers","input":""#.to_string() + &json_escape(values_str) + r#""}"#.to_string();
+        return format!(r#"{{"error":"no_valid_integers","input":"{}"}}"#, json_escape(values_str));
     }
     if values.len() > 20 {
         return r#"{"error":"too_many_values","max":20}"#.to_string();
