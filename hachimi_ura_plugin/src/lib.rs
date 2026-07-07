@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.89
+//! URA Plugin v3.22.90
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use rusqlite::{Connection, OpenFlags};
 use std::io::{Read, Write};
+use std::os::unix::fs::FileExt;
 
 #[repr(i32)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -3813,7 +3814,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.89","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.90","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -4000,7 +4001,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.89","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.90","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4371,12 +4372,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // v3.22.89: 读取原始内存（下载hex dump）
         let addr_str = parse_query(&full_uri, "addr");
         let size_str = parse_query(&full_uri, "size");
-        unsafe { il2cpp_read_mem(&addr_str, &size_str) }
+        il2cpp_read_mem(&addr_str, &size_str)
     } else if path.starts_with("/il2cpp/read_mem") {
         // v3.22.89: 读取原始内存（hex dump）
         let addr_str = parse_query(&full_uri, "addr");
         let size_str = parse_query(&full_uri, "size");
-        unsafe { il2cpp_read_mem(&addr_str, &size_str) }
+        il2cpp_read_mem(&addr_str, &size_str)
     } else if path == "/il2cpp/search_methods_page" {
         // v3.22.89: 搜索方法名HTML页面（A-Z分组）
         search_methods_page()
@@ -4704,7 +4705,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.89").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.90").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -4911,10 +4912,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.89 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.90 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.89 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.90 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -5667,7 +5668,7 @@ fn debug_unique_skills() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
         matched_tables.len(),
         results.join(","),
         sc_columns.join(",")
@@ -5754,7 +5755,7 @@ fn debug_table_query(table_name: &str, limit: usize, offset: usize) -> String {
 
     let col_json: Vec<String> = cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
     format!(
-        r#"{{"ok":true,"version":"3.22.89","table":"{}","columns":[{}],"row_count":{},"limit":{},"offset":{},"rows":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","table":"{}","columns":[{}],"row_count":{},"limit":{},"offset":{},"rows":[{}]}}"#,
         json_escape(table_name),
         col_json.join(","),
         total,
@@ -5875,7 +5876,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
             }
         }
         return format!(
-            r#"{{"ok":true,"version":"3.22.89","table":"{}","total_rows":{},"offset":{},"rows_queried":0,"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
+            r#"{{"ok":true,"version":"3.22.90","table":"{}","total_rows":{},"offset":{},"rows_queried":0,"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
             json_escape(table_name), total, offset, json_escape(table_name)
         );
     }
@@ -5901,7 +5902,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
     if !is_last_batch {
         // Not done yet - return progress
         return format!(
-            r#"{{"ok":true,"version":"3.22.89","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"next_offset":{},"complete":false}}"#,
+            r#"{{"ok":true,"version":"3.22.90","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"next_offset":{},"complete":false}}"#,
             json_escape(table_name), total, offset, rows_queried, next_offset
         );
     }
@@ -5914,7 +5915,7 @@ fn debug_push_table(table_name: &str, batch: usize, offset: usize) -> String {
     }
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
+        r#"{{"ok":true,"version":"3.22.90","table":"{}","total_rows":{},"offset":{},"rows_queried":{},"complete":true,"download_url":"/debug/download_table?name={}"}}"#,
         json_escape(table_name), total, offset, rows_queried, json_escape(table_name)
     )
 }
@@ -6064,7 +6065,7 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
     // If file > 2MB, return metadata instead of reading into memory
     if file_size > 2_000_000 {
         return format!(
-            r#"{{"ok":true,"version":"3.22.89","table":"{}","total_rows":{},"file_size":{},"file_path":"{}","hint":"file too large for HTTP response, use push_table batch mode instead"}}"#,
+            r#"{{"ok":true,"version":"3.22.90","table":"{}","total_rows":{},"file_size":{},"file_path":"{}","hint":"file too large for HTTP response, use push_table batch mode instead"}}"#,
             json_escape(table_name), total, file_size, tmp_path
         );
     }
@@ -6230,7 +6231,7 @@ fn debug_unique_detail() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
         cards.join(","),
         effects.join(","),
         combo_dist.join(","),
@@ -6368,7 +6369,7 @@ fn debug_sc_effect() -> String {
     let scue_col_json: Vec<String> = scue_cols.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect();
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
+        r#"{{"ok":true,"version":"3.22.90","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
         scet_col_json.join(","), scet_rows.join(","), scet_unique.join(","),
         scef_col_json.join(","), scef_rows.join(","),
         scefg_col_json.join(","), scefg_rows.join(","),
@@ -6508,7 +6509,7 @@ fn debug_hint_gain() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
         hint_rows.join(","),
         hint_with_cond.join(","),
         type_dist.join(","),
@@ -6581,7 +6582,7 @@ fn debug_mdb_all_tables() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","total_tables":{},"all_tables":[{}],"cond_keyword_tables":{},"cond_table_schemas":[{}]}}"#,
         all_tables.len(),
         tables_json.join(","),
         cond_tables.len(),
@@ -6977,7 +6978,7 @@ fn read_events_data() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","story_count":{},"choice_count":{},"gain_count":{},"title_count":{},"stories":[{}],"choices":[{}],"gains":[{}],"titles":[{}]}}"#,
         stories.len(), choices.len(), gains.len(), titles.len(),
         stories.join(","), choices.join(","), gains.join(","), titles.join(","),
     )
@@ -7042,7 +7043,7 @@ fn read_carddb() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","mdb":"{}","card_count":{},"effect_count":{},"cards":[{}],"effects":[{}]}}"#,
         mdb_path, cards.len(), effects.len(), cards.join(","), effects.join(",")
     )
 }
@@ -7114,7 +7115,7 @@ fn read_skilldata() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","mdb":"{}","skill_count":{},"name_count":{},"point_count":{},"skills":[{}],"names":[{}],"need_points":[{}]}}"#,
         mdb_path, skills.len(), names.len(), points.len(), skills.join(","), names.join(","), points.join(",")
     )
 }
@@ -7270,7 +7271,7 @@ fn read_saddles() -> String {
     drop(conn);
 
     format!(
-        r#"{{"ok":true,"version":"3.22.89","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
+        r#"{{"ok":true,"version":"3.22.90","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
         mdb_path, saddles.len(), chara_programs.len(), programs.len(),
         race_names.len(), chara_names.len(), relations.len(), relation_members.len(), race_instances.len(),
         saddles.join(","), chara_programs.join(","), programs.join(","),
@@ -8264,7 +8265,7 @@ unsafe fn read_inherit_compat() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.89","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
+        r#"{{"version":"3.22.90","parents":{{"first_chara_id":{},"second_chara_id":{}}},"factor_count":{},"relations":[{}],"relation_members":[{}],"relation_ranks":[{}],"target_races":[{}],"route_races":[{}]}}"#,
         first_chara_id, second_chara_id, factor_count,
         relations_json.join(","), relation_members_json.join(","),
         relation_ranks_json.join(","), target_races_json.join(","),
@@ -8365,7 +8366,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.89","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.90","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -8526,7 +8527,7 @@ unsafe fn read_event_recommend() -> String {
             drop(conn);
 
             format!(
-                r#"{{"version":"3.22.89","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
+                r#"{{"version":"3.22.90","current_state":{{"card_id":{},"scenario_id":{},"month":{},"half":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"skill_point":{}}},"support_card_ids":[{}],"eval_chara_ids":[{}],"total_events":{},"matching_events":{},"events":[{}],"choice_rewards":[{}]}}"#,
                 card_id, sid, mon, half, spd, sta, pow_, gut, wiz, vit, mvit, spt,
                 support_card_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
                 eval_chara_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","),
@@ -8536,13 +8537,13 @@ unsafe fn read_event_recommend() -> String {
             )
         } else {
             format!(
-                r#"{{"version":"3.22.89","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+                r#"{{"version":"3.22.90","error":"mdb_open_failed","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
                 card_id, sid
             )
         }
     } else {
         format!(
-            r#"{{"version":"3.22.89","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
+            r#"{{"version":"3.22.90","error":"mdb_not_found","current_state":{{"card_id":{},"scenario_id":{}}}}}"#,
             card_id, sid
         )
     }
@@ -8822,7 +8823,7 @@ unsafe fn debug_gauge() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.89","count":{},"elements":[{}]}}"#,
+        r#"{{"version":"3.22.90","count":{},"elements":[{}]}}"#,
         llen, elems.join(",")
     )
 }
@@ -8902,7 +8903,7 @@ unsafe fn debug_gauge2() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.89","arrays":[{}]}}"#,
+        r#"{{"version":"3.22.90","arrays":[{}]}}"#,
         results.join(",")
     )
 }
@@ -8999,7 +9000,7 @@ unsafe fn debug_paramsincdec() -> String {
     } else { -1 };
 
     format!(
-        r#"{{"version":"3.22.89","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
+        r#"{{"version":"3.22.90","cmd_len":{},"cmds":[{}],"IsGaugeGained":{}}}"#,
         cmd_len, cmd_details.join(","), is_gauge_gained
     )
 }
@@ -9050,7 +9051,7 @@ fn update_so() -> String {
     };
 
     // Compare versions: current is "3.22.89"
-    let current_ver = "3.22.89";
+    let current_ver = "3.22.90";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
@@ -10151,10 +10152,10 @@ unsafe fn il2cpp_search_int(values_str: &str) -> String {
     )
 }
 
-/// ★ v3.22.89: /il2cpp/read_mem?addr=0x71b2e4f000&size=4096
+/// ★ v3.22.90: /il2cpp/read_mem?addr=0x...&size=4096 (safe /proc/self/mem)
 /// 读取任意映射内存地址的原始字节，返回hex dump+ASCII
 /// 安全措施：验证地址在/proc/self/maps映射区域内，限制最大65536字节
-unsafe fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
+fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
     let addr = match usize::from_str_radix(addr_str.trim_start_matches("0x").trim_start_matches("0X"), 16) {
         Ok(a) => a,
         Err(_) => return format!(r#"{{"error":"invalid_addr","input":"{}"}}"#, json_escape(addr_str)),
@@ -10188,22 +10189,31 @@ unsafe fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
         return r#"{"error":"cannot_read_maps"}"#.to_string();
     }
 
-    let ptr = addr as *const u8;
+    // v3.22.90: 使用/proc/self/mem读取，避免直接指针解引用导致SIGSEGV
+    let mut mem_file = match std::fs::File::open("/proc/self/mem") {
+        Ok(f) => f,
+        Err(e) => return format!(r#"{{"error":"cannot_open_mem","detail":"{}"}}"#, e),
+    };
+    let mut buf = vec![0u8; size];
+    let bytes_read = match mem_file.read_at(&mut buf, addr as u64) {
+        Ok(n) => n,
+        Err(e) => return format!(r#"{{"error":"read_failed","addr":"0x{:x}","size":{},"detail":"{}"}}"#, addr, size, e),
+    };
     let mut hex_lines: Vec<String> = Vec::new();
-    for off in (0..size).step_by(16) {
-        let remaining = size - off;
+    for off in (0..bytes_read).step_by(16) {
+        let remaining = bytes_read - off;
         let line_size = if remaining >= 16 { 16 } else { remaining };
         let mut hex = String::new();
         let mut ascii = String::new();
         for i in 0..line_size {
-            let b = unsafe { std::ptr::read_unaligned::<u8>(ptr.add(off + i)) };
+            let b = buf[off + i];
             hex.push_str(&format!("{:02x} ", b));
             ascii.push(if b >= 0x20 && b < 0x7f { b as char } else { '.' });
         }
         for _ in line_size..16 { hex.push_str("   "); }
         hex_lines.push(format!("0x{:08x}:  {} {}", off, hex, ascii));
     }
-    format!("addr: 0x{:x}\nsize: {}\n\n{}", addr, size, hex_lines.join("\n"))
+    format!("addr: 0x{:x}\nsize: {}\nbytes_read: {}\n\n{}", addr, size, bytes_read, hex_lines.join("\n"))
 }
 
 /// D: /il2cpp/disassemble?class=XXX&method=YYY&bytes=2048
