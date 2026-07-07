@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.93
+//! URA Plugin v3.22.94
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -62,6 +62,12 @@ static CRASH_STEP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 static mut LAST_STEP_BUF: [u8; 128] = [0; 128];
 static LAST_STEP_LEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static AUTO_UPDATE_STATUS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+// ★ v3.22.94: Training result hook — intercept OnSuccessSendCommand to read resultType
+static mut LAST_TRAINING_RESULT: i32 = -1;
+static mut LAST_TRAINING_SUB_ID: i32 = -1;
+static mut TRAINING_HOOK_INSTALLED: bool = false;
+static mut ORIG_ON_SUCCESS_PROLOGUE: [u8; 16] = [0; 16];
+static mut ON_SUCCESS_ADDR: usize = 0;
 // ★ Mutex to prevent concurrent read_summary_inner calls from HTTP + push threads
 static READ_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -4000,7 +4006,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.93","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.94","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4092,6 +4098,14 @@ fn handle_http(mut stream: std::net::TcpStream) {
         upload_all_logs()
     } else if path == "/debug/cmdinfo" {
         unsafe { debug_cmdinfo() }
+    } else if path == "/training/result" {
+        // v3.22.94: Read latest training result from hook
+        let result = unsafe { LAST_TRAINING_RESULT };
+        let sub_id = unsafe { LAST_TRAINING_SUB_ID };
+        let hooked = unsafe { TRAINING_HOOK_INSTALLED };
+        format!(r#"{{"result_type":{},"sub_id":{},"hooked":{},"result_name":"{}"}}"#,
+            result, sub_id, hooked,
+            match result { 0 => "GreatSuccess", 1 => "Success", 2 => "Failure", _ => "Unknown" })
     } else if path.starts_with("/debug/dumpclass") {
         // v3.22.51: Dump all fields of any IL2CPP class by name
         // Usage: /debug/dumpclass?name=WorkSingleModeData
@@ -4451,7 +4465,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -4689,6 +4703,110 @@ extern "C" fn on_menu_item_click(_userdata: *mut c_void) {
     unsafe { ura_log(3, "URA menu item clicked"); }
 }
 
+// ★ v3.22.94: Training result hook — intercept OnSuccessSendCommand to read resultType
+// Write ARM64 hook bytes (LDR X16, [PC, #8]; BR X16; .quad handler)
+unsafe fn write_hook_bytes(target_addr: usize, handler_addr: usize) {
+    let page_size = 4096;
+    let page_addr = target_addr & !(page_size - 1);
+    libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
+    let hook: [u32; 4] = [
+        0x58000050,                    // LDR X16, [PC, #8]
+        0xD61F0200,                    // BR X16
+        handler_addr as u32,           // .quad (low 32 bits)
+        (handler_addr >> 32) as u32,   // .quad (high 32 bits)
+    ];
+    std::ptr::copy_nonoverlapping(hook.as_ptr(), target_addr as *mut u32, 4);
+}
+
+// Hook handler: called instead of OnSuccessSendCommand
+// Signature: IEnumerator OnSuccessSendCommand(TrainingResultType resultType, object turnInfo, int subId)
+// ARM64: X0=this, X1=turnInfo, W2=subId, W3=resultType
+extern "C" fn training_hook_handler(
+    this: *mut c_void,
+    turn_info: *mut c_void,
+    sub_id: i32,
+    result_type: i32,
+) -> *mut c_void {
+    unsafe {
+        LAST_TRAINING_RESULT = result_type;
+        LAST_TRAINING_SUB_ID = sub_id;
+
+        if !TRAINING_HOOK_INSTALLED || ON_SUCCESS_ADDR == 0 {
+            return std::ptr::null_mut();
+        }
+
+        // Unhook: restore original bytes
+        let page_size = 4096;
+        let page_addr = ON_SUCCESS_ADDR & !(page_size - 1);
+        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
+        std::ptr::copy_nonoverlapping(ORIG_ON_SUCCESS_PROLOGUE.as_ptr(), ON_SUCCESS_ADDR as *mut u8, 16);
+
+        // Call original function
+        type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, i32) -> *mut c_void;
+        let original: FnType = std::mem::transmute(ON_SUCCESS_ADDR);
+        let result = original(this, turn_info, sub_id, result_type);
+
+        // Rehook
+        write_hook_bytes(ON_SUCCESS_ADDR, training_hook_handler as usize);
+
+        result
+    }
+}
+
+unsafe fn find_method_addr(class: *mut c_void, method_name: &str, _param_count: i32) -> usize {
+    let get_methods_fn: Option<unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let method_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
+        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if get_methods_fn.is_none() || method_get_name_fn.is_none() { return 0; }
+
+    let mut iter: *mut c_void = std::ptr::null_mut();
+    loop {
+        let mi = get_methods_fn.unwrap()(class, &mut iter);
+        if mi.is_null() { break; }
+        let name_ptr = method_get_name_fn.unwrap()(mi);
+        if !name_ptr.is_null() {
+            let name = CStr::from_ptr(name_ptr).to_string_lossy();
+            if name == method_name {
+                let method_ptr = std::ptr::read_unaligned::<*const c_void>(mi as *const *const c_void);
+                return method_ptr as usize;
+            }
+        }
+    }
+    0
+}
+
+unsafe fn install_training_hook() {
+    if TRAINING_HOOK_INSTALLED { return; }
+    if API.is_null() { return; }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return,
+    };
+
+    let class = find_class_by_short_name(image, "SingleModeMainTrainingCuttController");
+    if class.is_null() { return; }
+
+    let method_addr = find_method_addr(class, "OnSuccessSendCommand", 3);
+    if method_addr == 0 { return; }
+
+    ON_SUCCESS_ADDR = method_addr;
+
+    // Save original 16 bytes
+    std::ptr::copy_nonoverlapping(method_addr as *const u8, ORIG_ON_SUCCESS_PROLOGUE.as_mut_ptr(), 16);
+
+    // Install hook
+    write_hook_bytes(method_addr, training_hook_handler as usize);
+
+    TRAINING_HOOK_INSTALLED = true;
+    ura_log(3, &format!("Training hook installed at 0x{:x}", method_addr));
+}
+
 extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     GAME_INITIALIZED.store(true, Ordering::Relaxed);
     unsafe {
@@ -4696,6 +4814,8 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
         ura_notify("URA: Game ready!");
         // v3.22.51: Pre-cache all IL2CPP metadata on game thread
         precache_metadata();
+        // v3.22.94: Install training result hook
+        install_training_hook();
     }
 }
 
@@ -4705,7 +4825,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.91").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.94").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
