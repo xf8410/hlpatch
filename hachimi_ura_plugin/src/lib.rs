@@ -4335,11 +4335,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let bytes_limit = bytes_str.parse::<usize>().unwrap_or(2048);
         unsafe { il2cpp_disassemble(&class_name, &method_name, bytes_limit) }
     } else if path.starts_with("/il2cpp/disassemble_addr_dl") {
-        // v3.22.89: 按地址反汇编结果下载JSON文件（手机浏览器复制上限对策）
+        // v3.22.91: 按地址反汇编结果下载JSON文件（修复：内联下载包装，避免被starts_with截胡）
         let addr_str = parse_query(&full_uri, "addr");
         let bytes_str = parse_query(&full_uri, "bytes");
         let bytes_limit = bytes_str.parse::<usize>().unwrap_or(2048);
-        unsafe { il2cpp_disassemble_addr(&addr_str, bytes_limit) }
+        let body = unsafe { il2cpp_disassemble_addr(&addr_str, bytes_limit) };
+        let safe_addr: String = addr_str.chars().filter(|c| c.is_alphanumeric()).collect();
+        let fname = format!("disassemble_addr_{}.json", if safe_addr.is_empty() { "output" } else { &safe_addr });
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            fname, body.len(), body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        return;
 
     } else if path.starts_with("/il2cpp/disassemble_addr") {
         // v3.22.89: 按地址反汇编ARM64指令体（分析ExecTraining等方法的子函数调用目标）
@@ -4446,16 +4454,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             fname, body.len(), body
         );
-    } else if path == "/il2cpp/disassemble_addr_dl" {
-        // v3.22.89: 按地址反汇编结果下载为JSON文件
-        let addr_str = parse_query(&full_uri, "addr");
-        let safe_addr: String = addr_str.chars().filter(|c| c.is_alphanumeric()).collect();
-        let fname = format!("disassemble_addr_{}.json", if safe_addr.is_empty() { "output" } else { &safe_addr });
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
     } else if path == "/il2cpp/dump_all_methods_dl" {
         // v3.22.89: 暴力dump全部类方法目录下载为JSON文件
         let letter = parse_query(&full_uri, "letter");
@@ -10455,14 +10453,38 @@ unsafe fn il2cpp_disassemble(class_name: &str, method_name: &str, bytes_limit: u
 // v3.22.89: 按地址反汇编ARM64指令体（用于分析ExecTraining等方法的子函数调用目标）
 // 安全措施：地址必须在umamusume.dll代码段内+4字节对齐+逐字节地址验证+大小限制+RET标记+浮点常量扫描
 unsafe fn il2cpp_disassemble_addr(addr_str: &str, bytes_limit: usize) -> String {
-    // 解析十六进制地址
-    let addr_val = match usize::from_str_radix(addr_str.trim_start_matches("0x").trim_start_matches("0X"), 16) {
+    // ★ 先尝试作为绝对地址，失败则尝试作为偏移（base_addr + offset）
+    let trimmed = addr_str.trim_start_matches("0x").trim_start_matches("0X");
+    let addr_val = match usize::from_str_radix(trimmed, 16) {
         Ok(v) => v,
-        Err(_) => return r#"{"error":"invalid_addr_format","hint":"use hex like 0x7336296890"}"#.to_string(),
+        Err(_) => return format!(r#"{{"error":"invalid_addr_format","received":"{}","hint":"use hex like 0x7336296890"}}"#, addr_str),
     };
 
     if addr_val == 0 {
         return r#"{"error":"addr_zero"}"#.to_string();
+    }
+
+    // ★ v3.22.91: 自动检测偏移量模式。如果addr < 0x1000000（16MB），当作SO内偏移，需先读取base_addr
+    // 注意：search_float返回的abs_addr是绝对地址，不需要此转换；但用户手动传offset时走此路径
+    let mut working_addr = addr_val;
+    if addr_val < 0x1000000 {
+        // 从/proc/self/maps获取umamusume的base_addr
+        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            for line in maps.lines() {
+                if line.contains("umamusume") && line.contains("r-xp") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if !parts.is_empty() {
+                        let addr_parts: Vec<&str> = parts[0].split('-').collect();
+                        if addr_parts.len() == 2 {
+                            if let Ok(start) = usize::from_str_radix(addr_parts[0], 16) {
+                                working_addr = start + addr_val;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // 限制最大读取字节数防止闪退（最大4096字节，默认2048）
@@ -10470,10 +10492,10 @@ unsafe fn il2cpp_disassemble_addr(addr_str: &str, bytes_limit: usize) -> String 
     let bytes_limit = if bytes_limit == 0 || bytes_limit > max_bytes { 2048 } else { bytes_limit };
 
     // 4字节对齐检查（ARM64指令必须是4字节对齐的）
-    if addr_val % 4 != 0 {
+    if working_addr % 4 != 0 {
         return format!(
             r#"{{"error":"addr_not_aligned","addr":"0x{:x}"}}"#,
-            addr_val
+            working_addr
         );
     }
 
@@ -10498,29 +10520,29 @@ unsafe fn il2cpp_disassemble_addr(addr_str: &str, bytes_limit: usize) -> String 
         }
     }
 
-    if code_start == 0 || addr_val < code_start || addr_val >= code_end {
+    if code_start == 0 || working_addr < code_start || working_addr >= code_end {
         return format!(
             r#"{{"error":"addr_outside_code_section","addr":"0x{:x}","code_start":"0x{:x}","code_end":"0x{:x}"}}"#,
-            addr_val, code_start, code_end
+            working_addr, code_start, code_end
         );
     }
 
     // 计算安全读取字节数（不超出代码段边界，4字节对齐）
-    let available_bytes = code_end - addr_val;
+    let available_bytes = code_end - working_addr;
     let safe_bytes = available_bytes.min(bytes_limit) & !3;
     if safe_bytes < 16 {
         return format!(
             r#"{{"error":"insufficient_code_bytes","available":{},"addr":"0x{:x}"}}"#,
-            available_bytes, addr_val
+            available_bytes, working_addr
         );
     }
 
     // 读取指令字节（逐字节read_unaligned，安全检查每个地址）
-    let src_ptr = addr_val as *const u8;
+    let src_ptr = working_addr as *const u8;
     let mut bytes = Vec::with_capacity(safe_bytes);
     let mut read_ok = true;
     for i in 0..safe_bytes {
-        let byte_addr = addr_val + i;
+        let byte_addr = working_addr + i;
         // 每个字节都检查在代码段内
         if byte_addr < code_start || byte_addr >= code_end {
             read_ok = false;
@@ -10610,7 +10632,7 @@ unsafe fn il2cpp_disassemble_addr(addr_str: &str, bytes_limit: usize) -> String 
             } else {
                 imm26 as i64
             };
-            let target = (addr_val as i64 + (off as i64) + (offset * 4)) as usize;
+            let target = (working_addr as i64 + (off as i64) + (offset * 4)) as usize;
             bl_targets.push(format!(
                 r#"{{"offset":{},"target":"0x{:x}"}}"#,
                 off, target
@@ -10652,7 +10674,7 @@ unsafe fn il2cpp_disassemble_addr(addr_str: &str, bytes_limit: usize) -> String 
 
     format!(
         r#"{{"ok":true,"addr":"0x{:x}","bytes_read":{},"code_section":"0x{:x}-0x{:x}","hex_dump":{},"ret_offsets":[{}],"found_constants":[{}],"bl_targets":[{}],"float_ops":[{}]}}"#,
-        addr_val,
+        working_addr,
         bytes_read,
         code_start,
         code_end,
