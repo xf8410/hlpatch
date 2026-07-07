@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.91
+//! URA Plugin v3.22.92
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -4000,7 +4000,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.91","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.92","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4288,9 +4288,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let sql = parse_query(&full_uri, "sql");
         mdb_raw_query(&sql)
     } else if path.starts_with("/il2cpp/dump_all_methods_dl") {
-        // v3.22.89: 暴力dump全部类方法目录（下载JSON，按letter分组）
+        // v3.22.91: 暴力dump全部类方法目录（下载JSON，修复：内联下载包装）
         let letter = parse_query(&full_uri, "letter");
-        unsafe { il2cpp_dump_all_methods(&letter) }
+        let body = unsafe { il2cpp_dump_all_methods(&letter) };
+        let safe_letter: String = letter.chars().filter(|c| c.is_alphanumeric()).collect();
+        let fname = format!("dump_all_methods_{}.json", if safe_letter.is_empty() { "ALL" } else { &safe_letter });
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            fname, body.len(), body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        return;
     } else if path.starts_with("/il2cpp/dump_all_methods") {
         // v3.22.89: 暴力dump全部类方法目录（按letter分组避免手机卡死）
         let letter = parse_query(&full_uri, "letter");
@@ -4363,9 +4371,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let bytes_limit = bytes_str.parse::<usize>().unwrap_or(2048);
         unsafe { il2cpp_disassemble(&class_name, &method_name, bytes_limit) }
     } else if path.starts_with("/il2cpp/search_int_dl") {
-        // v3.22.89: 搜索整数千分比（下载JSON）
+        // v3.22.91: 搜索整数千分比（下载JSON，修复：内联下载包装）
         let values_str = parse_query(&full_uri, "values");
-        unsafe { il2cpp_search_int(&values_str) }
+        let body = unsafe { il2cpp_search_int(&values_str) };
+        let safe_vals: String = values_str.chars().filter(|c| c.is_alphanumeric() || *c == ',').collect();
+        let fname = format!("search_int_{}.json", if safe_vals.is_empty() { "all".into() } else { safe_vals });
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            fname, body.len(), body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        return;
     } else if path.starts_with("/il2cpp/search_int") {
         // v3.22.89: 搜索整数千分比
         let values_str = parse_query(&full_uri, "values");
@@ -4376,10 +4392,18 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let value_str = parse_query(&full_uri, "value");
         unsafe { il2cpp_search_float(&value_str) }
     } else if path.starts_with("/il2cpp/read_mem_dl") {
-        // v3.22.89: 读取原始内存（下载hex dump）
+        // v3.22.91: 读取原始内存（下载hex dump，修复：内联下载包装）
         let addr_str = parse_query(&full_uri, "addr");
         let size_str = parse_query(&full_uri, "size");
-        il2cpp_read_mem(&addr_str, &size_str)
+        let body = il2cpp_read_mem(&addr_str, &size_str);
+        let safe_addr: String = addr_str.chars().filter(|c| c.is_alphanumeric()).collect();
+        let fname = format!("read_mem_{}.txt", if safe_addr.is_empty() { "output" } else { &safe_addr });
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            fname, body.len(), body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        return;
     } else if path.starts_with("/il2cpp/read_mem") {
         // v3.22.89: 读取原始内存（hex dump）
         let addr_str = parse_query(&full_uri, "addr");
@@ -4389,10 +4413,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // v3.22.89: 搜索方法名HTML页面（A-Z分组）
         search_methods_page()
     } else if path.starts_with("/il2cpp/search_methods_dl") {
-        // v3.22.89: 跨类搜索方法名（下载JSON文件）
+        // v3.22.91: 跨类搜索方法名（下载JSON，修复：内联下载包装）
         let keyword = parse_query(&full_uri, "keyword");
         let letter = parse_query(&full_uri, "letter");
-        unsafe { il2cpp_search_methods(&keyword, &letter) }
+        let body = unsafe { il2cpp_search_methods(&keyword, &letter) };
+        let kw = &keyword;
+        let safe_kw: String = kw.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
+        let fname = format!("search_methods_{}.json", if safe_kw.is_empty() { "all".into() } else { safe_kw });
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            fname, body.len(), body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        return;
     } else if path.starts_with("/il2cpp/search_methods") {
         // v3.22.89: 跨类搜索方法名关键词
         let keyword = parse_query(&full_uri, "keyword");
@@ -4454,48 +4487,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             fname, body.len(), body
         );
-    } else if path == "/il2cpp/dump_all_methods_dl" {
-        // v3.22.89: 暴力dump全部类方法目录下载为JSON文件
-        let letter = parse_query(&full_uri, "letter");
-        let safe_letter: String = letter.chars().filter(|c| c.is_alphanumeric()).collect();
-        let fname = format!("dump_all_methods_{}.json", if safe_letter.is_empty() { "ALL" } else { &safe_letter });
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-    } else if path == "/il2cpp/search_int_dl" {
-        // v3.22.89: 整数千分比搜索结果下载为JSON
-        let values_str = parse_query(&full_uri, "values");
-        let safe_vals: String = values_str.chars().filter(|c| c.is_alphanumeric() || *c == ',').collect();
-        let fname = format!("search_int_{}.json", if safe_vals.is_empty() { "all".into() } else { safe_vals });
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-    
-    } else if path == "/il2cpp/read_mem_dl" {
-        // v3.22.89: 原始内存读取下载为hex dump文件
-        let addr_str = parse_query(&full_uri, "addr");
-        let safe_addr: String = addr_str.chars().filter(|c| c.is_alphanumeric()).collect();
-        let fname = format!("read_mem_{}.txt", if safe_addr.is_empty() { "output" } else { &safe_addr });
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-
-    } else if path == "/il2cpp/search_methods_dl" {
-        // v3.22.89: 搜索方法结果下载为JSON文件（手机浏览器复制上限对策）
-        let kw = parse_query(&full_uri, "keyword");
-        let safe_kw: String = kw.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
-        let fname = format!("search_methods_{}.json", if safe_kw.is_empty() { "all".into() } else { safe_kw });
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
     } else {
         let content_type = if body.starts_with("<!DOCTYPE") || body.starts_with("<html") { "text/html; charset=utf-8" } else { "application/json" };
         let resp = format!(
@@ -9048,7 +9039,7 @@ fn update_so() -> String {
     };
 
     // Compare versions: current is "3.22.89"
-    let current_ver = "3.22.91";
+    let current_ver = "3.22.92";
     if tag_name == format!("v{}", current_ver) {
         return format!(r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#, current_ver, tag_name);
     }
@@ -10153,13 +10144,33 @@ unsafe fn il2cpp_search_int(values_str: &str) -> String {
 /// 读取任意映射内存地址的原始字节，返回hex dump+ASCII
 /// 安全措施：验证地址在/proc/self/maps映射区域内，限制最大65536字节
 fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
-    let addr = match usize::from_str_radix(addr_str.trim_start_matches("0x").trim_start_matches("0X"), 16) {
+    let raw_addr = match usize::from_str_radix(addr_str.trim_start_matches("0x").trim_start_matches("0X"), 16) {
         Ok(a) => a,
         Err(_) => return format!(r#"{{"error":"invalid_addr","input":"{}"}}"#, json_escape(addr_str)),
     };
     let size = size_str.parse::<usize>().unwrap_or(4096);
     if size == 0 || size > 65536 {
         return format!(r#"{{"error":"invalid_size","size":{},"max":65536}}"#, size);
+    }
+    // ★ v3.22.91: 自动检测偏移量模式。如果addr < 0x1000000，当作SO内偏移
+    let mut addr = raw_addr;
+    if raw_addr < 0x1000000 {
+        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            for line in maps.lines() {
+                if line.contains("umamusume") && line.contains("r-xp") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if !parts.is_empty() {
+                        let ap: Vec<&str> = parts[0].split('-').collect();
+                        if ap.len() == 2 {
+                            if let Ok(start) = usize::from_str_radix(ap[0], 16) {
+                                addr = start + raw_addr;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     // 验证地址范围在映射区域内
     if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
