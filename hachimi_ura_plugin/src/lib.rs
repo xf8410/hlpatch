@@ -1,4 +1,4 @@
-//! URA Plugin v3.22.94
+//! URA Plugin v3.22.95
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3819,7 +3819,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.22.91","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.22.95","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -4006,7 +4006,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.94","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.95","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4851,6 +4851,8 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
         install_training_hook();
         // v3.22.95: Install ExecTraining hook (seed capture before training)
         install_exec_training_hook();
+        // v3.22.95: Install FailureRate hook (capture failure rate for training log)
+        install_failure_rate_hook();
     }
 }
 
@@ -4860,7 +4862,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.94").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.22.95").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -5067,10 +5069,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.91 loaded (Ramen + Kakushimi + AI eval)");
+    ura_log(3, "URA plugin v3.22.95 loaded (Ramen + Kakushimi + AI eval)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.91 Loaded!").as_ptr());
+        f(to_cstr("URA v3.22.95 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -8521,7 +8523,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.22.91","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.22.95","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -9216,15 +9218,23 @@ static mut ORIG_EXEC_TRAINING_PROLOGUE: [u8; 16] = [0; 16];
 static mut EXEC_TRAINING_ADDR: usize = 0;
 static mut LAST_SEED_BEFORE: [u32; 4] = [0, 0, 0, 0];
 static mut LAST_SEED_AFTER: [u32; 4] = [0, 0, 0, 0];
+static mut LAST_MOTIVATION: i32 = -1;    // 干劲(1-5), captured in exec_training_hook
+static mut LAST_FAILURE_RATE: i32 = -1;  // 失败率(0-10000), from FailureRateService hook
+// FailureRateService hook statics
+static mut FAILURE_RATE_HOOK_INSTALLED: bool = false;
+static mut ORIG_FAILURE_RATE_PROLOGUE: [u8; 16] = [0; 16];
+static mut FAILURE_RATE_ADDR: usize = 0;
 static mut TRAINING_PREDICT_LOG: Vec<String> = Vec::new();
 const MAX_PREDICT_LOG: usize = 50;
 
 // Hook handler: called instead of ExecTraining (static, 2 params, void)
 extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
     unsafe {
-        // Read seed before training
+        // Read seed + motivation before training
         let seed_before = read_seed_inner();
         LAST_SEED_BEFORE = seed_before;
+        let motivation = read_motivation_inner();
+        LAST_MOTIVATION = motivation;
 
         if !EXEC_TRAINING_HOOK_INSTALLED || EXEC_TRAINING_ADDR == 0 {
             return;
@@ -9257,17 +9267,21 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
             _ => "Unknown",
         };
 
+        // Read failure rate from FailureRateService hook (0-10000 = 0%-100%)
+        let failure_rate = LAST_FAILURE_RATE;
+
         // Log prediction entry
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let entry = format!(
-            r#"{{"ts":{},"s0":{},"s1_before":{},"s1_after":{},"s1_delta":{},"s2":{},"s3":{},"result":{},"result_name":"{}"}}"#,
+            r#"{{"ts":{},"s0":{},"s1_before":{},"s1_after":{},"s1_delta":{},"s2":{},"s3":{},"motivation":{},"failure_rate":{},"result":{},"result_name":"{}"}}"#,
             ts,
             seed_before[0], seed_before[1], seed_after[1],
             (seed_after[1] as i64 - seed_before[1] as i64),
             seed_before[2], seed_before[3],
+            motivation, failure_rate,
             result_type, result_name
         );
         if TRAINING_PREDICT_LOG.len() >= MAX_PREDICT_LOG {
@@ -9298,6 +9312,93 @@ unsafe fn read_seed_inner() -> [u32; 4] {
         std::ptr::read_unaligned::<u32>(seed_addr.add(2)),
         std::ptr::read_unaligned::<u32>(seed_addr.add(3)),
     ]
+}
+
+// Read motivation (干劲) from character data, same path as read_seed_inner
+// Returns 1-5 (Worst/Bad/Normal/Good/Best), -1 on error
+unsafe fn read_motivation_inner() -> i32 {
+    if API.is_null() { return -1; }
+    let image = get_image();
+    if image.is_null() { return -1; }
+
+    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
+    if wdm_cls.is_null() { return -1; }
+    let wdm_inst = get_singleton(wdm_cls);
+    if wdm_inst.is_null() { return -1; }
+
+    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
+    if sm_ptr == 0 { return -1; }
+
+    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
+    if sm_class.is_null() { return -1; }
+
+    let chara_obj = call_getter_on_instance(sm_class, sm_ptr as *const c_void, "get_Character");
+    if chara_obj.is_null() { return -1; }
+
+    let chara_class = find_class_by_short_name(image, "WorkSingleModeCharaData");
+    if chara_class.is_null() { return -1; }
+
+    call_getter_int(chara_class, chara_obj, "get_Motivation")
+}
+
+// Hook SingleModeTrainingFailureRateService.GetTrainingFailureRateIgnoreCharaEffect
+// Captures the last failure rate (0-10000 = 0%-100%) for use in training log
+extern "C" fn failure_rate_hook(param1: *mut c_void, param2: *mut c_void) -> i32 {
+    unsafe {
+        if !FAILURE_RATE_HOOK_INSTALLED || FAILURE_RATE_ADDR == 0 {
+            return 0;
+        }
+
+        // Unhook
+        let page_size = 4096;
+        let page_addr = FAILURE_RATE_ADDR & !(page_size - 1);
+        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
+        std::ptr::copy_nonoverlapping(ORIG_FAILURE_RATE_PROLOGUE.as_ptr(), FAILURE_RATE_ADDR as *mut u8, 16);
+
+        // Call original
+        type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
+        let original: FnType = std::mem::transmute(FAILURE_RATE_ADDR);
+        let result = original(param1, param2);
+
+        // Rehook
+        write_hook_bytes(FAILURE_RATE_ADDR, failure_rate_hook as usize);
+
+        LAST_FAILURE_RATE = result;
+        result
+    }
+}
+
+unsafe fn install_failure_rate_hook() {
+    if FAILURE_RATE_HOOK_INSTALLED { return; }
+    if API.is_null() { return; }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return,
+    };
+
+    let class = find_class_by_short_name(image, "SingleModeTrainingFailureRateService");
+    if class.is_null() {
+        ura_log(3, "FailureRate hook: class not found");
+        return;
+    }
+
+    let method_addr = find_method_addr(class, "GetTrainingFailureRateIgnoreCharaEffect", 2);
+    if method_addr == 0 {
+        ura_log(3, "FailureRate hook: method not found");
+        return;
+    }
+
+    FAILURE_RATE_ADDR = method_addr;
+
+    // Save original 16 bytes
+    std::ptr::copy_nonoverlapping(method_addr as *const u8, ORIG_FAILURE_RATE_PROLOGUE.as_mut_ptr(), 16);
+
+    // Install hook
+    write_hook_bytes(method_addr, failure_rate_hook as usize);
+
+    FAILURE_RATE_HOOK_INSTALLED = true;
+    ura_log(3, &format!("FailureRate hook installed at 0x{:x}", method_addr));
 }
 
 unsafe fn install_exec_training_hook() {
