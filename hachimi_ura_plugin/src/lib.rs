@@ -1,4 +1,4 @@
-//! URA Plugin v3.23.2
+//! URA Plugin v3.23.3
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -51,6 +51,13 @@ struct Api {
     il2cpp_get_singleton_like_instance_fn: Option<unsafe extern "C" fn(*mut c_void) -> *const c_void>,
     il2cpp_string_chars_fn: Option<unsafe extern "C" fn(*const c_void) -> *mut u16>,
     il2cpp_string_length_fn: Option<unsafe extern "C" fn(*const c_void) -> i32>,
+    // ★ v3.23.3: Hachimi-Edge V3 Interceptor API
+    hachimi_instance_fn: Option<unsafe extern "C" fn() -> usize>,
+    hachimi_get_interceptor_fn: Option<unsafe extern "C" fn(usize) -> usize>,
+    interceptor: usize,
+    interceptor_hook_fn: Option<unsafe extern "C" fn(usize, *mut c_void, *mut c_void) -> *mut c_void>,
+    interceptor_get_trampoline_addr_fn: Option<unsafe extern "C" fn(usize, *mut c_void) -> *mut c_void>,
+    il2cpp_get_method_addr_fn: Option<unsafe extern "C" fn(usize, *const c_char, i32) -> usize>,
 }
 
 static mut API: *const Api = ptr::null();
@@ -68,7 +75,7 @@ static mut LAST_TRAINING_SUB_ID: i32 = -1;
 static mut TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_ON_SUCCESS_PROLOGUE: [u8; 16] = [0; 16];
 static mut ON_SUCCESS_ADDR: usize = 0;
-// ★ v3.23.2: API sniffing — hook HttpHelper._Send + SetHeader + CompressRequest + DecompressResponse (il2cpp_method_get_pointer + name-based lookup)
+// ★ v3.23.3: API sniffing — use Hachimi Interceptor API (hook+trampoline) + WWWRequest.Post for URL (replaces _Send+SetHeader)
 static SNIFF_ENABLED: AtomicBool = AtomicBool::new(false);
 static SNIFF_MUTEX: Mutex<()> = Mutex::new(());
 // SniffEntry: (id, url, headers_json, body)
@@ -79,17 +86,13 @@ static SNIFF_REQ_ID: AtomicU64 = AtomicU64::new(0);
 static mut PENDING_URL: String = String::new();
 static mut PENDING_HEADERS: Vec<(String, String)> = Vec::new();
 static mut PENDING_REQ_ID: u64 = 0;
-// CompressRequest/DecompressResponse hook addresses
+// CompressRequest/DecompressResponse/Post hook addresses (via Interceptor API)
 static mut COMPRESS_REQUEST_ADDR: usize = 0;
 static mut DECOMPRESS_RESPONSE_ADDR: usize = 0;
-static mut ORIG_COMPRESS_PROLOGUE: [u8; 16] = [0; 16];
-static mut ORIG_DECOMPRESS_PROLOGUE: [u8; 16] = [0; 16];
-// _Send hook (shared address)
-static mut SEND_ADDR: usize = 0;
-static mut ORIG_SEND_PROLOGUE: [u8; 16] = [0; 16];
-// SetHeader hook
-static mut SETHEADER_ADDR: usize = 0;
-static mut ORIG_SETHEADER_PROLOGUE: [u8; 16] = [0; 16];
+static mut POST_ADDR: usize = 0;
+// Pending request body parking (CompressRequest → Post matching)
+static mut PENDING_REQ_BODY: Option<Vec<u8>> = None;
+static mut PENDING_COMPRESSED: usize = 0;
 // ★ Mutex to prevent concurrent read_summary_inner calls from HTTP + push threads
 static READ_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -4034,7 +4037,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.23.2","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag"]}"#.to_string()
+        r#"{"status":"ok","version":"3.23.3","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4139,34 +4142,28 @@ fn handle_http(mut stream: std::net::TcpStream) {
         SNIFF_ENABLED.store(new_val, Ordering::Relaxed);
         let req_hooked = unsafe { COMPRESS_REQUEST_ADDR != 0 };
         let resp_hooked = unsafe { DECOMPRESS_RESPONSE_ADDR != 0 };
-        let send_hooked = unsafe { SEND_ADDR != 0 };
-        let header_hooked = unsafe { SETHEADER_ADDR != 0 };
-        format!(r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"send_hooked":{},"setheader_hooked":{}}}"#,
-            new_val, req_hooked, resp_hooked, send_hooked, header_hooked)
+        let post_hooked = unsafe { POST_ADDR != 0 };
+        format!(r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"post_hooked":{}}}"#,
+            new_val, req_hooked, resp_hooked, post_hooked)
     } else if path == "/api/sniff/clear" {
         let _lock = SNIFF_MUTEX.lock();
         unsafe { SNIFF_REQUESTS.clear(); SNIFF_RESPONSES.clear(); }
         r#"{"ok":true}"#.to_string()
     } else if path == "/api/sniff/diag" {
-        // v3.23.2: Diagnostic endpoint for hook installation
+        // v3.23.3: Diagnostic endpoint for hook installation (Interceptor API)
         let req_hooked = unsafe { COMPRESS_REQUEST_ADDR != 0 };
         let resp_hooked = unsafe { DECOMPRESS_RESPONSE_ADDR != 0 };
-        let send_hooked = unsafe { SEND_ADDR != 0 };
-        let header_hooked = unsafe { SETHEADER_ADDR != 0 };
+        let post_hooked = unsafe { POST_ADDR != 0 };
         let req_addr = unsafe { COMPRESS_REQUEST_ADDR };
         let resp_addr = unsafe { DECOMPRESS_RESPONSE_ADDR };
-        let send_addr = unsafe { SEND_ADDR };
-        let header_addr = unsafe { SETHEADER_ADDR };
-        // Probe IL2CPP API availability
-        let has_get_method_from_name = unsafe { !resolve_il2cpp_symbol("il2cpp_class_get_method_from_name").is_null() };
-        let has_get_method_pointer = unsafe { !resolve_il2cpp_symbol("il2cpp_method_get_pointer").is_null() };
-        let has_get_methods = unsafe { !resolve_il2cpp_symbol("il2cpp_class_get_methods").is_null() };
-        let has_get_method_name = unsafe { !resolve_il2cpp_symbol("il2cpp_method_get_name").is_null() };
-        format!(r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"send_hooked":{},"setheader_hooked":{},"compress_addr":"0x{:x}","decompress_addr":"0x{:x}","send_addr":"0x{:x}","setheader_addr":"0x{:x}","il2cpp_apis":{{"get_method_from_name":{},"get_method_pointer":{},"get_methods":{},"get_method_name":{}}}}}"#,
+        let post_addr = unsafe { POST_ADDR };
+        let interceptor_available = unsafe { !API.is_null() && (*API).interceptor != 0 };
+        let has_get_method_addr = unsafe { !API.is_null() && (*API).il2cpp_get_method_addr_fn.is_some() };
+        format!(r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"post_hooked":{},"compress_addr":"0x{:x}","decompress_addr":"0x{:x}","post_addr":"0x{:x}","interceptor_available":{},"get_method_addr_available":{}}}"#,
             SNIFF_ENABLED.load(Ordering::Relaxed),
-            req_hooked, resp_hooked, send_hooked, header_hooked,
-            req_addr, resp_addr, send_addr, header_addr,
-            has_get_method_from_name, has_get_method_pointer, has_get_methods, has_get_method_name)
+            req_hooked, resp_hooked, post_hooked,
+            req_addr, resp_addr, post_addr,
+            interceptor_available, has_get_method_addr)
     } else if path == "/api/sniff" {
         let _lock = SNIFF_MUTEX.lock();
         unsafe {
@@ -4892,7 +4889,7 @@ unsafe fn find_method_addr(class: *mut c_void, method_name: &str, _param_count: 
         if !name_ptr.is_null() {
             let name = CStr::from_ptr(name_ptr).to_string_lossy();
             if name == method_name {
-                // v3.23.2: Try il2cpp_method_get_pointer (official API)
+                // v3.23.3: (legacy fallback - unused) (official API)
                 let method_get_ptr_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> = {
                     let p = resolve_il2cpp_symbol("il2cpp_method_get_pointer");
                     if p.is_null() { None } else { Some(std::mem::transmute(p)) }
@@ -4950,7 +4947,7 @@ unsafe fn install_training_hook() {
     ura_log(3, &format!("Training hook installed at 0x{:x}", method_addr));
 }
 
-// ★ v3.23.2: API sniffing — read IL2CPP byte array
+// ★ v3.23.3: API sniffing — read IL2CPP byte array
 // IL2CPP array layout: klass(8) + monitor(8) + bounds(8) + max_length(8) + data
 unsafe fn read_il2cpp_byte_array(arr: *const c_void) -> Vec<u8> {
     if arr.is_null() { return vec![]; }
@@ -4972,50 +4969,57 @@ fn hex_encode(data: &[u8]) -> String {
     s
 }
 
-// Hook handler for CompressRequest(byte[] data) -> byte[]
+// ★ v3.23.3: Interceptor helpers — use Hachimi-Edge V3 interceptor API
+unsafe fn interceptor_hook(orig_addr: usize, hook_addr: usize) -> bool {
+    if API.is_null() || orig_addr == 0 || hook_addr == 0 { return false; }
+    let api = &*API;
+    if api.interceptor == 0 { return false; }
+    if let Some(f) = api.interceptor_hook_fn {
+        !f(api.interceptor, orig_addr as *mut c_void, hook_addr as *mut c_void).is_null()
+    } else { false }
+}
+
+unsafe fn interceptor_get_trampoline(hook_addr: usize) -> usize {
+    if API.is_null() || hook_addr == 0 { return 0; }
+    let api = &*API;
+    if api.interceptor == 0 { return 0; }
+    if let Some(f) = api.interceptor_get_trampoline_addr_fn {
+        f(api.interceptor, hook_addr as *mut c_void) as usize
+    } else { 0 }
+}
+
+// ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]
+// Parks the uncompressed request body, keyed by the compressed byte array returned by the original.
+// WWWRequest.Post will match it later.
 extern "C" fn compress_request_hook_handler(data: *mut c_void) -> *mut c_void {
     unsafe {
-        if SNIFF_ENABLED.load(Ordering::Relaxed) {
-            let bytes = read_il2cpp_byte_array(data);
-            if !bytes.is_empty() {
-                let _lock = SNIFF_MUTEX.lock();
-                let url = PENDING_URL.clone();
-                let headers = PENDING_HEADERS.clone();
-                let rid = PENDING_REQ_ID;
-                let headers_json = format_headers_json(&headers);
-                SNIFF_REQUESTS.push((rid, url, headers_json, bytes));
-                if SNIFF_REQUESTS.len() > SNIFF_MAX { SNIFF_REQUESTS.remove(0); }
-                // Clear pending state
-                PENDING_URL.clear();
-                PENDING_HEADERS.clear();
+        let body = read_il2cpp_byte_array(data);
+        let trampoline = interceptor_get_trampoline(compress_request_hook_handler as usize);
+        if trampoline == 0 { return std::ptr::null_mut(); }
+        type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+        let original: FnType = std::mem::transmute(trampoline);
+        let compressed = original(data);
+        if let Some(body) = body {
+            if !body.is_empty() && POST_ADDR != 0 {
+                PENDING_REQ_BODY = Some(body);
+                PENDING_COMPRESSED = compressed as usize;
             }
         }
-        if COMPRESS_REQUEST_ADDR == 0 { return std::ptr::null_mut(); }
-        let page_size = 4096;
-        let page_addr = COMPRESS_REQUEST_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_COMPRESS_PROLOGUE.as_ptr(), COMPRESS_REQUEST_ADDR as *mut u8, 16);
-        type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
-        let original: FnType = std::mem::transmute(COMPRESS_REQUEST_ADDR);
-        let result = original(data);
-        write_hook_bytes(COMPRESS_REQUEST_ADDR, compress_request_hook_handler as usize);
-        result
+        compressed
     }
 }
 
-// Hook handler for DecompressResponse(byte[] data) -> byte[]
+// ★ v3.23.3: Hook handler for DecompressResponse(byte[] data) -> byte[]
+// Forwards the decompressed response body with the matching request's URL + headers.
 extern "C" fn decompress_response_hook_handler(data: *mut c_void) -> *mut c_void {
     unsafe {
-        if DECOMPRESS_RESPONSE_ADDR == 0 { return std::ptr::null_mut(); }
-        let page_size = 4096;
-        let page_addr = DECOMPRESS_RESPONSE_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_DECOMPRESS_PROLOGUE.as_ptr(), DECOMPRESS_RESPONSE_ADDR as *mut u8, 16);
+        let trampoline = interceptor_get_trampoline(decompress_response_hook_handler as usize);
+        if trampoline == 0 { return std::ptr::null_mut(); }
         type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
-        let original: FnType = std::mem::transmute(DECOMPRESS_RESPONSE_ADDR);
-        let result = original(data);
+        let original: FnType = std::mem::transmute(trampoline);
+        let decompressed = original(data);
         if SNIFF_ENABLED.load(Ordering::Relaxed) {
-            let bytes = read_il2cpp_byte_array(result);
+            let bytes = read_il2cpp_byte_array(decompressed);
             if !bytes.is_empty() {
                 let _lock = SNIFF_MUTEX.lock();
                 let rid = PENDING_REQ_ID;
@@ -5023,9 +5027,72 @@ extern "C" fn decompress_response_hook_handler(data: *mut c_void) -> *mut c_void
                 if SNIFF_RESPONSES.len() > SNIFF_MAX { SNIFF_RESPONSES.remove(0); }
             }
         }
-        write_hook_bytes(DECOMPRESS_RESPONSE_ADDR, decompress_response_hook_handler as usize);
-        result
+        decompressed
     }
+}
+
+// ★ v3.23.3: Hook handler for WWWRequest.Post(this, url, postData, headers)
+// Captures URL + headers directly, and matches the parked request body from CompressRequest.
+// This replaces the old _Send + SetHeader approach.
+extern "C" fn post_hook_handler(this: *mut c_void, url: *const c_void, post_data: *mut c_void, headers: *mut c_void) -> *mut c_void {
+    unsafe {
+        let trampoline = interceptor_get_trampoline(post_hook_handler as usize);
+        if trampoline == 0 { return std::ptr::null_mut(); }
+        type FnType = unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void, *mut c_void) -> *mut c_void;
+        let original: FnType = std::mem::transmute(trampoline);
+
+        // Capture URL
+        let game_url = if !url.is_null() { read_il2cpp_string(url) } else { String::new() };
+        let game_url = if game_url.is_empty() { None } else { Some(game_url) };
+
+        // Capture headers from Dictionary<string,string>
+        let req_headers = read_string_dict(headers);
+
+        if SNIFF_ENABLED.load(Ordering::Relaxed) {
+            let rid = SNIFF_REQ_ID.fetch_add(1, Ordering::Relaxed);
+            PENDING_REQ_ID = rid;
+            // Try to match parked request body
+            if let Some(body) = PENDING_REQ_BODY.take() {
+                let headers_json = format_headers_json(&req_headers);
+                let url_str = game_url.clone().unwrap_or_default();
+                let _lock = SNIFF_MUTEX.lock();
+                SNIFF_REQUESTS.push((rid, url_str, headers_json, body));
+                if SNIFF_REQUESTS.len() > SNIFF_MAX { SNIFF_REQUESTS.remove(0); }
+            }
+            PENDING_URL = game_url.clone().unwrap_or_default();
+            PENDING_HEADERS = req_headers.clone();
+        }
+
+        let _ = this;
+        original(this, url, post_data, headers)
+    }
+}
+
+// ★ v3.23.3: Read IL2CPP Dictionary<string,string> into Vec<(String,String)>
+// Layout: [hdr 0x10][fields...]; _entries @+0x18, _count @+0x20
+// Entry: [hashCode:i32][next:i32][key:ptr][value:ptr] = 24B per entry
+unsafe fn read_string_dict(dict: *mut c_void) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if dict.is_null() { return out; }
+    let count = std::ptr::read_unaligned::<i32>((dict as *const u8).add(0x20) as *const i32);
+    if count <= 0 { return out; }
+    let entries = std::ptr::read_unaligned::<usize>((dict as *const u8).add(0x18) as *const usize);
+    if entries == 0 { return out; }
+    // Il2CppArray header: 0x20 bytes, then entries
+    let capacity = std::ptr::read_unaligned::<usize>((entries as *const u8).add(0x18) as *const usize);
+    let entries_base = entries + 0x20;
+    for i in 0..capacity {
+        let entry_addr = entries_base + i * 24;
+        let hash_code = std::ptr::read_unaligned::<i32>((entry_addr as *const u8) as *const i32);
+        if hash_code < 0 { continue; } // free entry
+        let key = std::ptr::read_unaligned::<usize>((entry_addr as *const u8).add(8) as *const usize);
+        let value = std::ptr::read_unaligned::<usize>((entry_addr as *const u8).add(16) as *const usize);
+        let key_str = read_il2cpp_string(key as *const c_void);
+        let val_str = read_il2cpp_string(value as *const c_void);
+        out.push((key_str, val_str));
+        if out.len() >= count as usize { break; }
+    }
+    out
 }
 
 // Format headers Vec to JSON string: {"key1":"val1","key2":"val2"}
@@ -5041,192 +5108,72 @@ unsafe fn format_headers_json(headers: &[(String, String)]) -> String {
     s
 }
 
-// Hook handler for SetHeader(string key, string value)
-// Captures all HTTP headers set before each request
-extern "C" fn set_header_hook_handler(key: *const c_void, value: *const c_void) {
-    unsafe {
-        if !SNIFF_ENABLED.load(Ordering::Relaxed) {
-            // Call original
-            if SETHEADER_ADDR == 0 { return; }
-            let page_size = 4096;
-            let page_addr = SETHEADER_ADDR & !(page_size - 1);
-            libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-            std::ptr::copy_nonoverlapping(ORIG_SETHEADER_PROLOGUE.as_ptr(), SETHEADER_ADDR as *mut u8, 16);
-            type FnType = unsafe extern "C" fn(*const c_void, *const c_void);
-            let original: FnType = std::mem::transmute(SETHEADER_ADDR);
-            original(key, value);
-            write_hook_bytes(SETHEADER_ADDR, set_header_hook_handler as usize);
-            return;
-        }
-        let key_str = read_il2cpp_string(key);
-        let val_str = read_il2cpp_string(value);
-        if !key_str.is_empty() {
-            PENDING_HEADERS.push((key_str, val_str));
-        }
-        // Call original
-        if SETHEADER_ADDR == 0 { return; }
-        let page_size = 4096;
-        let page_addr = SETHEADER_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_SETHEADER_PROLOGUE.as_ptr(), SETHEADER_ADDR as *mut u8, 16);
-        type FnType = unsafe extern "C" fn(*const c_void, *const c_void);
-        let original: FnType = std::mem::transmute(SETHEADER_ADDR);
-        original(key, value);
-        write_hook_bytes(SETHEADER_ADDR, set_header_hook_handler as usize);
-    }
-}
-
-// Hook handler for _Send shared address (0x7335039720)
-// On ARM64 IL2CPP generic shared methods, x0 = MethodInfo* (hidden)
-// For _Send, x1 = URL (Il2CppString*)
-// We use il2cpp_method_get_name to check if this is _Send
-extern "C" fn send_hook_handler(
-    mi: *const c_void,   // x0: MethodInfo*
-    p1: *const c_void,   // x1: URL for _Send
-    p2: *const c_void, p3: *const c_void, p4: *const c_void,
-    p5: *const c_void, p6: *const c_void, p7: *const c_void,
-    p8: *const c_void, p9: *const c_void,
-) {
-    unsafe {
-        if SNIFF_ENABLED.load(Ordering::Relaxed) && !mi.is_null() {
-            // Resolve il2cpp_method_get_name lazily
-            let get_name: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
-                let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
-                if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-            };
-            if let Some(f) = get_name {
-                let name_ptr = f(mi);
-                if !name_ptr.is_null() {
-                    let name = CStr::from_ptr(name_ptr).to_string_lossy();
-                    if name == "_Send" {
-                        let url = read_il2cpp_string(p1);
-                        if !url.is_empty() {
-                            PENDING_URL = url;
-                            PENDING_REQ_ID = SNIFF_REQ_ID.fetch_add(1, Ordering::Relaxed);
-                            PENDING_HEADERS.clear();
-                        }
-                    }
-                }
-            }
-        }
-        // Unhook, call original, rehook
-        if SEND_ADDR == 0 { return; }
-        let page_size = 4096;
-        let page_addr = SEND_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_SEND_PROLOGUE.as_ptr(), SEND_ADDR as *mut u8, 16);
-        // Call original with all 10 params — compiler handles register/stack correctly
-        type FnType = unsafe extern "C" fn(*const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void, *const c_void);
-        let original: FnType = std::mem::transmute(SEND_ADDR);
-        original(mi, p1, p2, p3, p4, p5, p6, p7, p8, p9);
-        write_hook_bytes(SEND_ADDR, send_hook_handler as usize);
-    }
-}
-
 unsafe fn install_api_sniff_hooks() {
-    let all_hooked = COMPRESS_REQUEST_ADDR != 0 && DECOMPRESS_RESPONSE_ADDR != 0
-        && SEND_ADDR != 0 && SETHEADER_ADDR != 0;
+    let all_hooked = COMPRESS_REQUEST_ADDR != 0 && DECOMPRESS_RESPONSE_ADDR != 0 && POST_ADDR != 0;
     if all_hooked { return; }
-    let image = match get_image() { img if !img.is_null() => img, _ => { ura_log(3, "API sniff: get_image returned null"); return; } };
-    let class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("HttpHelper").as_ptr());
-    if class.is_null() { ura_log(3, "API sniff: HttpHelper class not found"); return; }
-    ura_log(3, "API sniff: HttpHelper class found, searching methods...");
-    // v3.23.2: Use il2cpp_class_get_method_from_name + il2cpp_method_get_pointer
-    let get_method_from_name: Option<unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *const c_void> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    if API.is_null() { ura_log(3, "API sniff: API is null"); return; }
+    let api = &*API;
+    if api.interceptor == 0 { ura_log(3, "API sniff: interceptor not available"); return; }
+
+    // Get umamusume.dll assembly image
+    let get_asm = match api.il2cpp_get_assembly_image_fn {
+        Some(f) => f,
+        None => { ura_log(3, "API sniff: get_assembly_image not available"); return; }
     };
-    let method_get_ptr: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_pointer");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    let get_class = match api.il2cpp_get_class_fn {
+        Some(f) => f,
+        None => { ura_log(3, "API sniff: get_class not available"); return; }
     };
+    let get_method_addr = match api.il2cpp_get_method_addr_fn {
+        Some(f) => f,
+        None => { ura_log(3, "API sniff: get_method_addr not available"); return; }
+    };
+
+    let umamusume = get_asm(to_cstr("umamusume.dll").as_ptr());
+    if umamusume.is_null() { ura_log(3, "API sniff: umamusume.dll image not found"); return; }
+
+    // HttpHelper class
+    let http_helper = get_class(umamusume, to_cstr("Gallop").as_ptr(), to_cstr("HttpHelper").as_ptr());
+    if http_helper.is_null() { ura_log(3, "API sniff: HttpHelper class not found"); return; }
+    ura_log(3, "API sniff: HttpHelper class found");
+
     // Hook CompressRequest
     if COMPRESS_REQUEST_ADDR == 0 {
-        let mut addr = 0usize;
-        if let (Some(fn_mi), Some(fn_ptr)) = (get_method_from_name, method_get_ptr) {
-            let cname = to_cstr("CompressRequest");
-            let mi = fn_mi(class, cname.as_ptr(), 1);
-            if !mi.is_null() {
-                let ptr = fn_ptr(mi);
-                if !ptr.is_null() {
-                    addr = ptr as usize;
-                    ura_log(3, &format!("API sniff: CompressRequest via name lookup -> 0x{:x}", addr));
-                }
-            }
-        }
-        if addr == 0 { addr = find_method_addr(class, "CompressRequest", 1); }
+        let addr = get_method_addr(http_helper, to_cstr("CompressRequest").as_ptr(), 1);
         if addr != 0 {
-            COMPRESS_REQUEST_ADDR = addr;
-            std::ptr::copy_nonoverlapping(addr as *const u8, ORIG_COMPRESS_PROLOGUE.as_mut_ptr(), 16);
-            write_hook_bytes(addr, compress_request_hook_handler as usize);
-            ura_log(3, &format!("API sniff: CompressRequest hooked at 0x{:x}", addr));
+            if interceptor_hook(addr, compress_request_hook_handler as usize) {
+                COMPRESS_REQUEST_ADDR = addr;
+                ura_log(3, &format!("API sniff: CompressRequest hooked at 0x{:x}", addr));
+            } else { ura_log(3, &format!("API sniff: CompressRequest hook FAILED at 0x{:x}", addr)); }
         } else { ura_log(3, "API sniff: CompressRequest NOT FOUND"); }
     }
+
     // Hook DecompressResponse
     if DECOMPRESS_RESPONSE_ADDR == 0 {
-        let mut addr = 0usize;
-        if let (Some(fn_mi), Some(fn_ptr)) = (get_method_from_name, method_get_ptr) {
-            let cname = to_cstr("DecompressResponse");
-            let mi = fn_mi(class, cname.as_ptr(), 1);
-            if !mi.is_null() {
-                let ptr = fn_ptr(mi);
-                if !ptr.is_null() {
-                    addr = ptr as usize;
-                    ura_log(3, &format!("API sniff: DecompressResponse via name lookup -> 0x{:x}", addr));
-                }
-            }
-        }
-        if addr == 0 { addr = find_method_addr(class, "DecompressResponse", 1); }
+        let addr = get_method_addr(http_helper, to_cstr("DecompressResponse").as_ptr(), 1);
         if addr != 0 {
-            DECOMPRESS_RESPONSE_ADDR = addr;
-            std::ptr::copy_nonoverlapping(addr as *const u8, ORIG_DECOMPRESS_PROLOGUE.as_mut_ptr(), 16);
-            write_hook_bytes(addr, decompress_response_hook_handler as usize);
-            ura_log(3, &format!("API sniff: DecompressResponse hooked at 0x{:x}", addr));
+            if interceptor_hook(addr, decompress_response_hook_handler as usize) {
+                DECOMPRESS_RESPONSE_ADDR = addr;
+                ura_log(3, &format!("API sniff: DecompressResponse hooked at 0x{:x}", addr));
+            } else { ura_log(3, &format!("API sniff: DecompressResponse hook FAILED at 0x{:x}", addr)); }
         } else { ura_log(3, "API sniff: DecompressResponse NOT FOUND"); }
     }
-    // Hook SetHeader
-    if SETHEADER_ADDR == 0 {
-        let mut addr = 0usize;
-        if let (Some(fn_mi), Some(fn_ptr)) = (get_method_from_name, method_get_ptr) {
-            let cname = to_cstr("SetHeader");
-            let mi = fn_mi(class, cname.as_ptr(), 2);
-            if !mi.is_null() {
-                let ptr = fn_ptr(mi);
-                if !ptr.is_null() {
-                    addr = ptr as usize;
-                    ura_log(3, &format!("API sniff: SetHeader via name lookup -> 0x{:x}", addr));
-                }
-            }
-        }
-        if addr == 0 { addr = find_method_addr(class, "SetHeader", 2); }
-        if addr != 0 {
-            SETHEADER_ADDR = addr;
-            std::ptr::copy_nonoverlapping(addr as *const u8, ORIG_SETHEADER_PROLOGUE.as_mut_ptr(), 16);
-            write_hook_bytes(addr, set_header_hook_handler as usize);
-            ura_log(3, &format!("API sniff: SetHeader hooked at 0x{:x}", addr));
-        } else { ura_log(3, "API sniff: SetHeader NOT FOUND"); }
-    }
-    // Hook _Send (must be last — it's a heavy hook)
-    if SEND_ADDR == 0 {
-        let mut addr = 0usize;
-        if let (Some(fn_mi), Some(fn_ptr)) = (get_method_from_name, method_get_ptr) {
-            let cname = to_cstr("_Send");
-            let mi = fn_mi(class, cname.as_ptr(), 10);
-            if !mi.is_null() {
-                let ptr = fn_ptr(mi);
-                if !ptr.is_null() {
-                    addr = ptr as usize;
-                    ura_log(3, &format!("API sniff: _Send via name lookup -> 0x{:x}", addr));
-                }
-            }
-        }
-        if addr == 0 { addr = find_method_addr(class, "_Send", 10); }
-        if addr != 0 {
-            SEND_ADDR = addr;
-            std::ptr::copy_nonoverlapping(addr as *const u8, ORIG_SEND_PROLOGUE.as_mut_ptr(), 16);
-            write_hook_bytes(addr, send_hook_handler as usize);
-            ura_log(3, &format!("API sniff: _Send hooked at 0x{:x}", addr));
-        } else { ura_log(3, "API sniff: _Send NOT FOUND"); }
+
+    // Hook WWWRequest.Post (from Cute.Http.Assembly.dll)
+    if POST_ADDR == 0 {
+        let cute_http = get_asm(to_cstr("Cute.Http.Assembly.dll").as_ptr());
+        if !cute_http.is_null() {
+            let www_request = get_class(cute_http, to_cstr("Cute.Http").as_ptr(), to_cstr("WWWRequest").as_ptr());
+            if !www_request.is_null() {
+                let addr = get_method_addr(www_request, to_cstr("Post").as_ptr(), 3);
+                if addr != 0 {
+                    if interceptor_hook(addr, post_hook_handler as usize) {
+                        POST_ADDR = addr;
+                        ura_log(3, &format!("API sniff: WWWRequest.Post hooked at 0x{:x}", addr));
+                    } else { ura_log(3, &format!("API sniff: WWWRequest.Post hook FAILED at 0x{:x}", addr)); }
+                } else { ura_log(3, "API sniff: WWWRequest.Post NOT FOUND"); }
+            } else { ura_log(3, "API sniff: Cute.Http.WWWRequest class not found"); }
+        } else { ura_log(3, "API sniff: Cute.Http.Assembly.dll image not found"); }
     }
 }
 
@@ -5251,7 +5198,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.23.2").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.23.3").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -5442,6 +5389,13 @@ unsafe fn resolve_api(get_api: extern "C" fn(*const c_char) -> *mut c_void) -> A
         il2cpp_get_singleton_like_instance_fn: try_api!("il2cpp_get_singleton_like_instance", unsafe extern "C" fn(*mut c_void) -> *const c_void),
         il2cpp_string_chars_fn: try_api!("il2cpp_string_chars", unsafe extern "C" fn(*const c_void) -> *mut u16),
         il2cpp_string_length_fn: try_api!("il2cpp_string_length", unsafe extern "C" fn(*const c_void) -> i32),
+        // ★ v3.23.3: Hachimi-Edge V3 Interceptor API
+        hachimi_instance_fn: try_api!("hachimi_instance", unsafe extern "C" fn() -> usize),
+        hachimi_get_interceptor_fn: try_api!("hachimi_get_interceptor", unsafe extern "C" fn(usize) -> usize),
+        interceptor: 0,
+        interceptor_hook_fn: try_api!("interceptor_hook", unsafe extern "C" fn(usize, *mut c_void, *mut c_void) -> *mut c_void),
+        interceptor_get_trampoline_addr_fn: try_api!("interceptor_get_trampoline_addr", unsafe extern "C" fn(usize, *mut c_void) -> *mut c_void),
+        il2cpp_get_method_addr_fn: try_api!("il2cpp_get_method_addr", unsafe extern "C" fn(usize, *const c_char, i32) -> usize),
     }
 }
 
@@ -5455,13 +5409,19 @@ pub unsafe extern "C" fn hachimi_init_v3(
     version: i32,
 ) -> i32 {
     let api = resolve_api(get_api);
+    // ★ v3.23.3: Initialize interceptor for hook API
+    let interceptor = if let (Some(instance_fn), Some(get_interceptor_fn)) = (api.hachimi_instance_fn, api.hachimi_get_interceptor_fn) {
+        let hachimi = unsafe { instance_fn() };
+        if hachimi != 0 { unsafe { get_interceptor_fn(hachimi) } } else { 0 }
+    } else { 0 };
     API = Box::into_raw(Box::new(api));
+    if interceptor != 0 { unsafe { (*API).interceptor = interceptor; } }
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.23.2 loaded (API sniff: get_pointer + name lookup)");
+    ura_log(3, "URA plugin v3.23.3 loaded (Interceptor API hooks)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.23.2 Loaded!").as_ptr());
+        f(to_cstr("URA v3.23.3 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
