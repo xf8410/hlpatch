@@ -4006,7 +4006,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.22.94","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}"#.to_string()
+        r#"{"status":"ok","version":"3.22.94","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4106,6 +4106,25 @@ fn handle_http(mut stream: std::net::TcpStream) {
         format!(r#"{{"result_type":{},"sub_id":{},"hooked":{},"result_name":"{}"}}"#,
             result, sub_id, hooked,
             match result { 0 => "GreatSuccess", 1 => "Success", 2 => "Failure", _ => "Unknown" })
+    } else if path == "/debug/training_log" {
+        // v3.22.95: Read ExecTraining prediction log (seed + result correlation)
+        let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
+        let addr = unsafe { EXEC_TRAINING_ADDR };
+        let log = unsafe {
+            if TRAINING_PREDICT_LOG.is_empty() {
+                "[]".to_string()
+            } else {
+                format!("[{}]", TRAINING_PREDICT_LOG.join(","))
+            }
+        };
+        let seed_before = unsafe {
+            format!("[{}]", LAST_SEED_BEFORE.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","))
+        };
+        let seed_after = unsafe {
+            format!("[{}]", LAST_SEED_AFTER.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","))
+        };
+        format!(r#"{{"hooked":{},"addr":"0x{:x}","last_seed_before":{},"last_seed_after":{},"log":{}}}"#,
+            hooked, addr, seed_before, seed_after, log)
     } else if path.starts_with("/debug/dumpclass") {
         // v3.22.51: Dump all fields of any IL2CPP class by name
         // Usage: /debug/dumpclass?name=WorkSingleModeData
@@ -4479,7 +4498,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/debug/training_seed","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -4830,6 +4849,8 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
         precache_metadata();
         // v3.22.94: Install training result hook
         install_training_hook();
+        // v3.22.95: Install ExecTraining hook (seed capture before training)
+        install_exec_training_hook();
     }
 }
 
@@ -9187,6 +9208,129 @@ unsafe fn debug_training_seed() -> String {
         s0, s1, s2, s3,
         hex_str
     )
+}
+
+// ★ v3.22.95: ExecTraining hook — intercept before training to read seed + predict
+static mut EXEC_TRAINING_HOOK_INSTALLED: bool = false;
+static mut ORIG_EXEC_TRAINING_PROLOGUE: [u8; 16] = [0; 16];
+static mut EXEC_TRAINING_ADDR: usize = 0;
+static mut LAST_SEED_BEFORE: [u32; 4] = [0, 0, 0, 0];
+static mut LAST_SEED_AFTER: [u32; 4] = [0, 0, 0, 0];
+static mut TRAINING_PREDICT_LOG: Vec<String> = Vec::new();
+const MAX_PREDICT_LOG: usize = 50;
+
+// Hook handler: called instead of ExecTraining (static, 2 params, void)
+extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
+    unsafe {
+        // Read seed before training
+        let seed_before = read_seed_inner();
+        LAST_SEED_BEFORE = seed_before;
+
+        if !EXEC_TRAINING_HOOK_INSTALLED || EXEC_TRAINING_ADDR == 0 {
+            return;
+        }
+
+        // Unhook: restore original bytes
+        let page_size = 4096;
+        let page_addr = EXEC_TRAINING_ADDR & !(page_size - 1);
+        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
+        std::ptr::copy_nonoverlapping(ORIG_EXEC_TRAINING_PROLOGUE.as_ptr(), EXEC_TRAINING_ADDR as *mut u8, 16);
+
+        // Call original function
+        type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void);
+        let original: FnType = std::mem::transmute(EXEC_TRAINING_ADDR);
+        original(param1, param2);
+
+        // Rehook
+        write_hook_bytes(EXEC_TRAINING_ADDR, exec_training_hook as usize);
+
+        // Read seed after training
+        let seed_after = read_seed_inner();
+        LAST_SEED_AFTER = seed_after;
+
+        // Read result from OnSuccessSendCommand hook
+        let result_type = LAST_TRAINING_RESULT;
+        let result_name = match result_type {
+            0 => "GreatSuccess",
+            1 => "Success",
+            2 => "Failure",
+            _ => "Unknown",
+        };
+
+        // Log prediction entry
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let entry = format!(
+            r#"{{"ts":{},"s0":{},"s1_before":{},"s1_after":{},"s1_delta":{},"s2":{},"s3":{},"result":{},"result_name":"{}"}}"#,
+            ts,
+            seed_before[0], seed_before[1], seed_after[1],
+            (seed_after[1] as i64 - seed_before[1] as i64),
+            seed_before[2], seed_before[3],
+            result_type, result_name
+        );
+        if TRAINING_PREDICT_LOG.len() >= MAX_PREDICT_LOG {
+            TRAINING_PREDICT_LOG.remove(0);
+        }
+        TRAINING_PREDICT_LOG.push(entry);
+    }
+}
+
+// Read seed without the full debug_training_seed overhead
+unsafe fn read_seed_inner() -> [u32; 4] {
+    if API.is_null() { return [0; 4]; }
+    let image = get_image();
+    if image.is_null() { return [0; 4]; }
+
+    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
+    if wdm_cls.is_null() { return [0; 4]; }
+    let wdm_inst = get_singleton(wdm_cls);
+    if wdm_inst.is_null() { return [0; 4]; }
+
+    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
+    if sm_ptr == 0 { return [0; 4]; }
+
+    let seed_addr = (sm_ptr + 408) as *const u32;
+    [
+        std::ptr::read_unaligned::<u32>(seed_addr),
+        std::ptr::read_unaligned::<u32>(seed_addr.add(1)),
+        std::ptr::read_unaligned::<u32>(seed_addr.add(2)),
+        std::ptr::read_unaligned::<u32>(seed_addr.add(3)),
+    ]
+}
+
+unsafe fn install_exec_training_hook() {
+    if EXEC_TRAINING_HOOK_INSTALLED { return; }
+    if API.is_null() { return; }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return,
+    };
+
+    let class = find_class_by_short_name(image, "SingleModeTrainingCommandService");
+    if class.is_null() {
+        ura_log(3, "ExecTraining hook: class not found");
+        return;
+    }
+
+    let method_addr = find_method_addr(class, "ExecTraining", 2);
+    if method_addr == 0 {
+        ura_log(3, "ExecTraining hook: method not found");
+        return;
+    }
+
+    EXEC_TRAINING_ADDR = method_addr;
+
+    // Save original 16 bytes
+    std::ptr::copy_nonoverlapping(method_addr as *const u8, ORIG_EXEC_TRAINING_PROLOGUE.as_mut_ptr(), 16);
+
+    // Install hook
+    write_hook_bytes(method_addr, exec_training_hook as usize);
+
+    EXEC_TRAINING_HOOK_INSTALLED = true;
+    ura_log(3, &format!("ExecTraining hook installed at 0x{:x}", method_addr));
 }
 
 /// v3.22.51: 启动时自动检查更新（后台线程）
