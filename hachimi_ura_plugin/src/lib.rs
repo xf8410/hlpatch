@@ -60,7 +60,7 @@ struct Api {
     il2cpp_get_method_addr_fn: Option<unsafe extern "C" fn(usize, *const c_char, i32) -> usize>,
 }
 
-static mut API: *const Api = ptr::null();
+static mut API: *mut Api = ptr::null_mut();
 static GAME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HTTP_RUNNING: AtomicBool = AtomicBool::new(false);
 static PREDICT_STEP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -4999,11 +4999,9 @@ extern "C" fn compress_request_hook_handler(data: *mut c_void) -> *mut c_void {
         type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
         let original: FnType = std::mem::transmute(trampoline);
         let compressed = original(data);
-        if let Some(body) = body {
-            if !body.is_empty() && POST_ADDR != 0 {
-                PENDING_REQ_BODY = Some(body);
-                PENDING_COMPRESSED = compressed as usize;
-            }
+        if !body.is_empty() && POST_ADDR != 0 {
+            PENDING_REQ_BODY = Some(body);
+            PENDING_COMPRESSED = compressed as usize;
         }
         compressed
     }
@@ -5139,7 +5137,7 @@ unsafe fn install_api_sniff_hooks() {
 
     // Hook CompressRequest
     if COMPRESS_REQUEST_ADDR == 0 {
-        let addr = get_method_addr(http_helper, to_cstr("CompressRequest").as_ptr(), 1);
+        let addr = get_method_addr(http_helper as usize, to_cstr("CompressRequest").as_ptr(), 1);
         if addr != 0 {
             if interceptor_hook(addr, compress_request_hook_handler as usize) {
                 COMPRESS_REQUEST_ADDR = addr;
@@ -5150,7 +5148,7 @@ unsafe fn install_api_sniff_hooks() {
 
     // Hook DecompressResponse
     if DECOMPRESS_RESPONSE_ADDR == 0 {
-        let addr = get_method_addr(http_helper, to_cstr("DecompressResponse").as_ptr(), 1);
+        let addr = get_method_addr(http_helper as usize, to_cstr("DecompressResponse").as_ptr(), 1);
         if addr != 0 {
             if interceptor_hook(addr, decompress_response_hook_handler as usize) {
                 DECOMPRESS_RESPONSE_ADDR = addr;
@@ -5165,7 +5163,7 @@ unsafe fn install_api_sniff_hooks() {
         if !cute_http.is_null() {
             let www_request = get_class(cute_http, to_cstr("Cute.Http").as_ptr(), to_cstr("WWWRequest").as_ptr());
             if !www_request.is_null() {
-                let addr = get_method_addr(www_request, to_cstr("Post").as_ptr(), 3);
+                let addr = get_method_addr(www_request as usize, to_cstr("Post").as_ptr(), 3);
                 if addr != 0 {
                     if interceptor_hook(addr, post_hook_handler as usize) {
                         POST_ADDR = addr;
