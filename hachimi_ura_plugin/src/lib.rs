@@ -1,4 +1,4 @@
-//! URA Plugin v3.23.0
+//! URA Plugin v3.23.1
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -68,7 +68,7 @@ static mut LAST_TRAINING_SUB_ID: i32 = -1;
 static mut TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_ON_SUCCESS_PROLOGUE: [u8; 16] = [0; 16];
 static mut ON_SUCCESS_ADDR: usize = 0;
-// ★ v3.23.0: API sniffing — hook HttpHelper._Send + SetHeader + CompressRequest + DecompressResponse
+// ★ v3.23.1: API sniffing — hook HttpHelper._Send + SetHeader + CompressRequest + DecompressResponse (debug logging + fallback)
 static SNIFF_ENABLED: AtomicBool = AtomicBool::new(false);
 static SNIFF_MUTEX: Mutex<()> = Mutex::new(());
 // SniffEntry: (id, url, headers_json, body)
@@ -4034,7 +4034,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.23.0","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear"]}"#.to_string()
+        r#"{"status":"ok","version":"3.23.1","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4872,11 +4872,22 @@ unsafe fn find_method_addr(class: *mut c_void, method_name: &str, _param_count: 
         if !name_ptr.is_null() {
             let name = CStr::from_ptr(name_ptr).to_string_lossy();
             if name == method_name {
+                // Read MethodInfo.methodPointer at offset 0
                 let method_ptr = std::ptr::read_unaligned::<*const c_void>(mi as *const *const c_void);
-                return method_ptr as usize;
+                let addr = method_ptr as usize;
+                // v3.23.1: If methodPointer is 0, try reading methodPointer from the union at offset 48
+                if addr == 0 {
+                    let union_ptr = std::ptr::read_unaligned::<*const c_void>((mi as *const u8).offset(48) as *const *const c_void);
+                    let union_addr = union_ptr as usize;
+                    ura_log(3, &format!("find_method_addr: {} offset0=0, offset48=0x{:x}", method_name, union_addr));
+                    return union_addr;
+                }
+                ura_log(3, &format!("find_method_addr: {} found at 0x{:x}", method_name, addr));
+                return addr;
             }
         }
     }
+    ura_log(3, &format!("find_method_addr: {} NOT FOUND in class", method_name));
     0
 }
 
@@ -4907,7 +4918,7 @@ unsafe fn install_training_hook() {
     ura_log(3, &format!("Training hook installed at 0x{:x}", method_addr));
 }
 
-// ★ v3.22.99: API sniffing — read IL2CPP byte array
+// ★ v3.23.1: API sniffing — read IL2CPP byte array
 // IL2CPP array layout: klass(8) + monitor(8) + bounds(8) + max_length(8) + data
 unsafe fn read_il2cpp_byte_array(arr: *const c_void) -> Vec<u8> {
     if arr.is_null() { return vec![]; }
@@ -5087,9 +5098,16 @@ unsafe fn install_api_sniff_hooks() {
     let image = match get_image() { img if !img.is_null() => img, _ => return };
     let class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("HttpHelper").as_ptr());
     if class.is_null() { ura_log(3, "API sniff: HttpHelper class not found"); return; }
+    ura_log(3, "API sniff: HttpHelper class found, searching methods...");
+    // v3.23.1: Hardcoded fallback addresses from IL2CPP dump
+    let fallback_send: usize = 0x7335039720;
+    let fallback_compress: usize = 0x733977a46c;
+    let fallback_decompress: usize = 0x733977a6c8;
+    let fallback_setheader: usize = 0x733977a808;
     // Hook CompressRequest
     if COMPRESS_REQUEST_ADDR == 0 {
-        let addr = find_method_addr(class, "CompressRequest", 1);
+        let mut addr = find_method_addr(class, "CompressRequest", 1);
+        if addr == 0 { addr = fallback_compress; ura_log(3, "API sniff: CompressRequest using fallback addr"); }
         if addr != 0 {
             COMPRESS_REQUEST_ADDR = addr;
             std::ptr::copy_nonoverlapping(addr as *const u8, ORIG_COMPRESS_PROLOGUE.as_mut_ptr(), 16);
@@ -5099,7 +5117,8 @@ unsafe fn install_api_sniff_hooks() {
     }
     // Hook DecompressResponse
     if DECOMPRESS_RESPONSE_ADDR == 0 {
-        let addr = find_method_addr(class, "DecompressResponse", 1);
+        let mut addr = find_method_addr(class, "DecompressResponse", 1);
+        if addr == 0 { addr = fallback_decompress; ura_log(3, "API sniff: DecompressResponse using fallback addr"); }
         if addr != 0 {
             DECOMPRESS_RESPONSE_ADDR = addr;
             std::ptr::copy_nonoverlapping(addr as *const u8, ORIG_DECOMPRESS_PROLOGUE.as_mut_ptr(), 16);
@@ -5109,7 +5128,8 @@ unsafe fn install_api_sniff_hooks() {
     }
     // Hook SetHeader
     if SETHEADER_ADDR == 0 {
-        let addr = find_method_addr(class, "SetHeader", 2);
+        let mut addr = find_method_addr(class, "SetHeader", 2);
+        if addr == 0 { addr = fallback_setheader; ura_log(3, "API sniff: SetHeader using fallback addr"); }
         if addr != 0 {
             SETHEADER_ADDR = addr;
             std::ptr::copy_nonoverlapping(addr as *const u8, ORIG_SETHEADER_PROLOGUE.as_mut_ptr(), 16);
@@ -5119,7 +5139,8 @@ unsafe fn install_api_sniff_hooks() {
     }
     // Hook _Send shared address (must be last — it's a heavy hook)
     if SEND_ADDR == 0 {
-        let addr = find_method_addr(class, "_Send", 10);
+        let mut addr = find_method_addr(class, "_Send", 10);
+        if addr == 0 { addr = fallback_send; ura_log(3, "API sniff: _Send using fallback addr"); }
         if addr != 0 {
             SEND_ADDR = addr;
             std::ptr::copy_nonoverlapping(addr as *const u8, ORIG_SEND_PROLOGUE.as_mut_ptr(), 16);
@@ -5150,7 +5171,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.22.98").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.23.1").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -5357,10 +5378,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     API = Box::into_raw(Box::new(api));
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.22.99 loaded (Ramen + Kakushimi + AI eval + API sniff)");
+    ura_log(3, "URA plugin v3.23.1 loaded (API sniff: debug logging + fallback)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.22.99 Loaded!").as_ptr());
+        f(to_cstr("URA v3.23.1 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
