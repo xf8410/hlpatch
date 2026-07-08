@@ -9291,14 +9291,15 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
         if TRAINING_PREDICT_LOG.len() >= MAX_PREDICT_LOG {
             TRAINING_PREDICT_LOG.remove(0);
         }
-        TRAINING_PREDICT_LOG.push(entry);
 
-        // v3.22.97: Persist to file for easy download
+        // v3.22.97: Persist to file for easy download (before push, entry is moved)
         let log_path = b"/data/data/jp.pokemon.pokeuma/files/training_log.jsonl\0";
         let line_with_nl = format!("{}\n", entry);
         let line_bytes = line_with_nl.as_bytes();
         let fd = sys_open(log_path.as_ptr() as *const i8, 1 | 64 | 1024, 0o644);
         if fd >= 0 { sys_write(fd, line_bytes.as_ptr(), line_bytes.len()); sys_close(fd); }
+
+        TRAINING_PREDICT_LOG.push(entry);
     }
 }
 
