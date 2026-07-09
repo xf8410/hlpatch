@@ -1,4 +1,4 @@
-//! URA Plugin v3.24.1
+//! URA Plugin v3.24.2
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -96,13 +96,13 @@ static mut PENDING_COMPRESSED: usize = 0;
 // ★ Mutex to prevent concurrent read_summary_inner calls from HTTP + push threads
 static READ_MUTEX: Mutex<()> = Mutex::new(());
 
-// ★ v3.24.1: Story event choice hook — capture career event choices (options, effects, branches)
+// ★ v3.24.2: Story event choice hook — capture career event choices (options, effects, branches)
 static mut EVENT_CHOICE_HOOK_INSTALLED: bool = false;
 static mut EVENT_CHOICE_ADDR: usize = 0;       // StoryChoiceController.Choice
 static mut EVENT_ADD_BTN_ADDR: usize = 0;      // StoryChoiceController.AddChoiceButton
 static mut ORIG_EVENT_CHOICE_PROLOGUE: [u8; 16] = [0; 16];
 static mut ORIG_EVENT_ADD_BTN_PROLOGUE: [u8; 16] = [0; 16];
-// ★ v3.24.1: StoryManager.SetStory hook — capture story_id and chara_id for event type identification
+// ★ v3.24.2: StoryManager.SetStory hook — capture story_id and chara_id for event type identification
 static mut STORY_SET_HOOK_INSTALLED: bool = false;
 static mut STORY_SET_ADDR: usize = 0;
 static mut ORIG_STORY_SET_PROLOGUE: [u8; 16] = [0; 16];
@@ -121,7 +121,7 @@ struct EventChoice {
     loop_exit_gain_id: i32,
 }
 
-// ★ v3.24.1: Read C# string from IL2CPP String object
+// ★ v3.24.2: Read C# string from IL2CPP String object
 unsafe fn read_il2cpp_string(s: *const c_void) -> String {
     if s.is_null() { return String::new(); }
     let len = std::ptr::read::<i32>((s as *const u8).offset(16) as *const i32);
@@ -3879,7 +3879,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.24.1","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.24.2","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -4073,7 +4073,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.24.1","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
+        r#"{"status":"ok","version":"3.24.2","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4221,7 +4221,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 reqs.join(","), resps.join(","))
         }
     } else if path == "/api/event/choices" {
-        // v3.24.1: Return captured event choices
+        // v3.24.2: Return captured event choices
         let _lock = EVENT_STATE_MUTEX.lock();
         unsafe {
             let choices_json: Vec<String> = EVENT_CHOICES.iter().map(|c| {
@@ -5235,7 +5235,7 @@ unsafe fn install_api_sniff_hooks() {
     }
 }
 
-// ★ v3.24.1: Story event choice hook — capture career event choices
+// ★ v3.24.2: Story event choice hook — capture career event choices
 // StoryChoiceController.Choice(int choiceIndex, ???)
 // ARM64: X0=this, W1=choiceIndex, X2=???
 extern "C" fn event_choice_hook_handler(
@@ -5374,10 +5374,13 @@ unsafe fn call_getter_string(
     getter(obj)
 }
 
-// ★ v3.24.1: StoryManager.SetStory hook — capture story_id for event type identification
+// ★ v3.24.2: StoryManager.SetStory hook — capture story_id for event type identification
 // StoryManager.SetStory(this, story_id, ???, ???, ???)
 // ARM64: X0=this, X1=story_id, X2-X4=other params
-// After SetStory, we can read chara_id from StoryManager.get_EventTitleCharaId()
+// ★ v3.24.2 FIX: Don't call getters or ura_log in hook context — these run on the game's
+// main thread without SIGSEGV recovery. If the IL2CPP object is in a transitional state,
+// calling getters can crash the game process. We only store story_id (passed as parameter).
+// chara_id is read from summary data via get_CardId instead.
 extern "C" fn story_set_hook_handler(
     this: *mut c_void,
     story_id: i32,
@@ -5389,15 +5392,6 @@ extern "C" fn story_set_hook_handler(
         if !this.is_null() {
             let _lock = EVENT_STATE_MUTEX.lock();
             EVENT_STORY_ID = story_id;
-
-            // Read chara_id from StoryManager
-            let chara_id = call_getter_int_raw(this, "get_EventTitleCharaId");
-            if chara_id > 0 {
-                EVENT_CHARA_ID = chara_id;
-            }
-
-            ura_log(3, &format!("StoryManager.SetStory: story_id={} chara_id={}",
-                story_id, chara_id));
             drop(_lock);
         }
 
@@ -5456,7 +5450,7 @@ unsafe fn install_event_choice_hook() {
         ura_log(3, "Event hook: Choice NOT FOUND");
     }
 
-    // ★ v3.24.1: Hook StoryManager.SetStory to capture story_id and chara_id
+    // ★ v3.24.2: Hook StoryManager.SetStory to capture story_id and chara_id
     let story_mgr_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("StoryManager").as_ptr());
     if !story_mgr_class.is_null() {
         let set_story_addr = find_method_addr(story_mgr_class, "SetStory", 4);
@@ -5498,7 +5492,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.24.1").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.24.2").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -9157,7 +9151,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.24.1","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.24.2","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
