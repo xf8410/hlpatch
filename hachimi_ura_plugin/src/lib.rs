@@ -1,4 +1,4 @@
-//! URA Plugin v3.23.3
+//! URA Plugin v3.24.0
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -95,6 +95,37 @@ static mut PENDING_REQ_BODY: Option<Vec<u8>> = None;
 static mut PENDING_COMPRESSED: usize = 0;
 // ★ Mutex to prevent concurrent read_summary_inner calls from HTTP + push threads
 static READ_MUTEX: Mutex<()> = Mutex::new(());
+
+// ★ v3.24.0: Story event choice hook — capture career event choices (options, effects, branches)
+static mut EVENT_CHOICE_HOOK_INSTALLED: bool = false;
+static mut EVENT_CHOICE_ADDR: usize = 0;       // StoryChoiceController.Choice
+static mut EVENT_ADD_BTN_ADDR: usize = 0;      // StoryChoiceController.AddChoiceButton
+static mut ORIG_EVENT_CHOICE_PROLOGUE: [u8; 16] = [0; 16];
+static mut ORIG_EVENT_ADD_BTN_PROLOGUE: [u8; 16] = [0; 16];
+// Event state: accumulated choices for current event
+static EVENT_STATE_MUTEX: Mutex<()> = Mutex::new(());
+static mut EVENT_CHOICES: Vec<EventChoice> = Vec::new();
+static mut EVENT_SELECTED_IDX: i32 = -1;
+static mut EVENT_STORY_ID: i32 = 0;
+static mut EVENT_CHARA_ID: i32 = 0;
+
+#[derive(Clone)]
+struct EventChoice {
+    label: String,
+    gain_id: i32,
+    next_block_idx: i32,
+    loop_exit_gain_id: i32,
+}
+
+// ★ v3.24.0: Read C# string from IL2CPP String object
+unsafe fn read_il2cpp_string(s: *const c_void) -> String {
+    if s.is_null() { return String::new(); }
+    let len = std::ptr::read::<i32>((s as *const u8).offset(16) as *const i32);
+    if len <= 0 || len > 4096 { return String::new(); }
+    let chars_ptr = (s as *const u8).offset(20);
+    let chars_slice = std::slice::from_raw_parts(chars_ptr as *const u16, len as usize);
+    String::from_utf16_lossy(chars_slice)
+}
 
 // ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
 static mut LAST_PUSH_HASH: u64 = 0;
@@ -3844,7 +3875,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.23.3","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.24.0","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -3915,6 +3946,7 @@ fn push_loop() {
                 install_training_hook();
                 install_exec_training_hook();
                 install_failure_rate_hook();
+                install_event_choice_hook();
             }
             break;
         }
@@ -4037,7 +4069,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.23.3","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag"]}"#.to_string()
+        r#"{"status":"ok","version":"3.24.0","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4184,6 +4216,30 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 SNIFF_ENABLED.load(Ordering::Relaxed),
                 reqs.join(","), resps.join(","))
         }
+    } else if path == "/api/event/choices" {
+        // v3.24.0: Return captured event choices
+        let _lock = EVENT_STATE_MUTEX.lock();
+        unsafe {
+            let choices_json: Vec<String> = EVENT_CHOICES.iter().map(|c| {
+                format!(r#"{{"label":"{}","gain_id":{},"next_block_idx":{},"loop_exit_gain_id":{}}}"#,
+                    c.label.replace('\\', "\\\\").replace('"', "\\\""),
+                    c.gain_id, c.next_block_idx, c.loop_exit_gain_id)
+            }).collect();
+            let result = format!(r#"{{"story_id":{},"chara_id":{},"selected_idx":{},"choices":[{}]}}"#,
+                EVENT_STORY_ID, EVENT_CHARA_ID, EVENT_SELECTED_IDX, choices_json.join(","));
+            drop(_lock);
+            result
+        }
+    } else if path == "/api/event/clear" {
+        let _lock = EVENT_STATE_MUTEX.lock();
+        unsafe {
+            EVENT_CHOICES.clear();
+            EVENT_SELECTED_IDX = -1;
+            EVENT_STORY_ID = 0;
+            EVENT_CHARA_ID = 0;
+        }
+        drop(_lock);
+        r#"{"ok":true}"#.to_string()
     } else if path == "/debug/training_log" {
         // v3.22.98: Read ExecTraining prediction log (seed + result correlation)
         let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
@@ -4582,7 +4638,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -5175,6 +5231,185 @@ unsafe fn install_api_sniff_hooks() {
     }
 }
 
+// ★ v3.24.0: Story event choice hook — capture career event choices
+// StoryChoiceController.Choice(int choiceIndex, ???)
+// ARM64: X0=this, W1=choiceIndex, X2=???
+extern "C" fn event_choice_hook_handler(
+    this: *mut c_void,
+    choice_index: i32,
+    _param2: *mut c_void,
+) {
+    unsafe {
+        EVENT_SELECTED_IDX = choice_index;
+        ura_log(3, &format!("Event choice: index={} choices_count={}", choice_index, EVENT_CHOICES.len()));
+
+        if !EVENT_CHOICE_HOOK_INSTALLED || EVENT_CHOICE_ADDR == 0 {
+            return;
+        }
+
+        // Unhook → call original → rehook
+        let page_size = 4096;
+        let page_addr = EVENT_CHOICE_ADDR & !(page_size - 1);
+        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
+        std::ptr::copy_nonoverlapping(ORIG_EVENT_CHOICE_PROLOGUE.as_ptr(), EVENT_CHOICE_ADDR as *mut u8, 16);
+
+        type FnChoice = unsafe extern "C" fn(*mut c_void, i32, *mut c_void);
+        let original: FnChoice = std::mem::transmute(EVENT_CHOICE_ADDR);
+        original(this, choice_index, _param2);
+
+        write_hook_bytes(EVENT_CHOICE_ADDR, event_choice_hook_handler as usize);
+    }
+}
+
+// StoryChoiceController.AddChoiceButton(StoryChoiceParam param)
+// ARM64: X0=this, X1=param
+// Read StoryChoiceParam fields: LabelText, GainId, NextBlockIndex, LoopExitGainId
+extern "C" fn event_add_choice_hook_handler(
+    this: *mut c_void,
+    param: *mut c_void,
+) {
+    unsafe {
+        if param.is_null() { return; }
+
+        // Read StoryChoiceParam fields via IL2CPP getter methods
+        let label = read_il2cpp_string_from_obj(param, "get_LabelText");
+        let gain_id = call_getter_int_raw(param, "get_GainId");
+        let next_block_idx = call_getter_int_raw(param, "get_GetNextBlockIndex");
+        let loop_exit_gain_id = call_getter_int_raw(param, "get_LoopExitGainId");
+
+        ura_log(3, &format!("Event choice added: label='{}' gain={} next={} loop_exit={}",
+            label, gain_id, next_block_idx, loop_exit_gain_id));
+
+        let _lock = EVENT_STATE_MUTEX.lock();
+        EVENT_CHOICES.push(EventChoice {
+            label,
+            gain_id,
+            next_block_idx: if next_block_idx > 0 { next_block_idx } else { -1 },
+            loop_exit_gain_id: if loop_exit_gain_id > 0 { loop_exit_gain_id } else { -1 },
+        });
+
+        drop(_lock);
+
+        if !EVENT_CHOICE_HOOK_INSTALLED || EVENT_ADD_BTN_ADDR == 0 {
+            return;
+        }
+
+        // Unhook → call original → rehook
+        let page_size = 4096;
+        let page_addr = EVENT_ADD_BTN_ADDR & !(page_size - 1);
+        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
+        std::ptr::copy_nonoverlapping(ORIG_EVENT_ADD_BTN_PROLOGUE.as_ptr(), EVENT_ADD_BTN_ADDR as *mut u8, 16);
+
+        type FnAddBtn = unsafe extern "C" fn(*mut c_void, *mut c_void);
+        let original: FnAddBtn = std::mem::transmute(EVENT_ADD_BTN_ADDR);
+        original(this, param);
+
+        write_hook_bytes(EVENT_ADD_BTN_ADDR, event_add_choice_hook_handler as usize);
+    }
+}
+
+// Helper: call getter on an IL2CPP object (returns i32)
+unsafe fn call_getter_int_raw(obj: *const c_void, method_name: &str) -> i32 {
+    if obj.is_null() || API.is_null() { return 0; }
+    // We need to find the class and method. For simplicity, we use the method pointer approach.
+    // Since we don't know the class, we try to read directly from known offsets.
+    // StoryChoiceParam is a simple struct, we can try field offsets.
+    // Actually, let's use the proper IL2CPP approach.
+    let api = &*API;
+    let get_class_fn: Option<unsafe extern "C" fn(*const c_void) -> *mut c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_object_get_class");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if get_class_fn.is_none() { return 0; }
+    let class = get_class_fn.unwrap()(obj);
+    if class.is_null() { return 0; }
+    call_getter_int(class, obj, method_name)
+}
+
+// Helper: read IL2CPP string from object via getter
+unsafe fn read_il2cpp_string_from_obj(obj: *const c_void, method_name: &str) -> String {
+    if obj.is_null() || API.is_null() { return String::new(); }
+    let api = &*API;
+    let get_class_fn: Option<unsafe extern "C" fn(*const c_void) -> *mut c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_object_get_class");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if get_class_fn.is_none() { return String::new(); }
+    let class = get_class_fn.unwrap()(obj);
+    if class.is_null() { return String::new(); }
+    let s = call_getter_string(class, obj, method_name);
+    let result = read_il2cpp_string(s);
+    result
+}
+
+// Helper: call a getter that returns a string (IL2CPP String*)
+unsafe fn call_getter_string(
+    class: *mut c_void,
+    obj: *const c_void,
+    method_name: &str,
+) -> *const c_void {
+    if class.is_null() || obj.is_null() || API.is_null() { return std::ptr::null(); }
+    let get_method_fn: Option<unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *const c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if get_method_fn.is_none() { return std::ptr::null(); }
+    let method = get_method_fn.unwrap()(class, to_cstr(method_name).as_ptr(), 0);
+    if method.is_null() { return std::ptr::null(); }
+
+    let get_ptr_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_method_get_pointer");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if get_ptr_fn.is_none() { return std::ptr::null(); }
+    let ptr = get_ptr_fn.unwrap()(method);
+    if ptr.is_null() { return std::ptr::null(); }
+
+    type FnGet = unsafe extern "C" fn(*const c_void) -> *const c_void;
+    let getter: FnGet = std::mem::transmute(ptr);
+    getter(obj)
+}
+
+unsafe fn install_event_choice_hook() {
+    if EVENT_CHOICE_HOOK_INSTALLED { return; }
+    if API.is_null() { return; }
+
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return,
+    };
+
+    let class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("StoryChoiceController").as_ptr());
+    if class.is_null() {
+        ura_log(3, "Event hook: StoryChoiceController class not found");
+        return;
+    }
+
+    // Hook AddChoiceButton (1 param: StoryChoiceParam)
+    let add_btn_addr = find_method_addr(class, "AddChoiceButton", 1);
+    if add_btn_addr != 0 {
+        EVENT_ADD_BTN_ADDR = add_btn_addr;
+        std::ptr::copy_nonoverlapping(add_btn_addr as *const u8, ORIG_EVENT_ADD_BTN_PROLOGUE.as_mut_ptr(), 16);
+        write_hook_bytes(add_btn_addr, event_add_choice_hook_handler as usize);
+        ura_log(3, &format!("Event hook: AddChoiceButton hooked at 0x{:x}", add_btn_addr));
+    } else {
+        ura_log(3, "Event hook: AddChoiceButton NOT FOUND");
+    }
+
+    // Hook Choice (2 params: index, ???)
+    let choice_addr = find_method_addr(class, "Choice", 2);
+    if choice_addr != 0 {
+        EVENT_CHOICE_ADDR = choice_addr;
+        std::ptr::copy_nonoverlapping(choice_addr as *const u8, ORIG_EVENT_CHOICE_PROLOGUE.as_mut_ptr(), 16);
+        write_hook_bytes(choice_addr, event_choice_hook_handler as usize);
+        ura_log(3, &format!("Event hook: Choice hooked at 0x{:x}", choice_addr));
+    } else {
+        ura_log(3, "Event hook: Choice NOT FOUND");
+    }
+
+    EVENT_CHOICE_HOOK_INSTALLED = true;
+}
+
 extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     GAME_INITIALIZED.store(true, Ordering::Relaxed);
     unsafe {
@@ -5185,6 +5420,7 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
         install_exec_training_hook();
         install_failure_rate_hook();
         install_api_sniff_hooks();
+        install_event_choice_hook();
         // v3.22.51: Pre-cache all IL2CPP metadata on game thread
         precache_metadata();
     }
@@ -5196,7 +5432,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.23.3").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.24.0").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -8870,7 +9106,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.23.3","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.24.0","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
