@@ -4175,6 +4175,163 @@ fn parse_path(req: &str) -> String {
 }
 
 
+/// ★ v3.24.9: Debug Ramen gains — trace every step to find why gains is empty
+unsafe fn debug_ramengains() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+
+    // Step 1: Get WorkDataManager
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    parts.push(format!(r#""wdm_class":{}"#, if wdm_class.is_null() { "null" } else { "ok" }));
+    if wdm_class.is_null() { return format!("{{{}}}", parts.join(",")); }
+
+    let wdm_inst = get_singleton(wdm_class);
+    parts.push(format!(r#""wdm_inst":"0x{:x}""#, wdm_inst as usize));
+    if wdm_inst.is_null() { return format!("{{{}}}", parts.join(",")); }
+
+    // Step 2: Get SingleMode
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    parts.push(format!(r#""sm_obj":"0x{:x}""#, sm_obj as usize));
+    if sm_obj.is_null() { return format!("{{{}}}", parts.join(",")); }
+
+    // Step 3: Get Character
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    parts.push(format!(r#""chara_obj":"0x{:x}""#, chara_obj as usize));
+    if chara_obj.is_null() { return format!("{{{}}}", parts.join(",")); }
+
+    // Step 4: Get scenario_id
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let sid = read_obscured_int_at(chara_obj, 568);
+    parts.push(format!(r#""scenario_id":{}"#, sid));
+
+    // Step 5: Get scenario_obj
+    let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
+    parts.push(format!(r#""scenario_obj":"0x{:x}""#, scenario_obj as usize));
+    if scenario_obj.is_null() {
+        parts.push(r#""error":"scenario_obj_null""#.to_string());
+        return format!("{{{}}}", parts.join(","));
+    }
+
+    // Step 6: Get DataSet
+    let sc_class = std::ptr::read_unaligned::<*mut c_void>(scenario_obj as *const *mut c_void);
+    let dataset_obj = call_getter_ref(sc_class, scenario_obj, "get_DataSet");
+    parts.push(format!(r#""dataset_obj":"0x{:x}""#, dataset_obj as usize));
+    if dataset_obj.is_null() {
+        parts.push(r#""error":"dataset_obj_null""#.to_string());
+        return format!("{{{}}}", parts.join(","));
+    }
+
+    // Step 7: Read CommandInfoArray at offset 16
+    let cmd_list = read_ptr_at(dataset_obj, 16);
+    parts.push(format!(r#""cmd_list_ptr":"0x{:x}""#, cmd_list as usize));
+    if cmd_list.is_null() {
+        parts.push(r#""error":"cmd_list_null""#.to_string());
+        return format!("{{{}}}", parts.join(","));
+    }
+
+    let cmd_lb = cmd_list as *const u8;
+    let cmd_count = std::ptr::read_unaligned::<usize>(cmd_lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    parts.push(format!(r#""cmd_count":{}"#, cmd_count));
+
+    // Step 8: Dump each command element
+    let mut cmd_parts: Vec<String> = Vec::new();
+    for ci in 0..cmd_count.min(10) {
+        let ce = std::ptr::read_unaligned::<*mut c_void>(
+            cmd_lb.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+        );
+        if ce.is_null() {
+            cmd_parts.push(format!(r#"{{"idx":{},"null":true}}"#, ci));
+            continue;
+        }
+
+        let ce_b = ce as *const u8;
+
+        // Read raw bytes at offset 36 (CommandId ObscuredInt) and 56 (ParamsIncDecInfoArray ptr)
+        let raw_36 = std::ptr::read_unaligned::<i32>(ce_b.add(36) as *const i32);
+        let raw_40 = std::ptr::read_unaligned::<i32>(ce_b.add(40) as *const i32);
+        let cmd_id = raw_36 ^ raw_40;  // ObscuredInt XOR
+
+        let params_ptr = read_ptr_at(ce, 56);
+
+        // Also try offset 16 and 20 (CommandType)
+        let raw_16 = std::ptr::read_unaligned::<i32>(ce_b.add(16) as *const i32);
+        let raw_20 = std::ptr::read_unaligned::<i32>(ce_b.add(20) as *const i32);
+        let cmd_type = raw_16 ^ raw_20;
+
+        // Read raw hex at 0x10-0x40 for debugging
+        let mut hex_parts = Vec::new();
+        for off in (16..72).step_by(4) {
+            let val = std::ptr::read_unaligned::<i32>(ce_b.add(off) as *const i32);
+            hex_parts.push(format!(r#""0x{:02x}":{}"#, off, val));
+        }
+
+        let params_info = if !params_ptr.is_null() {
+            let plb = params_ptr as *const u8;
+            let plen = std::ptr::read_unaligned::<usize>(plb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            if plen > 0 && plen < 100 {
+                let mut gain_parts: Vec<String> = Vec::new();
+                for pi in 0..plen {
+                    let pe = std::ptr::read_unaligned::<*mut c_void>(
+                        plb.add(IL2CPP_LIST_ITEMS_OFF + pi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+                    );
+                    if pe.is_null() { continue; }
+                    let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(16) as *const i32);
+                    let vv = std::ptr::read_unaligned::<i32>((pe as *const u8).add(20) as *const i32);
+                    gain_parts.push(format!(r#"{{"tt":{},"vv":{}}}"#, tt, vv));
+                }
+                format!(r#""params_len":{},"items":[{}]"#, plen, gain_parts.join(","))
+            } else {
+                format!(r#""params_len":{}"#, plen)
+            }
+        } else {
+            r#""params_ptr":"null""#.to_string()
+        };
+
+        cmd_parts.push(format!(
+            r#"{{"idx":{},"cmd_id":{},"cmd_type":{},"params_ptr":"0x{:x}",{},"raw":{{{}}}}}"#,
+            ci, cmd_id, cmd_type, params_ptr as usize, params_info, hex_parts.join(",")
+        ));
+    }
+
+    parts.push(format!(r#""commands":[{}]"#, cmd_parts.join(",")));
+
+    // Step 9: Also check HomeInfoData path
+    let home_info_obj = call_getter_ref(sm_class, sm_obj, "get_HomeInfoData");
+    parts.push(format!(r#""home_info_obj":"0x{:x}""#, home_info_obj as usize));
+    if !home_info_obj.is_null() {
+        let hi_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeHomeInfoData").as_ptr());
+        if !hi_class.is_null() {
+            let cmd_arr = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
+            parts.push(format!(r#""home_cmd_arr":"0x{:x}""#, cmd_arr as usize));
+            if !cmd_arr.is_null() {
+                let ab = cmd_arr as *const u8;
+                let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                parts.push(format!(r#""home_cmd_count":{}"#, al));
+                // Check first element's ParamsIncDecInfoArray
+                if al > 0 {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void);
+                    if !ep.is_null() {
+                        let pa = read_ptr_at(ep as *const c_void, 96);
+                        parts.push(format!(r#""home_elem0_params":"0x{:x}""#, pa as usize));
+                        if !pa.is_null() {
+                            let pl = std::ptr::read_unaligned::<usize>((pa as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                            parts.push(format!(r#""home_elem0_params_len":{}"#, pl));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    format!("{{{}}}", parts.join(","))
+}
+
 fn handle_http(mut stream: std::net::TcpStream) {
     use std::io::{Read, Write};
     let mut buf = [0u8; 8192];
@@ -4184,7 +4341,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.24.9","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
+        r#"{"status":"ok","version":"3.24.9","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4433,7 +4590,15 @@ fn handle_http(mut stream: std::net::TcpStream) {
             result
         }
 
-    } else if path == "/debug/paramsincdec" {
+    } else if path == "/debug/ramengains" {
+        // ★ v3.24.9: Diagnose Ramen gains reading — trace every step
+        let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+        if jmp_result != 0 {
+            return r#"{"error":"sigsegv_recovered"}"#.to_string();
+        }
+        unsafe { debug_ramengains() }
+    } else if path == "/debug/ramengains","/debug/paramsincdec" {
         // v3.22.40: Read DataSet CommandInfo ParamsIncDecInfoArray element class names
         let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
@@ -4753,7 +4918,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
