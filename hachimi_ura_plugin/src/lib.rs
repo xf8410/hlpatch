@@ -5020,7 +5020,7 @@ extern "C" fn training_hook_handler(
             original(this, turn_info, sub_id, result_type)
         }
     })).unwrap_or_else(|e| {
-        ura_log(1, &format!("training_hook: panic caught: {:?}", e));
+        unsafe { ura_log(1, &format!("training_hook: panic caught: {:?}", e)); }
         std::ptr::null_mut()
     })
 }
@@ -5180,7 +5180,7 @@ extern "C" fn compress_request_hook_handler(data: *mut c_void) -> *mut c_void {
         }
     }));
     result.unwrap_or_else(|e| {
-        ura_log(1, &format!("compress_hook panic: {:?}", e));
+        unsafe { ura_log(1, &format!("compress_hook panic: {:?}", e)); }
         std::ptr::null_mut()
     })
 }
@@ -10092,7 +10092,7 @@ extern "C" fn failure_rate_hook(param1: *mut c_void, param2: *mut c_void) -> i32
             result
         }
     })).unwrap_or_else(|e| {
-        ura_log(1, &format!("failure_rate_hook: panic: {:?}", e));
+        unsafe { ura_log(1, &format!("failure_rate_hook: panic: {:?}", e)); }
         0
     })
 }
