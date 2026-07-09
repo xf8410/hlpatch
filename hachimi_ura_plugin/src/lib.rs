@@ -4972,14 +4972,19 @@ unsafe fn write_hook_bytes(target_addr: usize, handler_addr: usize) {
 
     // ★ v3.24.7: Flush I-Cache for the modified region
     // ARM64 has separate L1 I-Cache and D-Cache. Writing to .text via D-Cache
-    // doesn't automatically update I-Cache. Without this, CPU may execute stale instructions.
-    // __builtin___clear_cache is the GCC/Clang intrinsic for this.
-    extern "C" {
-        fn __builtin___clear_cache(start: *const c_void, end: *const c_void);
+    // doesn't automatically update I-Cache. Use inline asm to flush.
+    // DSB ISH: Data Synchronization Barrier (inner shareable)
+    // IC IALLU: Invalidate entire I-Cache (to PoU)
+    // DSB ISH + ISB: ensure completion
+    unsafe {
+        core::arch::asm!(
+            "dsb ish",
+            "ic iallu",
+            "dsb ish",
+            "isb",
+            options(nostack, preserves_flags),
+        );
     }
-    let cache_start = target_addr as *const c_void;
-    let cache_end = (target_addr + 16) as *const c_void;
-    __builtin___clear_cache(cache_start, cache_end);
 }
 
 // ★ v3.24.7: Training result hook — rewritten to use interceptor API
@@ -10005,7 +10010,8 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
         if fd >= 0 { sys_write(fd, line_bytes.as_ptr(), line_bytes.len()); sys_close(fd); }
 
         TRAINING_PREDICT_LOG.push(entry);
-    }
+        }
+    }));
 }
 
 // Read seed without the full debug_training_seed overhead
