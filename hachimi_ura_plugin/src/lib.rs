@@ -1,4 +1,4 @@
-//! URA Plugin v3.24.5
+//! URA Plugin v3.24.6
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -2638,6 +2638,16 @@ const IL2CPP_SUPPORT_CARD_ID_OFF: usize = 0x14;        // SingleModeEquipSupport
 const IL2CPP_SUPPORT_CARD_LIMIT_OFF: usize = 0x18;     // SingleModeEquipSupportCard.limitBreakCount (IL2CPP /fields/ offset=24)
 const IL2CPP_TARGET_RACE_ID_OFF: usize = 0x10;         // SingleModeTargetRace.targetId (IL2CPP /fields/ offset=16)
 const IL2CPP_TARGET_RACE_EVAL_OFF: usize = 0x14;       // SingleModeTargetRace.evaluation (IL2CPP /fields/ offset=20)
+
+// ★ v3.24.6: Named offsets for ObscuredSingleModeRamenCommandInfo (confirmed by /debug/dumpclass)
+const RAMEN_CMD_COMMAND_TYPE_OFF: usize = 0x10;        // CommandType (ObscuredInt inline, 20 bytes)
+const RAMEN_CMD_COMMAND_ID_OFF: usize = 0x24;          // CommandId (ObscuredInt inline, 20 bytes) — key at 0x24, hidden at 0x28
+const RAMEN_CMD_PARAMS_ARRAY_OFF: usize = 0x38;        // ParamsIncDecInfoArray (List ptr)
+const RAMEN_DATASET_CMD_ARRAY_OFF: usize = 0x10;       // DataSet.CommandInfoArray (List ptr at offset 16)
+const PARAMS_INCDEC_TARGET_TYPE_OFF: usize = 0x10;     // SingleModeParamsIncDecInfo.TargetType (plain int32)
+const PARAMS_INCDEC_VALUE_OFF: usize = 0x14;           // SingleModeParamsIncDecInfo.Value (plain int32)
+const EVAL_INFO_CHARA_ID_OFF: usize = 0x10;            // SingleModeEvaluationInfo.charaId (plain int32)
+const EVAL_INFO_EVALUATION_OFF: usize = 0x14;          // SingleModeEvaluationInfo.evaluation (plain int32)
 const IL2CPP_COMMAND_ID_OFF: usize = 0x10;             // SingleModeCommandId.commandId (IL2CPP /fields/ offset=16)
 const IL2CPP_COMMAND_LEVEL_OFF: usize = 0x14;          // SingleModeCommandId.level (IL2CPP /fields/ offset=20)
 const IL2CPP_OBSCURED_INT_UNBOX_KEY_OFF: usize = 0x10; // ObscuredInt unboxed: currentCryptoKey (offset=0x10)
@@ -3332,10 +3342,10 @@ unsafe fn read_summary_inner_impl() -> String {
                 // HomeInfoData.ParamsIncDecInfoArray is empty for Ramen,
                 // real gains are in DataSet.CommandInfoArray[].ParamsIncDecInfoArray
                 // Same direct memory read as /debug/paramsincdec
-                // ★ v3.24.5: Reverted to read_ptr_at — call_getter_ref caused crash during loading
+                // ★ v3.24.6: Reverted to read_ptr_at — call_getter_ref caused crash during loading
                 // The offset 16 is confirmed correct by /debug/dumpclass
                 // Original code worked in v3.24.2, crash was introduced by getter call
-                let cmd_list = read_ptr_at(dataset_obj, 16);
+                let cmd_list = read_ptr_at(dataset_obj, RAMEN_DATASET_CMD_ARRAY_OFF as i32);
                 if !cmd_list.is_null() {
                     let cmd_lb = cmd_list as *const u8;
                     let cmd_count = std::ptr::read_unaligned::<usize>(cmd_lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
@@ -3350,8 +3360,8 @@ unsafe fn read_summary_inner_impl() -> String {
                                 cmd_lb.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
                             );
                             if ce.is_null() { continue; }
-                            let cmd_id = read_obscured_int_at(ce, 36);
-                            let ce_params = read_ptr_at(ce, 56);
+                            let cmd_id = read_obscured_int_at(ce, RAMEN_CMD_COMMAND_ID_OFF as i32);
+                            let ce_params = read_ptr_at(ce, RAMEN_CMD_PARAMS_ARRAY_OFF as i32);
                             if cmd_id < 0 || ce_params.is_null() { continue; }
                             let ce_plb = ce_params as *const u8;
                             let ce_plen = std::ptr::read_unaligned::<usize>(ce_plb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
@@ -3370,8 +3380,8 @@ unsafe fn read_summary_inner_impl() -> String {
                                     ce_plb.add(IL2CPP_LIST_ITEMS_OFF + pi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
                                 );
                                 if pe.is_null() { continue; }
-                                let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(16) as *const i32);
-                                let vv = std::ptr::read_unaligned::<i32>((pe as *const u8).add(20) as *const i32);
+                                let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_TARGET_TYPE_OFF) as *const i32);
+                                let vv = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_VALUE_OFF) as *const i32);
                                 if tt == 30 { gauge_gain += vv; }
                                 if vv == 0 { continue; }
                                 let tn = match tt {
@@ -3629,7 +3639,7 @@ unsafe fn read_summary_inner_impl() -> String {
         let ab = sc_arr as *const u8;
         let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
         if al > 0 && al < 100 {
-            // ★ v3.24.5: 读取羁绊用纯内存读取，不调 il2cpp_runtime_invoke
+            // ★ v3.24.6: 读取羁绊用纯内存读取，不调 il2cpp_runtime_invoke
             // 根据开发文档记录：非主线程大量调用 il2cpp_runtime_invoke 会导致 SIGSEGV
             // EvaluationList 的元素是 SingleModeEvaluationInfo，字段布局：
             //   0x10: charaId (int32)
@@ -3650,8 +3660,8 @@ unsafe fn read_summary_inner_impl() -> String {
                             if ee.is_null() { continue; }
                             // 纯内存读取 charaId 和 evaluation
                             let eb = ee as *const u8;
-                            let eval_chara_id = std::ptr::read_unaligned::<i32>(eb.add(0x10) as *const i32);
-                            let eval_value = std::ptr::read_unaligned::<i32>(eb.add(0x14) as *const i32);
+                            let eval_chara_id = std::ptr::read_unaligned::<i32>(eb.add(EVAL_INFO_CHARA_ID_OFF) as *const i32);
+                            let eval_value = std::ptr::read_unaligned::<i32>(eb.add(EVAL_INFO_EVALUATION_OFF) as *const i32);
                             if eval_chara_id > 0 {
                                 eval_map.insert(eval_chara_id, eval_value);
                             }
@@ -3674,7 +3684,7 @@ unsafe fn read_summary_inner_impl() -> String {
                     let tps = call_getter_int(sc_elem_class, ep, "get_TrainingPartnerState");
                     (pos, sid, lbc, tps)
                 } else { (-1i32, -1i32, -1i32, -1i32) };
-                // ★ v3.24.5: chara_id 也用纯内存读取，不额外调 runtime_invoke
+                // ★ v3.24.6: chara_id 也用纯内存读取，不额外调 runtime_invoke
                 // EquipSupportCard 的 CharaId 在 ObscuredInt 之后，用 getter 读更安全
                 // 但为减少 invoke 次数，直接从 MasterSupportCardData 读
                 let sc_chara_id = if !sc_elem_class.is_null() {
@@ -3944,7 +3954,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.24.5","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.24.6","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -4138,7 +4148,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.24.5","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
+        r#"{"status":"ok","version":"3.24.6","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4960,9 +4970,9 @@ unsafe fn write_hook_bytes(target_addr: usize, handler_addr: usize) {
     std::ptr::copy_nonoverlapping(hook.as_ptr(), target_addr as *mut u32, 4);
 }
 
-// Hook handler: called instead of OnSuccessSendCommand
-// Signature: IEnumerator OnSuccessSendCommand(TrainingResultType resultType, object turnInfo, int subId)
-// ARM64: X0=this, X1=turnInfo, W2=subId, W3=resultType
+// ★ v3.24.6: Training result hook — rewritten to use interceptor API
+// Old write_hook_bytes was thread-unsafe (unhook→call orig→rehook race condition)
+// New version uses interceptor_hook/interceptor_get_trampoline (trampoline-based, thread-safe)
 extern "C" fn training_hook_handler(
     this: *mut c_void,
     turn_info: *mut c_void,
@@ -4973,25 +4983,15 @@ extern "C" fn training_hook_handler(
         LAST_TRAINING_RESULT = result_type;
         LAST_TRAINING_SUB_ID = sub_id;
 
-        if !TRAINING_HOOK_INSTALLED || ON_SUCCESS_ADDR == 0 {
+        // Use trampoline — no unhook/rehook needed
+        let trampoline = interceptor_get_trampoline(training_hook_handler as usize);
+        if trampoline == 0 {
+            ura_log(1, "training_hook: trampoline not found");
             return std::ptr::null_mut();
         }
-
-        // Unhook: restore original bytes
-        let page_size = 4096;
-        let page_addr = ON_SUCCESS_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_ON_SUCCESS_PROLOGUE.as_ptr(), ON_SUCCESS_ADDR as *mut u8, 16);
-
-        // Call original function
         type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, i32) -> *mut c_void;
-        let original: FnType = std::mem::transmute(ON_SUCCESS_ADDR);
-        let result = original(this, turn_info, sub_id, result_type);
-
-        // Rehook
-        write_hook_bytes(ON_SUCCESS_ADDR, training_hook_handler as usize);
-
-        result
+        let original: FnType = std::mem::transmute(trampoline);
+        original(this, turn_info, sub_id, result_type)
     }
 }
 
@@ -5062,14 +5062,17 @@ unsafe fn install_training_hook() {
 
     ON_SUCCESS_ADDR = method_addr;
 
-    // Save original 16 bytes
-    std::ptr::copy_nonoverlapping(method_addr as *const u8, ORIG_ON_SUCCESS_PROLOGUE.as_mut_ptr(), 16);
-
-    // Install hook
-    write_hook_bytes(method_addr, training_hook_handler as usize);
-
-    TRAINING_HOOK_INSTALLED = true;
-    ura_log(3, &format!("Training hook installed at 0x{:x}", method_addr));
+    // ★ v3.24.6: Use interceptor API instead of write_hook_bytes
+    if interceptor_hook(method_addr, training_hook_handler as usize) {
+        TRAINING_HOOK_INSTALLED = true;
+        ura_log(3, &format!("Training hook installed at 0x{:x} (interceptor)", method_addr));
+    } else {
+        ura_log(1, "Training hook: interceptor_hook failed, falling back to write_hook_bytes");
+        // Fallback: old write_hook_bytes method (less safe but works without interceptor)
+        std::ptr::copy_nonoverlapping(method_addr as *const u8, ORIG_ON_SUCCESS_PROLOGUE.as_mut_ptr(), 16);
+        write_hook_bytes(method_addr, training_hook_handler as usize);
+        TRAINING_HOOK_INSTALLED = true;
+    }
 }
 
 // ★ v3.23.3: API sniffing — read IL2CPP byte array
@@ -5111,6 +5114,20 @@ unsafe fn interceptor_get_trampoline(hook_addr: usize) -> usize {
     if let Some(f) = api.interceptor_get_trampoline_addr_fn {
         f(api.interceptor, hook_addr as *mut c_void) as usize
     } else { 0 }
+}
+
+/// ★ v3.24.6: Unified hook installer — tries interceptor first, falls back to write_hook_bytes
+unsafe fn install_hook_safe(name: &str, method_addr: usize, handler_addr: usize, orig_prologue: &mut [u8; 16]) -> bool {
+    if method_addr == 0 { return false; }
+    if interceptor_hook(method_addr, handler_addr) {
+        ura_log(3, &format!("{}: hooked at 0x{:x} (interceptor)", name, method_addr));
+        true
+    } else {
+        ura_log(2, &format!("{}: interceptor failed, fallback to write_hook_bytes", name));
+        std::ptr::copy_nonoverlapping(method_addr as *const u8, orig_prologue.as_mut_ptr(), 16);
+        write_hook_bytes(method_addr, handler_addr);
+        true
+    }
 }
 
 // ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]
@@ -5312,21 +5329,15 @@ extern "C" fn event_choice_hook_handler(
         EVENT_SELECTED_IDX = choice_index;
         ura_log(3, &format!("Event choice: index={} choices_count={}", choice_index, EVENT_CHOICES.len()));
 
-        if !EVENT_CHOICE_HOOK_INSTALLED || EVENT_CHOICE_ADDR == 0 {
+        // ★ v3.24.6: Use trampoline — no unhook/rehook
+        let trampoline = interceptor_get_trampoline(event_choice_hook_handler as usize);
+        if trampoline == 0 {
+            ura_log(1, "event_choice_hook: trampoline not found");
             return;
         }
-
-        // Unhook → call original → rehook
-        let page_size = 4096;
-        let page_addr = EVENT_CHOICE_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_EVENT_CHOICE_PROLOGUE.as_ptr(), EVENT_CHOICE_ADDR as *mut u8, 16);
-
         type FnChoice = unsafe extern "C" fn(*mut c_void, i32, *mut c_void);
-        let original: FnChoice = std::mem::transmute(EVENT_CHOICE_ADDR);
+        let original: FnChoice = std::mem::transmute(trampoline);
         original(this, choice_index, _param2);
-
-        write_hook_bytes(EVENT_CHOICE_ADDR, event_choice_hook_handler as usize);
     }
 }
 
@@ -5363,17 +5374,15 @@ extern "C" fn event_add_choice_hook_handler(
             return;
         }
 
-        // Unhook → call original → rehook
-        let page_size = 4096;
-        let page_addr = EVENT_ADD_BTN_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_EVENT_ADD_BTN_PROLOGUE.as_ptr(), EVENT_ADD_BTN_ADDR as *mut u8, 16);
-
+        // ★ v3.24.6: Use trampoline — no unhook/rehook
+        let trampoline = interceptor_get_trampoline(event_add_choice_hook_handler as usize);
+        if trampoline == 0 {
+            ura_log(1, "add_choice_hook: trampoline not found");
+            return;
+        }
         type FnAddBtn = unsafe extern "C" fn(*mut c_void, *mut c_void);
-        let original: FnAddBtn = std::mem::transmute(EVENT_ADD_BTN_ADDR);
+        let original: FnAddBtn = std::mem::transmute(trampoline);
         original(this, param);
-
-        write_hook_bytes(EVENT_ADD_BTN_ADDR, event_add_choice_hook_handler as usize);
     }
 }
 
@@ -5464,17 +5473,15 @@ extern "C" fn story_set_hook_handler(
             return;
         }
 
-        // Unhook → call original → rehook
-        let page_size = 4096;
-        let page_addr = STORY_SET_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_STORY_SET_PROLOGUE.as_ptr(), STORY_SET_ADDR as *mut u8, 16);
-
+        // ★ v3.24.6: Use trampoline — no unhook/rehook
+        let trampoline = interceptor_get_trampoline(story_set_hook_handler as usize);
+        if trampoline == 0 {
+            ura_log(1, "story_set_hook: trampoline not found");
+            return;
+        }
         type FnSetStory = unsafe extern "C" fn(*mut c_void, i32, i64, i64, i64);
-        let original: FnSetStory = std::mem::transmute(STORY_SET_ADDR);
+        let original: FnSetStory = std::mem::transmute(trampoline);
         original(this, story_id, p2, p3, p4);
-
-        write_hook_bytes(STORY_SET_ADDR, story_set_hook_handler as usize);
     }
 }
 
@@ -5497,9 +5504,7 @@ unsafe fn install_event_choice_hook() {
     let add_btn_addr = find_method_addr(class, "AddChoiceButton", 1);
     if add_btn_addr != 0 {
         EVENT_ADD_BTN_ADDR = add_btn_addr;
-        std::ptr::copy_nonoverlapping(add_btn_addr as *const u8, ORIG_EVENT_ADD_BTN_PROLOGUE.as_mut_ptr(), 16);
-        write_hook_bytes(add_btn_addr, event_add_choice_hook_handler as usize);
-        ura_log(3, &format!("Event hook: AddChoiceButton hooked at 0x{:x}", add_btn_addr));
+        install_hook_safe("EventAddBtn", add_btn_addr, event_add_choice_hook_handler as usize, &mut ORIG_EVENT_ADD_BTN_PROLOGUE);
     } else {
         ura_log(3, "Event hook: AddChoiceButton NOT FOUND");
     }
@@ -5508,9 +5513,7 @@ unsafe fn install_event_choice_hook() {
     let choice_addr = find_method_addr(class, "Choice", 2);
     if choice_addr != 0 {
         EVENT_CHOICE_ADDR = choice_addr;
-        std::ptr::copy_nonoverlapping(choice_addr as *const u8, ORIG_EVENT_CHOICE_PROLOGUE.as_mut_ptr(), 16);
-        write_hook_bytes(choice_addr, event_choice_hook_handler as usize);
-        ura_log(3, &format!("Event hook: Choice hooked at 0x{:x}", choice_addr));
+        install_hook_safe("EventChoice", choice_addr, event_choice_hook_handler as usize, &mut ORIG_EVENT_CHOICE_PROLOGUE);
     } else {
         ura_log(3, "Event hook: Choice NOT FOUND");
     }
@@ -5522,8 +5525,7 @@ unsafe fn install_event_choice_hook() {
         if set_story_addr != 0 {
             STORY_SET_ADDR = set_story_addr;
             STORY_SET_HOOK_INSTALLED = true;
-            std::ptr::copy_nonoverlapping(set_story_addr as *const u8, ORIG_STORY_SET_PROLOGUE.as_mut_ptr(), 16);
-            write_hook_bytes(set_story_addr, story_set_hook_handler as usize);
+            install_hook_safe("StorySet", set_story_addr, story_set_hook_handler as usize, &mut ORIG_STORY_SET_PROLOGUE);
             ura_log(3, &format!("Event hook: StoryManager.SetStory hooked at 0x{:x}", set_story_addr));
         } else {
             ura_log(3, "Event hook: StoryManager.SetStory NOT FOUND");
@@ -5777,10 +5779,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     if interceptor != 0 { unsafe { (*API).interceptor = interceptor; } }
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.24.5 loaded (Interceptor API hooks)");
+    ura_log(3, "URA plugin v3.24.6 loaded (Interceptor API hooks)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.24.5 Loaded!").as_ptr());
+        f(to_cstr("URA v3.24.6 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -9216,7 +9218,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.24.5","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.24.6","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -9806,9 +9808,9 @@ unsafe fn debug_paramsincdec() -> String {
         // Read CommandType (ObscuredInt at offset 16 — use read_obscured_int_at to avoid wild ptr)
         let cmd_type = read_obscured_int_at(ce, 16);
         // Read CommandId (ObscuredInt at offset 36 — use read_obscured_int_at to avoid wild ptr)
-        let cmd_id = read_obscured_int_at(ce, 36);
+        let cmd_id = read_obscured_int_at(ce, RAMEN_CMD_COMMAND_ID_OFF as i32);
 
-        let ce_params = read_ptr_at(ce, 56);
+        let ce_params = read_ptr_at(ce, RAMEN_CMD_PARAMS_ARRAY_OFF as i32);
         if ce_params.is_null() {
             cmd_details.push(format!(
                 r#"{{"idx":{},"cmd_type":{},"cmd_id":{},"params":[]}}"#,
@@ -9832,8 +9834,8 @@ unsafe fn debug_paramsincdec() -> String {
                 continue;
             }
             // SingleModeParamsIncDecInfo: target_type at offset 16 (int), value at offset 20 (int)
-            let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(16) as *const i32);
-            let vv = std::ptr::read_unaligned::<i32>((pe as *const u8).add(20) as *const i32);
+            let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_TARGET_TYPE_OFF) as *const i32);
+            let vv = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_VALUE_OFF) as *const i32);
             params.push(format!(r#"{{"target_type":{},"value":{}}}"#, tt, vv));
         }
         let params_str = params.join(",");
@@ -9929,23 +9931,15 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
         let motivation = read_motivation_inner();
         LAST_MOTIVATION = motivation;
 
-        if !EXEC_TRAINING_HOOK_INSTALLED || EXEC_TRAINING_ADDR == 0 {
+        // ★ v3.24.6: Use trampoline — no unhook/rehook
+        let trampoline = interceptor_get_trampoline(exec_training_hook as usize);
+        if trampoline == 0 {
+            ura_log(1, "exec_training_hook: trampoline not found");
             return;
         }
-
-        // Unhook: restore original bytes
-        let page_size = 4096;
-        let page_addr = EXEC_TRAINING_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_EXEC_TRAINING_PROLOGUE.as_ptr(), EXEC_TRAINING_ADDR as *mut u8, 16);
-
-        // Call original function
         type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void);
-        let original: FnType = std::mem::transmute(EXEC_TRAINING_ADDR);
+        let original: FnType = std::mem::transmute(trampoline);
         original(param1, param2);
-
-        // Rehook
-        write_hook_bytes(EXEC_TRAINING_ADDR, exec_training_hook as usize);
 
         // Read seed after training
         let seed_after = read_seed_inner();
@@ -10046,23 +10040,15 @@ unsafe fn read_motivation_inner() -> i32 {
 // Captures the last failure rate (0-10000 = 0%-100%) for use in training log
 extern "C" fn failure_rate_hook(param1: *mut c_void, param2: *mut c_void) -> i32 {
     unsafe {
-        if !FAILURE_RATE_HOOK_INSTALLED || FAILURE_RATE_ADDR == 0 {
+        // ★ v3.24.6: Use trampoline — no unhook/rehook
+        let trampoline = interceptor_get_trampoline(failure_rate_hook as usize);
+        if trampoline == 0 {
+            ura_log(1, "failure_rate_hook: trampoline not found");
             return 0;
         }
-
-        // Unhook
-        let page_size = 4096;
-        let page_addr = FAILURE_RATE_ADDR & !(page_size - 1);
-        libc::mprotect(page_addr as *mut libc::c_void, page_size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC);
-        std::ptr::copy_nonoverlapping(ORIG_FAILURE_RATE_PROLOGUE.as_ptr(), FAILURE_RATE_ADDR as *mut u8, 16);
-
-        // Call original
         type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
-        let original: FnType = std::mem::transmute(FAILURE_RATE_ADDR);
+        let original: FnType = std::mem::transmute(trampoline);
         let result = original(param1, param2);
-
-        // Rehook
-        write_hook_bytes(FAILURE_RATE_ADDR, failure_rate_hook as usize);
 
         LAST_FAILURE_RATE = result;
         result
@@ -10091,15 +10077,8 @@ unsafe fn install_failure_rate_hook() {
     }
 
     FAILURE_RATE_ADDR = method_addr;
-
-    // Save original 16 bytes
-    std::ptr::copy_nonoverlapping(method_addr as *const u8, ORIG_FAILURE_RATE_PROLOGUE.as_mut_ptr(), 16);
-
-    // Install hook
-    write_hook_bytes(method_addr, failure_rate_hook as usize);
-
+    install_hook_safe("FailureRate", method_addr, failure_rate_hook as usize, &mut ORIG_FAILURE_RATE_PROLOGUE);
     FAILURE_RATE_HOOK_INSTALLED = true;
-    ura_log(3, &format!("FailureRate hook installed at 0x{:x}", method_addr));
 }
 
 unsafe fn install_exec_training_hook() {
@@ -10124,15 +10103,8 @@ unsafe fn install_exec_training_hook() {
     }
 
     EXEC_TRAINING_ADDR = method_addr;
-
-    // Save original 16 bytes
-    std::ptr::copy_nonoverlapping(method_addr as *const u8, ORIG_EXEC_TRAINING_PROLOGUE.as_mut_ptr(), 16);
-
-    // Install hook
-    write_hook_bytes(method_addr, exec_training_hook as usize);
-
+    install_hook_safe("ExecTraining", method_addr, exec_training_hook as usize, &mut ORIG_EXEC_TRAINING_PROLOGUE);
     EXEC_TRAINING_HOOK_INSTALLED = true;
-    ura_log(3, &format!("ExecTraining hook installed at 0x{:x}", method_addr));
 }
 
 /// v3.22.51: 启动时自动检查更新（后台线程）
