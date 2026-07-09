@@ -3332,7 +3332,15 @@ unsafe fn read_summary_inner_impl() -> String {
                 // HomeInfoData.ParamsIncDecInfoArray is empty for Ramen,
                 // real gains are in DataSet.CommandInfoArray[].ParamsIncDecInfoArray
                 // Same direct memory read as /debug/paramsincdec
-                let cmd_list = read_ptr_at(dataset_obj, 16);
+                // ★ FIX: Use getter instead of hardcoded offset 16 — offset varies by game version
+                let mut cmd_list = call_getter_ref(ds_class, dataset_obj, "get_CommandInfoArray");
+                if cmd_list.is_null() {
+                    // Fallback: try direct field read at offset 0x10
+                    cmd_list = read_ptr_at(dataset_obj, 16);
+                    if !cmd_list.is_null() {
+                        ura_log(2, "ramen: CommandInfoArray getter failed, using offset fallback");
+                    }
+                }
                 if !cmd_list.is_null() {
                     let cmd_lb = cmd_list as *const u8;
                     let cmd_count = std::ptr::read_unaligned::<usize>(cmd_lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
@@ -3381,10 +3389,26 @@ unsafe fn read_summary_inner_impl() -> String {
                                 }
                             }
                             if !gains_parts.is_empty() {
+                                // ★ FIX: Store under both cmd_id variants (601→101, 602→102, etc.)
+                                // so lookup works regardless of which command_id space HomeInfoData uses
                                 ramen_gains_map.insert(cmd_id, gains_parts.join(","));
                                 ramen_stat_gains_map.insert(cmd_id, sg);
                                 ramen_skill_pt_map.insert(cmd_id, spt);
                                 ramen_vital_cost_map.insert(cmd_id, vc);
+                                let alt_id = match cmd_id {
+                                    601 => Some(101), 602 => Some(102), 603 => Some(103),
+                                    604 => Some(105), 605 => Some(106),
+                                    101 => Some(601), 102 => Some(602), 103 => Some(603),
+                                    105 => Some(604), 106 => Some(605),
+                                    _ => None
+                                };
+                                if let Some(aid) = alt_id {
+                                    ramen_gains_map.insert(aid, ramen_gains_map.get(&cmd_id).unwrap().clone());
+                                    ramen_stat_gains_map.insert(aid, sg);
+                                    ramen_skill_pt_map.insert(aid, spt);
+                                    ramen_vital_cost_map.insert(aid, vc);
+                                }
+                                ura_log(4, &format!("ramen gains: cmd_id={} gains={} alt={:?}", cmd_id, gains_parts.join(","), alt_id));
                             }
                             if gauge_gain > 0 {
                                 ramen_gauge_gains_map.insert(cmd_id, gauge_gain);
@@ -3602,6 +3626,29 @@ unsafe fn read_summary_inner_impl() -> String {
         let ab = sc_arr as *const u8;
         let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
         if al > 0 && al < 100 {
+            // ★ FIX: Read EvaluationList (kizuna) from chara_data for support card bond values
+            let eval_list = call_getter_ref(chara_class, chara_obj, "get_EvaluationList");
+            let mut eval_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+            if !eval_list.is_null() {
+                let elb = eval_list as *const u8;
+                let elen = std::ptr::read_unaligned::<usize>(elb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                if elen > 0 && elen < 1000 {
+                    for ei in 0..elen {
+                        let ee = std::ptr::read_unaligned::<*mut c_void>(
+                            elb.add(IL2CPP_LIST_ITEMS_OFF + ei * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+                        );
+                        if ee.is_null() { continue; }
+                        let ee_class = get_class_from_object(ee);
+                        if ee_class.is_null() { continue; }
+                        let eval_chara_id = call_getter_int(ee_class, ee, "get_CharaId");
+                        let eval_value = call_getter_int(ee_class, ee, "get_Evaluation");
+                        if eval_chara_id > 0 {
+                            eval_map.insert(eval_chara_id, eval_value);
+                        }
+                    }
+                    ura_log(3, &format!("eval_list: {} entries", elen));
+                }
+            }
             let mut scs = Vec::new();
             for i in 0..al {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -3616,13 +3663,18 @@ unsafe fn read_summary_inner_impl() -> String {
                     let tps = call_getter_int(sc_elem_class, ep, "get_TrainingPartnerState");
                     (pos, sid, lbc, tps)
                 } else { (-1i32, -1i32, -1i32, -1i32) };
+                // ★ FIX: Get kizuna (evaluation) for this support card's chara_id
+                let sc_chara_id = if !sc_elem_class.is_null() {
+                    call_getter_int(sc_elem_class, ep, "get_CharaId")
+                } else { -1 };
+                let kizuna = eval_map.get(&sc_chara_id).copied().unwrap_or(-1);
                 scs.push(format!(
-                    r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{}}}"#,
-                    position, support_card_id, limit_break_count, training_partner_state
+                    r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{},"chara_id":{},"kizuna":{}}}"#,
+                    position, support_card_id, limit_break_count, training_partner_state, sc_chara_id, kizuna
                 ));
             }
             sc_json = format!("[{}]", scs.join(","));
-            ura_log(3, &format!("sc: {} cards found", scs.len()));
+            ura_log(3, &format!("sc: {} cards found, eval_map: {} entries", scs.len(), eval_map.len()));
         }
     }
 
