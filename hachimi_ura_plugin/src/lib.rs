@@ -4598,7 +4598,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             return r#"{"error":"sigsegv_recovered"}"#.to_string();
         }
         unsafe { debug_ramengains() }
-    } else if path == "/debug/ramengains","/debug/paramsincdec" {
+    } else if path == "/debug/paramsincdec" {
         // v3.22.40: Read DataSet CommandInfo ParamsIncDecInfoArray element class names
         let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
