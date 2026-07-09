@@ -3177,9 +3177,9 @@ unsafe fn read_summary_inner_impl() -> String {
     let mot = read_obscured_int_at(chara_obj, 1056);  // _motivation
     let spt = read_obscured_int_at(chara_obj, 704);   // _skillPoint
     let fan = read_obscured_int_at(chara_obj, 996);   // _fanCount
-    // ★ v3.18.2 fix: Month/Half are on WorkSingleModeData, not CharaData
-    let mon = if !sm_obj.is_null() { read_int_at(sm_obj, 68) } else { 1 };  // _totalTurnNum → 计算月
-    let half = if !sm_obj.is_null() { read_int_at(sm_obj, 68) } else { 1 };
+    // ★ v3.24.8: Month/Half are computed properties — must use getter (no offset available)
+    let mon = if !sm_class.is_null() { call_getter_int(sm_class, sm_obj, "get_Month") } else { 1 };
+    let half = if !sm_class.is_null() { call_getter_int(sm_class, sm_obj, "get_Half") } else { 1 };
     let sid = read_obscured_int_at(chara_obj, 568);   // _scenarioId
     let chara_id = read_obscured_int_at(chara_obj, 36); // _cardId
 
@@ -3207,8 +3207,8 @@ unsafe fn read_summary_inner_impl() -> String {
     let proper_ground_turf = read_obscured_int_at(chara_obj, 904);
     let proper_ground_dirt = read_obscured_int_at(chara_obj, 924);
 
-    // ★ v3.24.8: RNG seed from WorkSingleModeData
-    let rng_seed = if !sm_obj.is_null() { read_int_at(sm_obj, 408) } else { 0 }; // _fixedTurnCharaSeed
+    // ★ v3.24.8: RNG seed from WorkSingleModeData — ObscuredInt (gap=24 to next field)
+    let rng_seed = if !sm_obj.is_null() { read_obscured_int_at(sm_obj, 408) } else { 0 };
 
     // chara_effect_ids: read array via field pointer (not getter)
     let chara_effect_ids_arr = read_ptr_at(chara_obj, 1080); // _charaEffectIdArray
