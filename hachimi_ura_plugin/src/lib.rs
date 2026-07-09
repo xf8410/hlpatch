@@ -1,4 +1,4 @@
-//! URA Plugin v3.24.8
+//! URA Plugin v3.24.9
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -956,7 +956,7 @@ unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
     std::ptr::read_unaligned::<i32>(base.add(field_offset as usize) as *const i32)
 }
 
-/// ★ v3.24.8: Read IL2CPP List<int> via pointer — zero runtime_invoke
+/// ★ v3.24.9: Read IL2CPP List<int> via pointer — zero runtime_invoke
 unsafe fn read_il2cpp_int_list(list_ptr: *const c_void) -> Vec<i32> {
     if list_ptr.is_null() { return Vec::new(); }
     let base = list_ptr as *const u8;
@@ -2658,7 +2658,7 @@ const IL2CPP_SUPPORT_CARD_LIMIT_OFF: usize = 0x18;     // SingleModeEquipSupport
 const IL2CPP_TARGET_RACE_ID_OFF: usize = 0x10;         // SingleModeTargetRace.targetId (IL2CPP /fields/ offset=16)
 const IL2CPP_TARGET_RACE_EVAL_OFF: usize = 0x14;       // SingleModeTargetRace.evaluation (IL2CPP /fields/ offset=20)
 
-// ★ v3.24.8: Named offsets for ObscuredSingleModeRamenCommandInfo (confirmed by /debug/dumpclass)
+// ★ v3.24.9: Named offsets for ObscuredSingleModeRamenCommandInfo (confirmed by /debug/dumpclass)
 const RAMEN_CMD_COMMAND_TYPE_OFF: usize = 0x10;        // CommandType (ObscuredInt inline, 20 bytes)
 const RAMEN_CMD_COMMAND_ID_OFF: usize = 0x24;          // CommandId (ObscuredInt inline, 20 bytes) — key at 0x24, hidden at 0x28
 const RAMEN_CMD_PARAMS_ARRAY_OFF: usize = 0x38;        // ParamsIncDecInfoArray (List ptr)
@@ -3165,7 +3165,7 @@ unsafe fn read_summary_inner_impl() -> String {
     //   → getter returns boxed Int32, use call_getter_int
     //   ObscuredInt SkillPoint/ScenarioProgress/CharaEffectIdArray
     //   → getter returns boxed ObscuredInt struct, use call_getter_obscured_int
-    // ★ v3.24.8: All chara stats via direct memory read (zero il2cpp_runtime_invoke)
+    // ★ v3.24.9: All chara stats via direct memory read (zero il2cpp_runtime_invoke)
     // Offsets confirmed by /debug/dumpclass on WorkSingleModeCharaData
     let spd = read_obscured_int_at(chara_obj, 248);   // _speed
     let sta = read_obscured_int_at(chara_obj, 268);   // _stamina
@@ -3177,13 +3177,13 @@ unsafe fn read_summary_inner_impl() -> String {
     let mot = read_obscured_int_at(chara_obj, 1056);  // _motivation
     let spt = read_obscured_int_at(chara_obj, 704);   // _skillPoint
     let fan = read_obscured_int_at(chara_obj, 996);   // _fanCount
-    // ★ v3.24.8: Month/Half are computed properties — must use getter (no offset available)
+    // ★ v3.24.9: Month/Half are computed properties — must use getter (no offset available)
     let mon = if !sm_class.is_null() { call_getter_int(sm_class, sm_obj, "get_Month") } else { 1 };
     let half = if !sm_class.is_null() { call_getter_int(sm_class, sm_obj, "get_Half") } else { 1 };
     let sid = read_obscured_int_at(chara_obj, 568);   // _scenarioId
     let chara_id = read_obscured_int_at(chara_obj, 36); // _cardId
 
-    // ★ v3.24.8: New fields — attribute caps + scenario progress + running style
+    // ★ v3.24.9: New fields — attribute caps + scenario progress + running style
     let max_spd = read_obscured_int_at(chara_obj, 348);  // MaxSpeed
     let max_sta = read_obscured_int_at(chara_obj, 368);  // MaxStamina
     let max_pow = read_obscured_int_at(chara_obj, 388);  // MaxPower
@@ -3193,13 +3193,13 @@ unsafe fn read_summary_inner_impl() -> String {
     let running_style = read_obscured_int_at(chara_obj, 944);     // RunningStyle
     let training_event_type = read_obscured_int_at(chara_obj, 672); // TrainingEventType
 
-    // ★ v3.24.8: Static info (read every time, but rarely changes)
+    // ★ v3.24.9: Static info (read every time, but rarely changes)
     let talent_level = read_obscured_int_at(chara_obj, 88);   // TalentLevel
     let limit_break = read_obscured_int_at(chara_obj, 108);   // LimitBreakCount
     let chara_grade = read_obscured_int_at(chara_obj, 168);   // CharaGrade
     let difficulty = read_obscured_int_at(chara_obj, 608);    // Difficulty
 
-    // ★ v3.24.8: Proper (适性) — A=6,B=5,C=4,D=3,E=2,F=1,G=0
+    // ★ v3.24.9: Proper (适性) — A=6,B=5,C=4,D=3,E=2,F=1,G=0
     let proper_dist_short = read_obscured_int_at(chara_obj, 744);
     let proper_dist_mile = read_obscured_int_at(chara_obj, 764);
     let proper_dist_mid = read_obscured_int_at(chara_obj, 784);
@@ -3207,7 +3207,7 @@ unsafe fn read_summary_inner_impl() -> String {
     let proper_ground_turf = read_obscured_int_at(chara_obj, 904);
     let proper_ground_dirt = read_obscured_int_at(chara_obj, 924);
 
-    // ★ v3.24.8: RNG seed from WorkSingleModeData — ObscuredInt (gap=24 to next field)
+    // ★ v3.24.9: RNG seed from WorkSingleModeData — ObscuredInt (gap=24 to next field)
     let rng_seed = if !sm_obj.is_null() { read_obscured_int_at(sm_obj, 408) } else { 0 };
 
     // chara_effect_ids: read array via field pointer (not getter)
@@ -3394,7 +3394,7 @@ unsafe fn read_summary_inner_impl() -> String {
                 // HomeInfoData.ParamsIncDecInfoArray is empty for Ramen,
                 // real gains are in DataSet.CommandInfoArray[].ParamsIncDecInfoArray
                 // Same direct memory read as /debug/paramsincdec
-                // ★ v3.24.8: Reverted to read_ptr_at — call_getter_ref caused crash during loading
+                // ★ v3.24.9: Reverted to read_ptr_at — call_getter_ref caused crash during loading
                 // The offset 16 is confirmed correct by /debug/dumpclass
                 // Original code worked in v3.24.2, crash was introduced by getter call
                 let cmd_list = read_ptr_at(dataset_obj, RAMEN_DATASET_CMD_ARRAY_OFF as i32);
@@ -3532,7 +3532,7 @@ unsafe fn read_summary_inner_impl() -> String {
                         let ep = std::ptr::read_unaligned::<*mut c_void>(cmd_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                         if ep.is_null() { continue; }
 
-                        // ★ v3.24.8: Direct memory read — zero il2cpp_runtime_invoke
+                        // ★ v3.24.9: Direct memory read — zero il2cpp_runtime_invoke
                         // SingleModeCommandInfoData offsets (confirmed by /debug/dumpclass):
                         //   CommandType=16  CommandId=36  IsEnable=56
                         //   TrainingPartnerArray=80  TipsEventPartnerArray=88  FailureRate=104
@@ -3549,7 +3549,7 @@ unsafe fn read_summary_inner_impl() -> String {
                         let is_enable = read_obscured_int_at(ep as *const c_void, 56);  // IsEnable
                         let failure_rate = read_obscured_int_at(ep as *const c_void, 104);  // FailureRate
 
-                        // ★ v3.24.8: Heads/Shining via direct ptr read (zero invoke)
+                        // ★ v3.24.9: Heads/Shining via direct ptr read (zero invoke)
                         let tp_arr = read_ptr_at(ep as *const c_void, 80);  // TrainingPartnerArray
                         let heads = if !tp_arr.is_null() {
                             let ab = tp_arr as *const u8;
@@ -3562,7 +3562,7 @@ unsafe fn read_summary_inner_impl() -> String {
                             std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize) as i32
                         } else { -1 };
 
-                        // Gains from ParamsIncDecInfoArray — v3.24.8: pure memory read
+                        // Gains from ParamsIncDecInfoArray — v3.24.9: pure memory read
                         let mut gains = Vec::new();
                         let mut stat_gains = [0i32; 5];
                         let mut skill_pt_gain = 0i32;
@@ -3577,7 +3577,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                     for j in 0..pl {
                                         let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                         if pe.is_null() { continue; }
-                                        // ★ v3.24.8: plain int32 read (confirmed by /debug/params)
+                                        // ★ v3.24.9: plain int32 read (confirmed by /debug/params)
                                         let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_TARGET_TYPE_OFF) as *const i32);
                                         let v = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_VALUE_OFF) as *const i32);
                                         if v == 0 { continue; }
@@ -3677,7 +3677,7 @@ unsafe fn read_summary_inner_impl() -> String {
         let ab = sc_arr as *const u8;
         let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
         if al > 0 && al < 100 {
-            // ★ v3.24.8: EvaluationList 用 read_ptr_at 直接读指针 (offset 1016 confirmed by dumpclass)
+            // ★ v3.24.9: EvaluationList 用 read_ptr_at 直接读指针 (offset 1016 confirmed by dumpclass)
             let mut eval_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
             {
                 let eval_list = read_ptr_at(chara_obj as *const c_void, 1016); // _evaluationList
@@ -3705,7 +3705,7 @@ unsafe fn read_summary_inner_impl() -> String {
             for i in 0..al {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                 if ep.is_null() { continue; }
-                // ★ v3.24.8: Direct memory read for EquipSupportCard (zero invoke)
+                // ★ v3.24.9: Direct memory read for EquipSupportCard (zero invoke)
                 // Offsets confirmed by /debug/dumpclass:
                 //   Position=16  SupportCardId=36  LimitBreakCount=56  Exp=76  RentalType=136
                 let sc_ep = ep as *const c_void;
@@ -3984,7 +3984,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.24.8","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.24.9","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan,
         max_spd, max_sta, max_pow, max_gut, max_wiz,
         proper_dist_short, proper_dist_mile, proper_dist_mid, proper_dist_long, proper_ground_turf, proper_ground_dirt,
@@ -4184,7 +4184,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.24.8","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
+        r#"{"status":"ok","version":"3.24.9","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4993,7 +4993,7 @@ extern "C" fn on_menu_item_click(_userdata: *mut c_void) {
 
 // ★ v3.22.94: Training result hook — intercept OnSuccessSendCommand to read resultType
 // Write ARM64 hook bytes (LDR X16, [PC, #8]; BR X16; .quad handler)
-// ★ v3.24.8: Flush I-Cache after writing — ARM64 has separate I/D cache
+// ★ v3.24.9: Flush I-Cache after writing — ARM64 has separate I/D cache
 unsafe fn write_hook_bytes(target_addr: usize, handler_addr: usize) {
     let page_size = 4096;
     let page_addr = target_addr & !(page_size - 1);
@@ -5006,7 +5006,7 @@ unsafe fn write_hook_bytes(target_addr: usize, handler_addr: usize) {
     ];
     std::ptr::copy_nonoverlapping(hook.as_ptr(), target_addr as *mut u32, 4);
 
-    // ★ v3.24.8: Flush I-Cache for the modified region
+    // ★ v3.24.9: Flush I-Cache for the modified region
     // ARM64 has separate L1 I-Cache and D-Cache. After writing to .text via D-Cache,
     // we must flush I-Cache or CPU may execute stale instructions.
     // Use libc::syscall to call __ARM_NR_cacheflush (ARM-specific syscall)
@@ -5030,10 +5030,10 @@ unsafe fn write_hook_bytes(target_addr: usize, handler_addr: usize) {
     }
 }
 
-// ★ v3.24.8: Training result hook — rewritten to use interceptor API
+// ★ v3.24.9: Training result hook — rewritten to use interceptor API
 // Old write_hook_bytes was thread-unsafe (unhook→call orig→rehook race condition)
 // New version uses interceptor_hook/interceptor_get_trampoline (trampoline-based, thread-safe)
-// ★ v3.24.8: catch_unwind on all hook handlers — panic must never cross FFI boundary
+// ★ v3.24.9: catch_unwind on all hook handlers — panic must never cross FFI boundary
 extern "C" fn training_hook_handler(
     this: *mut c_void,
     turn_info: *mut c_void,
@@ -5128,7 +5128,7 @@ unsafe fn install_training_hook() {
 
     ON_SUCCESS_ADDR = method_addr;
 
-    // ★ v3.24.8: Use interceptor API instead of write_hook_bytes
+    // ★ v3.24.9: Use interceptor API instead of write_hook_bytes
     if interceptor_hook(method_addr, training_hook_handler as usize) {
         TRAINING_HOOK_INSTALLED = true;
         ura_log(3, &format!("Training hook installed at 0x{:x} (interceptor)", method_addr));
@@ -5182,7 +5182,7 @@ unsafe fn interceptor_get_trampoline(hook_addr: usize) -> usize {
     } else { 0 }
 }
 
-/// ★ v3.24.8: Unified hook installer — tries interceptor first, falls back to write_hook_bytes
+/// ★ v3.24.9: Unified hook installer — tries interceptor first, falls back to write_hook_bytes
 unsafe fn install_hook_safe(name: &str, method_addr: usize, handler_addr: usize, orig_prologue: &mut [u8; 16]) -> bool {
     if method_addr == 0 { return false; }
     if interceptor_hook(method_addr, handler_addr) {
@@ -5447,7 +5447,7 @@ extern "C" fn event_add_choice_hook_handler(
             return;
         }
 
-        // ★ v3.24.8: Use trampoline — no unhook/rehook
+        // ★ v3.24.9: Use trampoline — no unhook/rehook
         let trampoline = interceptor_get_trampoline(event_add_choice_hook_handler as usize);
         if trampoline == 0 {
             ura_log(1, "add_choice_hook: trampoline not found");
@@ -5546,7 +5546,7 @@ extern "C" fn story_set_hook_handler(
             return;
         }
 
-        // ★ v3.24.8: Use trampoline — no unhook/rehook
+        // ★ v3.24.9: Use trampoline — no unhook/rehook
         let trampoline = interceptor_get_trampoline(story_set_hook_handler as usize);
         if trampoline == 0 {
             ura_log(1, "story_set_hook: trampoline not found");
@@ -5852,10 +5852,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     if interceptor != 0 { unsafe { (*API).interceptor = interceptor; } }
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.24.8 loaded (Interceptor API hooks)");
+    ura_log(3, "URA plugin v3.24.9 loaded (Interceptor API hooks)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.24.8 Loaded!").as_ptr());
+        f(to_cstr("URA v3.24.9 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -9291,7 +9291,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.24.8","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.24.9","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
@@ -10005,7 +10005,7 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
         let motivation = read_motivation_inner();
         LAST_MOTIVATION = motivation;
 
-        // ★ v3.24.8: Use trampoline — no unhook/rehook
+        // ★ v3.24.9: Use trampoline — no unhook/rehook
         let trampoline = interceptor_get_trampoline(exec_training_hook as usize);
         if trampoline == 0 {
             ura_log(1, "exec_training_hook: trampoline not found");
