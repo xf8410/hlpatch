@@ -3345,14 +3345,37 @@ unsafe fn read_summary_inner_impl() -> String {
                     let cmd_lb = cmd_list as *const u8;
                     let cmd_count = std::ptr::read_unaligned::<usize>(cmd_lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                     if cmd_count > 0 && cmd_count < 100 {
+                        // ★ FIX: ObscuredSingleModeRamenCommandInfo fields are POINTERS to boxed ObscuredInt, not inline structs
+                        // Layout (aarch64):
+                        //   0x10: CommandType (ptr → boxed ObscuredInt)
+                        //   0x18: CommandId (ptr → boxed ObscuredInt)
+                        //   0x20: ParamsIncDecInfoArray (ptr → List)
+                        //
+                        // Old code used read_obscured_int_at(ce, 36) and read_ptr_at(ce, 56) — wrong offsets
+                        // because it assumed 20-byte inline ObscuredInt struct layout.
+                        let ce_class = get_class_from_object(cmd_list); // not ideal but we can also use getter
                         for ci in 0..cmd_count {
                             let ce = std::ptr::read_unaligned::<*mut c_void>(
                                 cmd_lb.add(IL2CPP_LIST_ITEMS_OFF + ci * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
                             );
                             if ce.is_null() { continue; }
-                            let cmd_id = read_obscured_int_at(ce, 36);
-                            let ce_params = read_ptr_at(ce, 56);
-                            if ce_params.is_null() { continue; }
+                            let ce_elem_class = get_class_from_object(ce);
+                            // ★ Use getters instead of hardcoded offsets
+                            let cmd_id = if !ce_elem_class.is_null() {
+                                call_getter_obscured_int(ce_elem_class, ce, "get_CommandId")
+                            } else {
+                                // Fallback: read via pointer at offset 0x18, then unbox ObscuredInt
+                                let cmd_id_ptr = read_ptr_at(ce, 0x18);
+                                if !cmd_id_ptr.is_null() {
+                                    read_obscured_int_at(cmd_id_ptr, 0x10)
+                                } else { -1 }
+                            };
+                            let ce_params = if !ce_elem_class.is_null() {
+                                call_getter_ref(ce_elem_class, ce, "get_ParamsIncDecInfoArray")
+                            } else {
+                                read_ptr_at(ce, 0x20)
+                            };
+                            if cmd_id < 0 || ce_params.is_null() { continue; }
                             let ce_plb = ce_params as *const u8;
                             let ce_plen = std::ptr::read_unaligned::<usize>(ce_plb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                             if ce_plen == 0 || ce_plen > 1000 { continue; }
@@ -3362,13 +3385,25 @@ unsafe fn read_summary_inner_impl() -> String {
                             let mut vc = 0i32;
                             // ★ v3.22.89: Merged gauge_gain into single loop (was separate redundant loop)
                             let mut gauge_gain = 0i32;
+                            // ★ FIX: Try getter first, fallback to plain int read
+                            // ParamsIncDecInfoArray elements might be SingleModeParamsIncDecInfoData (ObscuredInt)
+                            // or plain SingleModeParamsIncDecInfo — depends on game version
+                            let pid_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
                             for pi in 0..ce_plen {
                                 let pe = std::ptr::read_unaligned::<*mut c_void>(
                                     ce_plb.add(IL2CPP_LIST_ITEMS_OFF + pi * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
                                 );
                                 if pe.is_null() { continue; }
-                                let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(16) as *const i32);
-                                let vv = std::ptr::read_unaligned::<i32>((pe as *const u8).add(20) as *const i32);
+                                let (tt, vv) = if !pid_class.is_null() {
+                                    let t = call_getter_obscured_int(pid_class, pe, "get_TargetType");
+                                    let v = call_getter_obscured_int(pid_class, pe, "get_Value");
+                                    (t, v)
+                                } else {
+                                    // Fallback: plain int32 read
+                                    let t = std::ptr::read_unaligned::<i32>((pe as *const u8).add(16) as *const i32);
+                                    let v = std::ptr::read_unaligned::<i32>((pe as *const u8).add(20) as *const i32);
+                                    (t, v)
+                                };
                                 if tt == 30 { gauge_gain += vv; }
                                 if vv == 0 { continue; }
                                 let tn = match tt {
