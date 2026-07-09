@@ -1,4 +1,4 @@
-//! URA Plugin v3.24.4
+//! URA Plugin v3.24.5
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3332,7 +3332,7 @@ unsafe fn read_summary_inner_impl() -> String {
                 // HomeInfoData.ParamsIncDecInfoArray is empty for Ramen,
                 // real gains are in DataSet.CommandInfoArray[].ParamsIncDecInfoArray
                 // Same direct memory read as /debug/paramsincdec
-                // ★ v3.24.4: Reverted to read_ptr_at — call_getter_ref caused crash during loading
+                // ★ v3.24.5: Reverted to read_ptr_at — call_getter_ref caused crash during loading
                 // The offset 16 is confirmed correct by /debug/dumpclass
                 // Original code worked in v3.24.2, crash was introduced by getter call
                 let cmd_list = read_ptr_at(dataset_obj, 16);
@@ -3629,12 +3629,16 @@ unsafe fn read_summary_inner_impl() -> String {
         let ab = sc_arr as *const u8;
         let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
         if al > 0 && al < 100 {
-            // ★ FIX: Read EvaluationList (kizuna) — wrapped in safe guard
-            // get_EvaluationList may crash if called too early or if element class lacks getters
+            // ★ v3.24.5: 读取羁绊用纯内存读取，不调 il2cpp_runtime_invoke
+            // 根据开发文档记录：非主线程大量调用 il2cpp_runtime_invoke 会导致 SIGSEGV
+            // EvaluationList 的元素是 SingleModeEvaluationInfo，字段布局：
+            //   0x10: charaId (int32)
+            //   0x14: evaluation (int32)
+            // 先读 field offset，再直接读内存
             let mut eval_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
-            // Only read eval list if we have a valid chara_class
             if !chara_class.is_null() {
-                let eval_list = call_getter_ref(chara_class, chara_obj, "get_EvaluationList");
+                // EvaluationList 是 chara_class 的一个 field，用 read_field_value 读指针（不走 runtime_invoke）
+                let eval_list = read_field_value(chara_class, chara_obj, "EvaluationList");
                 if !eval_list.is_null() {
                     let elb = eval_list as *const u8;
                     let elen = std::ptr::read_unaligned::<usize>(elb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
@@ -3644,15 +3648,15 @@ unsafe fn read_summary_inner_impl() -> String {
                                 elb.add(IL2CPP_LIST_ITEMS_OFF + ei * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
                             );
                             if ee.is_null() { continue; }
-                            let ee_class = get_class_from_object(ee);
-                            if ee_class.is_null() { continue; }
-                            // Guard: only call getters if class has them (check method existence)
-                            let eval_chara_id = call_getter_int(ee_class, ee, "get_CharaId");
-                            if eval_chara_id < 0 { continue; }
-                            let eval_value = call_getter_int(ee_class, ee, "get_Evaluation");
-                            eval_map.insert(eval_chara_id, eval_value);
+                            // 纯内存读取 charaId 和 evaluation
+                            let eb = ee as *const u8;
+                            let eval_chara_id = std::ptr::read_unaligned::<i32>(eb.add(0x10) as *const i32);
+                            let eval_value = std::ptr::read_unaligned::<i32>(eb.add(0x14) as *const i32);
+                            if eval_chara_id > 0 {
+                                eval_map.insert(eval_chara_id, eval_value);
+                            }
                         }
-                        ura_log(3, &format!("eval_list: {} entries", elen));
+                        ura_log(3, &format!("eval_list: {} entries (memory read)", elen));
                     }
                 }
             }
@@ -3670,7 +3674,9 @@ unsafe fn read_summary_inner_impl() -> String {
                     let tps = call_getter_int(sc_elem_class, ep, "get_TrainingPartnerState");
                     (pos, sid, lbc, tps)
                 } else { (-1i32, -1i32, -1i32, -1i32) };
-                // ★ FIX: Get kizuna (evaluation) for this support card's chara_id
+                // ★ v3.24.5: chara_id 也用纯内存读取，不额外调 runtime_invoke
+                // EquipSupportCard 的 CharaId 在 ObscuredInt 之后，用 getter 读更安全
+                // 但为减少 invoke 次数，直接从 MasterSupportCardData 读
                 let sc_chara_id = if !sc_elem_class.is_null() {
                     call_getter_int(sc_elem_class, ep, "get_CharaId")
                 } else { -1 };
@@ -3938,7 +3944,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.24.4","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.24.5","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan, tr_json, sc_json, ev_json, tl_json, buff_json, effect_ids_str.join(","), skill_eval, skill_count, skills_json, ai_json, team_json, ramen_json
     )
 }
@@ -4132,7 +4138,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.24.4","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
+        r#"{"status":"ok","version":"3.24.5","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -5771,10 +5777,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     if interceptor != 0 { unsafe { (*API).interceptor = interceptor; } }
     init_crash_handler();
     check_and_upload_crash_log();
-    ura_log(3, "URA plugin v3.24.4 loaded (Interceptor API hooks)");
+    ura_log(3, "URA plugin v3.24.5 loaded (Interceptor API hooks)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.24.4 Loaded!").as_ptr());
+        f(to_cstr("URA v3.24.5 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -9210,7 +9216,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.24.4","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.24.5","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
