@@ -3562,28 +3562,24 @@ unsafe fn read_summary_inner_impl() -> String {
                             std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize) as i32
                         } else { -1 };
 
-                        // Gains from ParamsIncDecInfoArray (ObscuredInt getters)
+                        // Gains from ParamsIncDecInfoArray — v3.24.8: pure memory read
                         let mut gains = Vec::new();
-                        // ★ v3.15.1: also collect for AI eval in same pass
-                        let mut stat_gains = [0i32; 5]; // [Speed, Stamina, Power, Guts, Wisdom]
+                        let mut stat_gains = [0i32; 5];
                         let mut skill_pt_gain = 0i32;
                         let mut vital_cost = 0i32;
-                        if !cmd_elem_class.is_null() {
-                            let pa = call_getter_on_instance(cmd_elem_class, ep, "get_ParamsIncDecInfoArray");
+                        {
+                            // ParamsIncDecInfoArray at offset 96 (confirmed by dumpclass)
+                            let pa = read_ptr_at(ep as *const c_void, 96);
                             if !pa.is_null() {
                                 let pb = pa as *const u8;
                                 let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
                                 if pl > 0 && pl < 100 {
-                                    let pid_class = find_class_by_short_name(image, "SingleModeParamsIncDecInfoData");
                                     for j in 0..pl {
                                         let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
                                         if pe.is_null() { continue; }
-                                        let tt = if !pid_class.is_null() {
-                                            call_getter_obscured_int(pid_class, pe, "get_TargetType")
-                                        } else { -1 };
-                                        let v = if !pid_class.is_null() {
-                                            call_getter_obscured_int(pid_class, pe, "get_Value")
-                                        } else { 0 };
+                                        // ★ v3.24.8: plain int32 read (confirmed by /debug/params)
+                                        let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_TARGET_TYPE_OFF) as *const i32);
+                                        let v = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_VALUE_OFF) as *const i32);
                                         if v == 0 { continue; }
                                         let tn = match tt {
                                             1=>"Speed", 2=>"Stamina", 3=>"Guts",
