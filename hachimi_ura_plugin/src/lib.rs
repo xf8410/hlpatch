@@ -5632,7 +5632,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.24.2").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.24.9").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
