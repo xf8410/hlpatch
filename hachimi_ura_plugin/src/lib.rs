@@ -4595,9 +4595,15 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
         if jmp_result != 0 {
-            return r#"{"error":"sigsegv_recovered"}"#.to_string();
+            r#"{"error":"sigsegv_recovered"}"#.to_string()
+        } else {
+            SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                unsafe { debug_ramengains() }
+            })).unwrap_or_else(|_| r#"{"error":"ramengains_panic"}"#.to_string());
+            SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+            result
         }
-        unsafe { debug_ramengains() }
     } else if path == "/debug/paramsincdec" {
         // v3.22.40: Read DataSet CommandInfo ParamsIncDecInfoArray element class names
         let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
