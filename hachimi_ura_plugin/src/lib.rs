@@ -8276,21 +8276,6 @@ unsafe fn il2cpp_type_get_type_enum(type_ptr: *const c_void) -> u8 {
     std::ptr::read_unaligned::<u8>((type_ptr as *const u8).add(10))
 }
 
-/// 读取IL2CPP字符串（System.String）内容
-/// 布局: klass(8) + monitor(8) + length(4) + chars(2*length UTF-16)
-unsafe fn read_il2cpp_string(str_obj: *const c_void) -> String {
-    if str_obj.is_null() { return String::new(); }
-    let base = str_obj as *const u8;
-    let length = std::ptr::read_unaligned::<i32>(base.add(16) as *const i32);
-    if length <= 0 || length > 8192 { return String::new(); }
-    let mut chars = Vec::with_capacity(length as usize);
-    for i in 0..length as usize {
-        let c = std::ptr::read_unaligned::<u16>(base.add(20 + i * 2) as *const u16);
-        chars.push(c);
-    }
-    String::from_utf16_lossy(&chars)
-}
-
 /// 读取对象字段值并返回JSON表示
 /// 根据IL2CPP类型枚举自动选择读取方式
 unsafe fn read_field_value_json(obj: *const c_void, offset: i32, type_ptr: *const c_void) -> String {
