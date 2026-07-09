@@ -1,0 +1,21 @@
+[package]
+name = "hachimi_ura"
+version = "3.24.2"
+edition = "2021"
+authors = ["URA Plugin Developer"]
+description = "Umamusume Response Analyzer - URA Blackboard Plugin for Hachimi (minimal V3)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rusqlite = { version = "0.31", default-features = false, features = ["bundled"] }
+ureq = { version = "2", features = ["tls"] }
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+panic = "unwind"
+codegen-units = 1
