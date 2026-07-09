@@ -4971,19 +4971,26 @@ unsafe fn write_hook_bytes(target_addr: usize, handler_addr: usize) {
     std::ptr::copy_nonoverlapping(hook.as_ptr(), target_addr as *mut u32, 4);
 
     // ★ v3.24.7: Flush I-Cache for the modified region
-    // ARM64 has separate L1 I-Cache and D-Cache. Writing to .text via D-Cache
-    // doesn't automatically update I-Cache. Use inline asm to flush.
-    // DSB ISH: Data Synchronization Barrier (inner shareable)
-    // IC IALLU: Invalidate entire I-Cache (to PoU)
-    // DSB ISH + ISB: ensure completion
-    unsafe {
-        core::arch::asm!(
-            "dsb ish",
-            "ic iallu",
-            "dsb ish",
-            "isb",
-            options(nostack, preserves_flags),
-        );
+    // ARM64 has separate L1 I-Cache and D-Cache. After writing to .text via D-Cache,
+    // we must flush I-Cache or CPU may execute stale instructions.
+    // Use libc::syscall to call __ARM_NR_cacheflush (ARM-specific syscall)
+    // On ARM64 the syscall number for cache flush is 0x0b (0xf0002 in Linux)
+    // Alternatively use inline assembly as fallback
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            // ARM64: use inline asm to flush I-cache
+            // DSB ISH ensures data writes are visible to all cores
+            // IC IALLU invalidates entire I-cache (to Point of Unification)
+            // ISB forces pipeline reload
+            ::std::arch::asm!(
+                "dsb ish",
+                "ic iallu",
+                "dsb ish",
+                "isb",
+                options(nostack),
+            );
+        }
     }
 }
 
@@ -5157,21 +5164,25 @@ unsafe fn install_hook_safe(name: &str, method_addr: usize, handler_addr: usize,
 // Parks the uncompressed request body, keyed by the compressed byte array returned by the original.
 // WWWRequest.Post will match it later.
 extern "C" fn compress_request_hook_handler(data: *mut c_void) -> *mut c_void {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unsafe {
-        let body = read_il2cpp_byte_array(data);
-        let trampoline = interceptor_get_trampoline(compress_request_hook_handler as usize);
-        if trampoline == 0 { return std::ptr::null_mut(); }
-        type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
-        let original: FnType = std::mem::transmute(trampoline);
-        let compressed = original(data);
-        if !body.is_empty() && POST_ADDR != 0 {
-            PENDING_REQ_BODY = Some(body);
-            PENDING_COMPRESSED = compressed as usize;
+            let body = read_il2cpp_byte_array(data);
+            let trampoline = interceptor_get_trampoline(compress_request_hook_handler as usize);
+            if trampoline == 0 { return std::ptr::null_mut(); }
+            type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+            let original: FnType = std::mem::transmute(trampoline);
+            let compressed = original(data);
+            if !body.is_empty() && POST_ADDR != 0 {
+                PENDING_REQ_BODY = Some(body);
+                PENDING_COMPRESSED = compressed as usize;
+            }
+            compressed
         }
-        compressed
-    }
-        })).unwrap_or_else(|e| { ura_log(1, &format!("compress_hook panic: {:?}", e)); std::ptr::null_mut() })
+    }));
+    result.unwrap_or_else(|e| {
+        ura_log(1, &format!("compress_hook panic: {:?}", e));
+        std::ptr::null_mut()
+    })
 }
 
 // ★ v3.23.3: Hook handler for DecompressResponse(byte[] data) -> byte[]
