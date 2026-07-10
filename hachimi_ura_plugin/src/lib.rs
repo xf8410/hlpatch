@@ -4314,7 +4314,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.24.10","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
+        r#"{"status":"ok","version":"3.24.10","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -4406,6 +4406,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         upload_all_logs()
     } else if path == "/debug/cmdinfo" {
         unsafe { debug_cmdinfo() }
+    } else if path == "/debug/training_partners" {
+        debug_training_partners()
     } else if path == "/training/result" {
         // v3.22.94: Read latest training result from hook
         let result = unsafe { LAST_TRAINING_RESULT };
@@ -4897,7 +4899,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             None => r#"{"error":"mdb_not_found"}"#.to_string(),
         }
     } else {
-        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, path)
+        format!(r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, path)
     };
 
     save_endpoint_log(&path, &body);
@@ -9069,6 +9071,213 @@ unsafe fn debug_ramenfields() -> String {
         r#"{{"dataset_class":"{}","arrays":[{}],{}}}"#,
         ds_class_name, arrays_json.join(","), uraf_json
     )
+}
+
+/// Return whether the whole address range is currently readable according to /proc/self/maps.
+/// This is only used by explicit debug endpoints before dereferencing unknown partner entries.
+fn is_readable_range(addr: usize, len: usize) -> bool {
+    if addr < 0x10000 || len == 0 { return false; }
+    let end = match addr.checked_add(len) { Some(v) => v, None => return false };
+    let maps = match std::fs::read_to_string("/proc/self/maps") { Ok(v) => v, Err(_) => return false };
+    for line in maps.lines() {
+        let mut parts = line.split_whitespace();
+        let range = match parts.next() { Some(v) => v, None => continue };
+        let perms = parts.next().unwrap_or("");
+        if !perms.starts_with('r') { continue; }
+        let (start_s, end_s) = match range.split_once('-') { Some(v) => v, None => continue };
+        let start = match usize::from_str_radix(start_s, 16) { Ok(v) => v, Err(_) => continue };
+        let map_end = match usize::from_str_radix(end_s, 16) { Ok(v) => v, Err(_) => continue };
+        if addr >= start && end <= map_end { return true; }
+    }
+    false
+}
+
+unsafe fn debug_hex(addr: *const u8, len: usize) -> String {
+    if addr.is_null() || !is_readable_range(addr as usize, len) { return String::new(); }
+    let mut out = String::with_capacity(len * 2);
+    for i in 0..len {
+        out.push_str(&format!("{:02x}", std::ptr::read_unaligned(addr.add(i))));
+    }
+    out
+}
+
+/// Inspect an IL2CPP Array<T> or List<T> without assuming that T is a reference type.
+/// For value-type arrays the element is emitted as inline bytes; for reference arrays the
+/// object class, metadata fields and first 0x60 bytes are emitted. No gameplay state is changed.
+unsafe fn debug_il2cpp_collection(collection: *mut c_void, max_items: usize) -> String {
+    if collection.is_null() { return r#"{"status":"null"}"#.to_string(); }
+    if !is_readable_range(collection as usize, 0x20) {
+        return format!(r#"{{"status":"unreadable","ptr":"0x{:x}"}}"#, collection as usize);
+    }
+
+    let collection_class = get_class_from_object(collection);
+    let collection_class_name = get_class_name_from_pointer(collection_class);
+    let is_list = collection_class_name.contains("List`1") || collection_class_name.starts_with("List<");
+
+    let (array, logical_len) = if is_list {
+        let count = std::ptr::read_unaligned::<i32>((collection as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const i32);
+        let items = read_ptr_at(collection as *const c_void, IL2CPP_LIST_ARRAY_OFF as i32);
+        if count < 0 || count > 10000 || items.is_null() {
+            return format!(r#"{{"status":"invalid_list","ptr":"0x{:x}","class":"{}","count":{}}}"#,
+                collection as usize, json_escape(&collection_class_name), count);
+        }
+        (items, count as usize)
+    } else {
+        let len = std::ptr::read_unaligned::<usize>((collection as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if len > 10000 {
+            return format!(r#"{{"status":"invalid_array","ptr":"0x{:x}","class":"{}","length":{}}}"#,
+                collection as usize, json_escape(&collection_class_name), len);
+        }
+        (collection, len)
+    };
+
+    if !is_readable_range(array as usize, 0x20) {
+        return format!(r#"{{"status":"items_unreadable","ptr":"0x{:x}","class":"{}","length":{}}}"#,
+            collection as usize, json_escape(&collection_class_name), logical_len);
+    }
+
+    let array_class = get_class_from_object(array);
+    let get_element_class_ptr = resolve_il2cpp_symbol("il2cpp_class_get_element_class");
+    let element_class = if get_element_class_ptr.is_null() || array_class.is_null() {
+        ptr::null_mut()
+    } else {
+        let f: unsafe extern "C" fn(*mut c_void) -> *mut c_void = std::mem::transmute(get_element_class_ptr);
+        f(array_class)
+    };
+    let element_class_name = get_class_name_from_pointer(element_class);
+
+    let is_value_type = if element_class.is_null() {
+        false
+    } else {
+        let p = resolve_il2cpp_symbol("il2cpp_class_is_valuetype");
+        if p.is_null() { false } else {
+            let f: unsafe extern "C" fn(*mut c_void) -> bool = std::mem::transmute(p);
+            f(element_class)
+        }
+    };
+    let value_size = if is_value_type {
+        let p = resolve_il2cpp_symbol("il2cpp_class_value_size");
+        if p.is_null() { 0usize } else {
+            let f: unsafe extern "C" fn(*mut c_void, *mut u32) -> i32 = std::mem::transmute(p);
+            let mut align = 0u32;
+            let n = f(element_class, &mut align);
+            if n > 0 && n <= 1024 { n as usize } else { 0 }
+        }
+    } else { IL2CPP_LIST_ITEM_SIZE };
+
+    let fields = if element_class.is_null() {
+        r#"{"error":"element_class_unknown"}"#.to_string()
+    } else { enumerate_class_fields(element_class) };
+    let mut items_json = Vec::new();
+    let take = logical_len.min(max_items);
+    for i in 0..take {
+        if is_value_type {
+            if value_size == 0 { break; }
+            let elem = (array as *const u8).add(IL2CPP_LIST_ITEMS_OFF + i * value_size);
+            let raw_len = value_size.min(0x60);
+            items_json.push(format!(
+                r#"{{"index":{},"storage":"inline_value","address":"0x{:x}","size":{},"raw_hex":"{}"}}"#,
+                i, elem as usize, value_size, debug_hex(elem, raw_len)
+            ));
+        } else {
+            let slot = (array as *const u8).add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE);
+            if !is_readable_range(slot as usize, IL2CPP_LIST_ITEM_SIZE) { break; }
+            let obj = std::ptr::read_unaligned::<*mut c_void>(slot as *const *mut c_void);
+            if obj.is_null() {
+                items_json.push(format!(r#"{{"index":{},"storage":"reference","ptr":"0x0"}}"#, i));
+                continue;
+            }
+            if !is_readable_range(obj as usize, 0x10) {
+                // This also makes an incorrect reference/value-type classification visible
+                // without dereferencing an integer ID as a pointer.
+                items_json.push(format!(r#"{{"index":{},"storage":"reference","ptr":"0x{:x}","status":"unreadable_target"}}"#, i, obj as usize));
+                continue;
+            }
+            let runtime_class = get_class_from_object(obj);
+            let runtime_name = get_class_name_from_pointer(runtime_class);
+            items_json.push(format!(
+                r#"{{"index":{},"storage":"reference","ptr":"0x{:x}","runtime_class":"{}","runtime_fields":{},"raw_hex":"{}"}}"#,
+                i, obj as usize, json_escape(&runtime_name), enumerate_class_fields(runtime_class), debug_hex(obj as *const u8, 0x60)
+            ));
+        }
+    }
+
+    format!(
+        r#"{{"status":"ok","ptr":"0x{:x}","collection_class":"{}","storage":"{}","array_ptr":"0x{:x}","length":{},"element_class":"{}","element_is_value_type":{},"element_size":{},"element_fields":{},"items":[{}]}}"#,
+        collection as usize, json_escape(&collection_class_name), if is_list { "list" } else { "array" },
+        array as usize, logical_len, json_escape(&element_class_name), is_value_type, value_size,
+        fields, items_json.join(",")
+    )
+}
+
+/// First-stage diagnostic endpoint for per-partner bond work.
+/// It intentionally does not alter /summary or infer card/NPC identity before runtime layouts
+/// have been verified on the current game version.
+unsafe fn debug_training_partners_inner() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    let wdm_class = find_class_by_short_name(image, "WorkDataManager");
+    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
+    let home_class = find_class_by_short_name(image, "WorkSingleModeHomeInfoData");
+    let chara_class = find_class_by_short_name(image, "WorkSingleModeCharaData");
+    if wdm_class.is_null() || sm_class.is_null() || home_class.is_null() || chara_class.is_null() {
+        return r#"{"error":"required_class_missing"}"#.to_string();
+    }
+    let wdm = get_singleton(wdm_class);
+    if wdm.is_null() { return r#"{"error":"no_wdm_instance"}"#.to_string(); }
+    let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
+    if sm.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
+    let home = call_getter_on_instance(sm_class, sm, "get_HomeInfoData");
+    let chara = call_getter_ref(sm_class, sm, "get_Character");
+    if home.is_null() || chara.is_null() { return r#"{"error":"training_state_unavailable"}"#.to_string(); }
+
+    let commands = read_field_value(home_class, home, "CommandInfoArray");
+    let mut commands_json = Vec::new();
+    if !commands.is_null() {
+        // CommandInfoArray is confirmed as an IL2CPP array on the current build.
+        let len = std::ptr::read_unaligned::<usize>((commands as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if len <= 100 {
+            for i in 0..len {
+                let slot = (commands as *const u8).add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE);
+                let command = std::ptr::read_unaligned::<*mut c_void>(slot as *const *mut c_void);
+                if command.is_null() || !is_readable_range(command as usize, 0x70) { continue; }
+                let command_id = read_obscured_int_at(command, 36);
+                let partner_array = read_ptr_at(command, 80);
+                let tips_array = read_ptr_at(command, 88);
+                let command_class = get_class_from_object(command);
+                commands_json.push(format!(
+                    r#"{{"index":{},"command_id":{},"command_ptr":"0x{:x}","command_class":"{}","command_fields":{},"command_raw_hex":"{}","training_partners":{},"tips_event_partners":{}}}"#,
+                    i, command_id, command as usize, json_escape(&get_class_name_from_pointer(command_class)),
+                    enumerate_class_fields(command_class), debug_hex(command as *const u8, 0x70),
+                    debug_il2cpp_collection(partner_array, 16), debug_il2cpp_collection(tips_array, 16)
+                ));
+            }
+        }
+    }
+
+    let support_cards = call_getter_on_instance(chara_class, chara, "get_EquipSupportCardArray");
+    let evaluation_list = read_ptr_at(chara, 1016);
+    format!(
+        r#"{{"ok":true,"diagnostic_version":1,"read_only":true,"notes":["No partner identity or bond gain is inferred in this stage","shining is not inferred from TipsEventPartnerArray"],"commands_collection":{},"commands":[{}],"support_cards":{},"evaluation_list":{}}}"#,
+        debug_il2cpp_collection(commands, 100), commands_json.join(","),
+        debug_il2cpp_collection(support_cards, 16), debug_il2cpp_collection(evaluation_list, 100)
+    )
+}
+
+fn debug_training_partners() -> String {
+    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+    if jmp_result != 0 {
+        SIGSEGV_RECOVERY.store(false, Ordering::Relaxed);
+        return r#"{"error":"sigsegv_recovered","hint":"training partner diagnostic hit an invalid runtime pointer; game was protected"}"#.to_string();
+    }
+    SIGSEGV_RECOVERY.store(true, Ordering::Relaxed);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        debug_training_partners_inner()
+    })).unwrap_or_else(|_| r#"{"error":"panic_caught"}"#.to_string());
+    SIGSEGV_RECOVERY.store(false, Ordering::Relaxed);
+    result
 }
 
 /// /debug/cmdinfo — Dump command element class info WITHOUT runtime_invoke on command elements
