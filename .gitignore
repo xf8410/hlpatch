@@ -1,1 +1,2 @@
 native/build/\nnative/libs/\n*.o\n*.a
+*.bak
