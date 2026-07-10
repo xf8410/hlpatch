@@ -1,4 +1,4 @@
-//! URA Plugin v3.24.11
+//! URA Plugin v3.24.10
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -2665,13 +2665,8 @@ const RAMEN_CMD_PARAMS_ARRAY_OFF: usize = 0x38;        // ParamsIncDecInfoArray 
 const RAMEN_DATASET_CMD_ARRAY_OFF: usize = 0x10;       // DataSet.CommandInfoArray (List ptr at offset 16)
 const PARAMS_INCDEC_TARGET_TYPE_OFF: usize = 0x10;     // SingleModeParamsIncDecInfo.TargetType (plain int32)
 const PARAMS_INCDEC_VALUE_OFF: usize = 0x14;           // SingleModeParamsIncDecInfo.Value (plain int32)
-// WorkSingleModeCharaData._evaluationList contains Evaluation objects.
-// Runtime diagnostic 2026-07-10 confirmed both fields are inline ObscuredInt values.
-const EVALUATION_PARTNER_ID_OFF: i32 = 0x10;
-const EVALUATION_VALUE_OFF: i32 = 0x24;
-const TRAINING_PARTNER_ARRAY_OFF: i32 = 0x50;
-const EVALUATION_LIST_OFF: i32 = 0x3f8;
-const OBSCURED_INT_SIZE: usize = 20;
+const EVAL_INFO_CHARA_ID_OFF: usize = 0x10;            // SingleModeEvaluationInfo.charaId (plain int32)
+const EVAL_INFO_EVALUATION_OFF: usize = 0x14;          // SingleModeEvaluationInfo.evaluation (plain int32)
 const IL2CPP_COMMAND_ID_OFF: usize = 0x10;             // SingleModeCommandId.commandId (IL2CPP /fields/ offset=16)
 const IL2CPP_COMMAND_LEVEL_OFF: usize = 0x14;          // SingleModeCommandId.level (IL2CPP /fields/ offset=20)
 const IL2CPP_OBSCURED_INT_UNBOX_KEY_OFF: usize = 0x10; // ObscuredInt unboxed: currentCryptoKey (offset=0x10)
@@ -3515,46 +3510,6 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     }
 
-    // Partner evaluation map confirmed by /debug/training_partners (2026-07-10).
-    // Evaluation fields are inline ObscuredInt, not plain Int32.
-    let mut partner_evaluation: std::collections::HashMap<i32, i32> =
-        std::collections::HashMap::new();
-
-    let evaluation_list =
-        read_ptr_at(chara_obj as *const c_void, EVALUATION_LIST_OFF);
-
-    if !evaluation_list.is_null() {
-        let eb = evaluation_list as *const u8;
-        let count = std::ptr::read_unaligned::<usize>(
-            eb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
-        );
-
-        if count > 0 && count < 1000 {
-            for i in 0..count {
-                let item = std::ptr::read_unaligned::<*mut c_void>(
-                    eb.add(
-                        IL2CPP_LIST_ITEMS_OFF
-                            + i * IL2CPP_LIST_ITEM_SIZE
-                    ) as *const *mut c_void
-                );
-
-                if item.is_null() {
-                    continue;
-                }
-
-                let partner_id =
-                    read_obscured_int_at(item, EVALUATION_PARTNER_ID_OFF);
-
-                let current_bond =
-                    read_obscured_int_at(item, EVALUATION_VALUE_OFF);
-
-                if partner_id > 0 {
-                    partner_evaluation.insert(partner_id, current_bond);
-                }
-            }
-        }
-    }
-
     // --- Training data via HomeInfoData (ALL scenarios) ---
     log_predict_step("S:ramen end");
     ura_log(3, "★ read_summary phase2: training data");
@@ -3594,85 +3549,18 @@ unsafe fn read_summary_inner_impl() -> String {
                         let is_enable = read_obscured_int_at(ep as *const c_void, 56);  // IsEnable
                         let failure_rate = read_obscured_int_at(ep as *const c_void, 104);  // FailureRate
 
-                        // TrainingPartnerArray is ObscuredInt[].
-                        // Each item is an inline 20-byte ObscuredInt value.
-                        //
-                        // We expose:
-                        //   partner_id       = decoded partner identity
-                        //   support_position = 1..6 for equipped support cards
-                        //   current_bond     = current Evaluation value
-                        //
-                        // bond_gain remains null until a before/after snapshot
-                        // confirms the actual gain from performing the training.
-                        let tp_arr = read_ptr_at(
-                            ep as *const c_void,
-                            TRAINING_PARTNER_ARRAY_OFF
-                        );
-
-                        let mut partner_ids: Vec<i32> = Vec::new();
-                        let mut partners_json: Vec<String> = Vec::new();
-
-                        if !tp_arr.is_null() {
+                        // ★ v3.24.9: Heads/Shining via direct ptr read (zero invoke)
+                        let tp_arr = read_ptr_at(ep as *const c_void, 80);  // TrainingPartnerArray
+                        let heads = if !tp_arr.is_null() {
                             let ab = tp_arr as *const u8;
+                            std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize) as i32
+                        } else { -1 };
 
-                            let len = std::ptr::read_unaligned::<usize>(
-                                ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize
-                            );
-
-                            if len <= 100 {
-                                for pi in 0..len {
-                                    // ObscuredInt is a value type, so elements are
-                                    // stored inline rather than as object pointers.
-                                    let value = ab.add(
-                                        IL2CPP_LIST_ITEMS_OFF
-                                            + pi * OBSCURED_INT_SIZE
-                                    );
-
-                                    let partner_id = read_obscured_int_at(
-                                        value as *const c_void,
-                                        0
-                                    );
-
-                                    if partner_id <= 0 {
-                                        continue;
-                                    }
-
-                                    partner_ids.push(partner_id);
-
-                                    let current_bond =
-                                        partner_evaluation
-                                            .get(&partner_id)
-                                            .copied();
-
-                                    // Runtime capture confirmed that IDs 1..=6
-                                    // correspond to equipped support-card positions.
-                                    let support_position =
-                                        if (1..=6).contains(&partner_id) {
-                                            partner_id.to_string()
-                                        } else {
-                                            "null".to_string()
-                                        };
-
-                                    let bond_json = current_bond
-                                        .map(|value| value.to_string())
-                                        .unwrap_or_else(|| "null".to_string());
-
-                                    partners_json.push(format!(
-                                        r#"{{"partner_id":{},"support_position":{},"current_bond":{},"bond_gain":null}}"#,
-                                        partner_id,
-                                        support_position,
-                                        bond_json
-                                    ));
-                                }
-                            }
-                        }
-
-                        let heads = partner_ids.len() as i32;
-
-                        // TipsEventPartnerArray was null for every command in
-                        // the runtime capture. It is not a verified source of
-                        // shining state, so do not award an AI shining bonus.
-                        let shining = -1i32;
+                        let tips_arr = read_ptr_at(ep as *const c_void, 88);  // TipsEventPartnerArray
+                        let shining = if !tips_arr.is_null() {
+                            let ab = tips_arr as *const u8;
+                            std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize) as i32
+                        } else { -1 };
 
                         // Gains from ParamsIncDecInfoArray — v3.24.9: pure memory read
                         let mut gains = Vec::new();
@@ -3721,19 +3609,8 @@ unsafe fn read_summary_inner_impl() -> String {
                         // HomeInfoData.ParamsIncDecInfoArray 有数据 (params_len=4)
 
                         trs.push(format!(
-                            r#"{{"name":"{}","command_id":{},"is_enable":{},"failure_rate":{},"heads":{},"shining":null,"partner_ids":[{}],"partners":[{}],"gains":{{{}}}}}"#,
-                            cname,
-                            cid,
-                            is_enable,
-                            failure_rate,
-                            heads,
-                            partner_ids
-                                .iter()
-                                .map(|value| value.to_string())
-                                .collect::<Vec<_>>()
-                                .join(","),
-                            partners_json.join(","),
-                            gains.join(",")
+                            r#"{{"name":"{}","command_id":{},"is_enable":{},"failure_rate":{},"heads":{},"shining":{},"gains":{{{}}}}}"#,
+                            cname, cid, is_enable, failure_rate, heads, shining, gains.join(",")
                         ));
 
                         // ★ v3.15.1: collect eval training data in same pass
@@ -3773,6 +3650,30 @@ unsafe fn read_summary_inner_impl() -> String {
         let ab = sc_arr as *const u8;
         let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
         if al > 0 && al < 100 {
+            // ★ v3.24.9: EvaluationList 用 read_ptr_at 直接读指针 (offset 1016 confirmed by dumpclass)
+            let mut eval_map: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+            {
+                let eval_list = read_ptr_at(chara_obj as *const c_void, 1016); // _evaluationList
+                if !eval_list.is_null() {
+                    let elb = eval_list as *const u8;
+                    let elen = std::ptr::read_unaligned::<usize>(elb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+                    if elen > 0 && elen < 1000 {
+                        for ei in 0..elen {
+                            let ee = std::ptr::read_unaligned::<*mut c_void>(
+                                elb.add(IL2CPP_LIST_ITEMS_OFF + ei * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void
+                            );
+                            if ee.is_null() { continue; }
+                            let eb = ee as *const u8;
+                            let eval_chara_id = std::ptr::read_unaligned::<i32>(eb.add(EVAL_INFO_CHARA_ID_OFF) as *const i32);
+                            let eval_value = std::ptr::read_unaligned::<i32>(eb.add(EVAL_INFO_EVALUATION_OFF) as *const i32);
+                            if eval_chara_id > 0 {
+                                eval_map.insert(eval_chara_id, eval_value);
+                            }
+                        }
+                        ura_log(3, &format!("eval_list: {} entries (memory read)", elen));
+                    }
+                }
+            }
             let mut scs = Vec::new();
             for i in 0..al {
                 let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
@@ -3789,68 +3690,68 @@ unsafe fn read_summary_inner_impl() -> String {
                 // TrainingPartnerState is not in EquipSupportCard fields — it's on a different object
                 // Skip it (set to -1) to avoid invoke
                 let training_partner_state = -1;
-                // CharaId is a computed property. The app can resolve it
-                // through support_card_id and card_db.json.
+                // ★ CharaId is computed property — App 端通过 support_card_id 查 card_db.json
                 let sc_chara_id = -1;
-
-                // Runtime capture confirmed that support-card positions
-                // 1..=6 are also the corresponding partner IDs.
-                let kizuna = partner_evaluation
-                    .get(&position)
-                    .copied()
-                    .unwrap_or(-1);
+                // kizuna 由 App 端匹配 evaluation 数组 (evaluation 已在 /summary 中输出)
+                let kizuna = -1;
                 scs.push(format!(
                     r#"{{"position":{},"support_card_id":{},"limit_break_count":{},"training_partner_state":{},"chara_id":{},"kizuna":{},"exp":{},"rental_type":{}}}"#,
                     position, support_card_id, limit_break_count, training_partner_state, sc_chara_id, kizuna, sc_exp, rental_type
                 ));
             }
             sc_json = format!("[{}]", scs.join(","));
-            ura_log(
-                3,
-                &format!(
-                    "sc: {} cards found, partner_evaluation: {} entries",
-                    scs.len(),
-                    partner_evaluation.len()
-                )
-            );
+            ura_log(3, &format!("sc: {} cards found, eval_map: {} entries", scs.len(), eval_map.len()));
         }
     }
 
-    // --- Partner evaluation/bond (confirmed Evaluation layout) ---
+    // --- Evaluation info (graceful fallback) ---
     log_predict_step("S:p3 done");
-    ura_log(3, "★ read_summary phase4: partner evaluation");
+    ura_log(3, "★ read_summary phase4: evaluation");
     log_predict_step("S:p4 eval");
-
-    let mut evaluation_entries: Vec<(i32, i32)> =
-        partner_evaluation
-            .iter()
-            .map(|(&partner_id, &evaluation)| {
-                (partner_id, evaluation)
-            })
-            .collect();
-
-    // HashMap iteration order is undefined, so sort by partner ID
-    // to keep /summary stable between requests.
-    evaluation_entries.sort_unstable_by_key(
-        |&(partner_id, _)| partner_id
-    );
-
-    let ev_json = format!(
-        "[{}]",
-        evaluation_entries
-            .iter()
-            .map(|&(partner_id, evaluation)| {
-                format!(
-                    r#"{{"target_id":{},"partner_id":{},"evaluation":{},"current_bond":{}}}"#,
-                    partner_id,
-                    partner_id,
-                    evaluation,
-                    evaluation
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",")
-    );
+    let mut ev_json = "[]".to_string();
+    let ev_arr = read_field_value(chara_class, chara_obj, "evaluation_info_array");
+    if ev_arr.is_null() {
+        let arr = call_getter_on_instance(chara_class, chara_obj, "get_EvaluationInfoArray");
+        if !arr.is_null() {
+            let ab = arr as *const u8;
+            let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            if al > 0 && al < 1000 {
+                let mut evs = Vec::new();
+                for i in 0..al {
+                    let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                    if ep.is_null() { continue; }
+                    let b = ep as *const u8;
+                    let target_id = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_TARGET_RACE_ID_OFF) as *const i32);
+                    let evaluation = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_TARGET_RACE_EVAL_OFF) as *const i32);
+                    let is_appear = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_LIST_ITEMS_OFF) as *const i32);
+                    evs.push(format!(
+                        r#"{{"target_id":{},"evaluation":{},"is_appear":{}}}"#,
+                        target_id, evaluation, is_appear
+                    ));
+                }
+                ev_json = format!("[{}]", evs.join(","));
+            }
+        }
+    } else {
+        let ab = ev_arr as *const u8;
+        let al = std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if al > 0 && al < 1000 {
+            let mut evs = Vec::new();
+            for i in 0..al {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
+                if ep.is_null() { continue; }
+                let b = ep as *const u8;
+                let target_id = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_TARGET_RACE_ID_OFF) as *const i32);
+                let evaluation = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_TARGET_RACE_EVAL_OFF) as *const i32);
+                let is_appear = std::ptr::read_unaligned::<i32>(b.add(IL2CPP_LIST_ITEMS_OFF) as *const i32);
+                evs.push(format!(
+                    r#"{{"target_id":{},"evaluation":{},"is_appear":{}}}"#,
+                    target_id, evaluation, is_appear
+                ));
+            }
+            ev_json = format!("[{}]", evs.join(","));
+        }
+    }
 
     // --- Training levels (graceful fallback) ---
     log_predict_step("S:p4 done");
@@ -4056,7 +3957,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.24.11","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"3.24.10","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
         mon, half, scn_s, chara_id, spd, sta, pow_, gut, wiz, vit, mvit, mot_s, spt, fan,
         max_spd, max_sta, max_pow, max_gut, max_wiz,
         proper_dist_short, proper_dist_mile, proper_dist_mid, proper_dist_long, proper_ground_turf, proper_ground_dirt,
@@ -4413,7 +4314,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let full_uri = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.24.11","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
+        r#"{"status":"ok","version":"3.24.10","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -5877,7 +5778,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.24.11").as_ptr());
+            f(ui, to_cstr("URA Assistant v3.24.10").as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn { f(ui); }
 
@@ -6100,7 +6001,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
     ura_log(3, "URA plugin v3.24.9 loaded (Interceptor API hooks)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.24.11 Loaded!").as_ptr());
+        f(to_cstr("URA v3.24.10 Loaded!").as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -9845,7 +9746,7 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.24.11","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"3.24.10","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
         mon, half, sid, spd, sta, pow_, gut, wiz, vit, mvit, mot, spt, fan,
         tl_json, turn_config_json, log_json
     )
