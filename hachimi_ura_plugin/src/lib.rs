@@ -2663,8 +2663,9 @@ const RAMEN_CMD_COMMAND_TYPE_OFF: usize = 0x10;        // CommandType (ObscuredI
 const RAMEN_CMD_COMMAND_ID_OFF: usize = 0x24;          // CommandId (ObscuredInt inline, 20 bytes) — key at 0x24, hidden at 0x28
 const RAMEN_CMD_PARAMS_ARRAY_OFF: usize = 0x38;        // ParamsIncDecInfoArray (List ptr)
 const RAMEN_DATASET_CMD_ARRAY_OFF: usize = 0x10;       // DataSet.CommandInfoArray (List ptr at offset 16)
-const PARAMS_INCDEC_TARGET_TYPE_OFF: usize = 0x10;     // SingleModeParamsIncDecInfo.TargetType (plain int32)
-const PARAMS_INCDEC_VALUE_OFF: usize = 0x14;           // SingleModeParamsIncDecInfo.Value (plain int32)
+// SingleModeParamsIncDecInfoData contains two inline ObscuredInt fields.
+const PARAMS_INCDEC_TARGET_TYPE_OFF: i32 = 0x10;
+const PARAMS_INCDEC_VALUE_OFF: i32 = 0x24;
 // WorkSingleModeCharaData._evaluationList contains Evaluation objects.
 // Runtime diagnostic 2026-07-10 confirmed both fields are inline ObscuredInt values.
 const EVALUATION_PARTNER_ID_OFF: i32 = 0x10;
@@ -3733,43 +3734,104 @@ unsafe fn read_summary_inner_impl() -> String {
                         // shining state, so do not award an AI shining bonus.
                         let shining = -1i32;
 
-                        // Gains from ParamsIncDecInfoArray — v3.24.9: pure memory read
+                        // Training gains from HomeInfoData.
+                        //
+                        // Runtime capture confirmed that each
+                        // SingleModeParamsIncDecInfoData object contains:
+                        //
+                        //   +0x10 TargetType (inline ObscuredInt)
+                        //   +0x24 Value      (inline ObscuredInt)
+                        //
+                        // The array itself is an IL2CPP reference array.
                         let mut gains = Vec::new();
                         let mut stat_gains = [0i32; 5];
                         let mut skill_pt_gain = 0i32;
                         let mut vital_cost = 0i32;
-                        {
-                            // ParamsIncDecInfoArray at offset 96 (confirmed by dumpclass)
-                            let pa = read_ptr_at(ep as *const c_void, 96);
-                            if !pa.is_null() {
-                                let pb = pa as *const u8;
-                                let pl = std::ptr::read_unaligned::<usize>(pb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-                                if pl > 0 && pl < 100 {
-                                    for j in 0..pl {
-                                        let pe = std::ptr::read_unaligned::<*mut c_void>(pb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-                                        if pe.is_null() { continue; }
-                                        // ★ v3.24.9: plain int32 read (confirmed by /debug/params)
-                                        let tt = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_TARGET_TYPE_OFF) as *const i32);
-                                        let v = std::ptr::read_unaligned::<i32>((pe as *const u8).add(PARAMS_INCDEC_VALUE_OFF) as *const i32);
-                                        if v == 0 { continue; }
-                                        let tn = match tt {
-                                            1=>"Speed", 2=>"Stamina", 3=>"Guts",
-                                            4=>"Power", 5=>"Wiz", 10=>"HP",
-                                            20=>"Motivation", 30=>"Gauge", 40=>"SkillPt", _=>"Unknown"
-                                        };
-                                        gains.push(format!(r#""{}":{}"#, tn, v));
-                                        // ★ v3.15.1: fill eval data from same read
-                                        match tt {
-                                            1 => stat_gains[0] += v, // Speed
-                                            2 => stat_gains[1] += v, // Stamina
-                                            4 => stat_gains[2] += v, // Power
-                                            3 => stat_gains[3] += v, // Guts
-                                            5 => stat_gains[4] += v, // Wisdom
-                                            10 => vital_cost += v,    // HP
-                                            30 => {},                  // Gauge (not stat/skillpt)
-                                            40 => skill_pt_gain += v, // SkillPt
-                                            _ => {}
-                                        }
+
+                        let params_array = read_ptr_at(
+                            ep as *const c_void,
+                            96
+                        );
+
+                        if !params_array.is_null() {
+                            let array_base = params_array as *const u8;
+
+                            let params_len =
+                                std::ptr::read_unaligned::<usize>(
+                                    array_base.add(
+                                        IL2CPP_LIST_COUNT_OFF
+                                    ) as *const usize
+                                );
+
+                            if params_len > 0 && params_len < 100 {
+                                for j in 0..params_len {
+                                    let param = std::ptr::read_unaligned::<
+                                        *mut c_void
+                                    >(
+                                        array_base.add(
+                                            IL2CPP_LIST_ITEMS_OFF
+                                                + j * IL2CPP_LIST_ITEM_SIZE
+                                        ) as *const *mut c_void
+                                    );
+
+                                    if param.is_null() {
+                                        continue;
+                                    }
+
+                                    let target_type =
+                                        read_obscured_int_at(
+                                            param as *const c_void,
+                                            PARAMS_INCDEC_TARGET_TYPE_OFF
+                                        );
+
+                                    let value =
+                                        read_obscured_int_at(
+                                            param as *const c_void,
+                                            PARAMS_INCDEC_VALUE_OFF
+                                        );
+
+                                    if value == 0 {
+                                        continue;
+                                    }
+
+                                    let target_name = match target_type {
+                                        1 => "Speed",
+                                        2 => "Stamina",
+                                        3 => "Guts",
+                                        4 => "Power",
+                                        5 => "Wiz",
+                                        10 => "HP",
+                                        20 => "Motivation",
+                                        30 => "SkillPt",
+                                        _ => "Unknown",
+                                    };
+
+                                    // Include the numeric type in unknown keys
+                                    // so malformed/unrecognised entries cannot
+                                    // produce duplicate "Unknown" JSON keys.
+                                    if target_name == "Unknown" {
+                                        gains.push(format!(
+                                            r#""Unknown_{}":{}"#,
+                                            target_type,
+                                            value
+                                        ));
+                                    } else {
+                                        gains.push(format!(
+                                            r#""{}":{}"#,
+                                            target_name,
+                                            value
+                                        ));
+                                    }
+
+                                    match target_type {
+                                        1 => stat_gains[0] += value,
+                                        2 => stat_gains[1] += value,
+                                        3 => stat_gains[3] += value,
+                                        4 => stat_gains[2] += value,
+                                        5 => stat_gains[4] += value,
+                                        10 => vital_cost += value,
+                                        30 => skill_pt_gain += value,
+                                        _ => {}
                                     }
                                 }
                             }
