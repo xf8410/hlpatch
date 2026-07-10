@@ -3381,17 +3381,38 @@ const CMD_URA_POWER: i32 = 604;
 const CMD_URA_WISDOM: i32 = 605;
 const CMD_KAKUSHIMI: i32 = 304;
 
-/// Convert normal/scenario-specific training command IDs into the
-/// same five standard training IDs.
+/// Convert a support-card type into its corresponding normal
+/// training command ID.
 ///
-/// This allows a support card whose MasterDB specialty is 101..106
-/// to match scenario command IDs 601..605 where applicable.
+/// support_card_type and training CommandId use different numbering:
+///
+///   1 = Speed   -> 101
+///   2 = Stamina -> 102
+///   3 = Power   -> 105
+///   4 = Guts    -> 103
+///   5 = Wisdom  -> 106
+///
+/// Other values may represent friend/group/team/special cards and
+/// must not be classified using the ordinary five-attribute rule.
+fn support_card_type_to_training_id(support_card_type: i32) -> Option<i32> {
+    match support_card_type {
+        1 => Some(CMD_SPEED),
+        2 => Some(CMD_STAMINA),
+        3 => Some(CMD_POWER),
+        4 => Some(CMD_GUTS),
+        5 => Some(CMD_WISDOM),
+        _ => None,
+    }
+}
+
+/// Normalize normal and scenario-specific training IDs to the same
+/// five standard training IDs.
 fn normalize_training_command_id(command_id: i32) -> Option<i32> {
     match command_id {
         CMD_SPEED | CMD_URA_SPEED => Some(CMD_SPEED),
         CMD_STAMINA | CMD_URA_STAMINA => Some(CMD_STAMINA),
-        CMD_GUTS | CMD_URA_GUTS => Some(CMD_GUTS),
         CMD_POWER | CMD_URA_POWER => Some(CMD_POWER),
+        CMD_GUTS | CMD_URA_GUTS => Some(CMD_GUTS),
         CMD_WISDOM | CMD_URA_WISDOM => Some(CMD_WISDOM),
         _ => None,
     }
@@ -4626,18 +4647,11 @@ unsafe fn read_summary_inner_impl() -> String {
         ura_log(2, "evaluation_list is null");
     }
 
-    // Support-card position -> specialty training command ID.
+    // Runtime support-card position -> support_card_type.
     //
-    // Runtime verification on 2026-07-10 confirmed:
-    //
-    //   - partner IDs 1..=6 are equipped support-card positions;
-    //   - normal support cards shine only when bond >= 80 and their
-    //     MasterDB specialty command matches the current training;
-    //   - Ramen's partner-pulling mechanism does not allow an ordinary
-    //     support card to shine outside its own specialty;
-    //   - TipsEventPartnerArray represents red "!" hint partners and is
-    //     not a source of friendship-training/shining state.
-    let mut support_specialty_by_position: std::collections::HashMap<i32, i32> =
+    // Position is read dynamically from the equipped-card object.
+    // It is not assumed that a particular card is always in a fixed slot.
+    let mut support_type_by_position: std::collections::HashMap<i32, i32> =
         std::collections::HashMap::new();
 
     // First collect equipped (position, support_card_id) pairs.
@@ -4678,28 +4692,28 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     }
 
-    // Resolve each card's specialty from MasterDB:
+    // Resolve each card's type from MasterDB:
     //
-    // support_card_data.command_id:
-    //   101 = Speed
-    //   102 = Stamina
-    //   103 = Guts
-    //   105 = Power
-    //   106 = Wisdom
+    // support_card_data.support_card_type:
+    //   1 = Speed
+    //   2 = Stamina
+    //   3 = Power
+    //   4 = Guts
+    //   5 = Wisdom
     if let Some(mdb_path) = find_mdb_path() {
         if let Ok(connection) =
             Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         {
             if let Ok(mut statement) = connection.prepare(
-                "SELECT command_id \
+                "SELECT support_card_type \
                  FROM support_card_data \
                  WHERE id = ?1",
             ) {
                 for &(position, support_card_id) in &equipped_support_cards {
                     let result = statement.query_row([support_card_id], |row| row.get::<_, i32>(0));
 
-                    if let Ok(specialty_command_id) = result {
-                        support_specialty_by_position.insert(position, specialty_command_id);
+                    if let Ok(support_card_type) = result {
+                        support_type_by_position.insert(position, support_card_type);
                     }
                 }
             }
@@ -4817,60 +4831,38 @@ unsafe fn read_summary_inner_impl() -> String {
                                         .map(|value| value.to_string())
                                         .unwrap_or_else(|| "null".to_string());
 
-                                    // Confirmed normal-card rule:
-                                    //
-                                    //   present
-                                    //   AND bond >= 80
-                                    //   AND card specialty matches training
-                                    //
-                                    // A support card below 80 is conclusively
-                                    // not shining even if its specialty cannot
-                                    // be resolved.
-                                    //
-                                    // Team/friend/special cards whose specialty
-                                    // is not one of the standard five trainings
-                                    // remain null when bond >= 80.
                                     let is_shining: Option<bool> = if is_support_card {
-                                        match current_bond {
-                                            Some(bond) if bond < 80 => Some(false),
+                                        match (
+                                            current_bond,
+                                            support_type_by_position.get(&partner_id).copied(),
+                                            normalize_training_command_id(cid),
+                                        ) {
+                                            (
+                                                Some(bond),
+                                                Some(support_card_type),
+                                                Some(current_training),
+                                            ) => {
+                                                match support_card_type_to_training_id(
+                                                    support_card_type,
+                                                ) {
+                                                    // Ordinary Speed/Stamina/Power/Guts/Wisdom card.
+                                                    Some(card_training) => Some(
+                                                        bond >= 80
+                                                            && card_training == current_training,
+                                                    ),
 
-                                            Some(_) => {
-                                                match support_specialty_by_position
-                                                    .get(&partner_id)
-                                                    .copied()
-                                                {
-                                                    Some(specialty_command_id) => {
-                                                        match (
-                                                            normalize_training_command_id(
-                                                                specialty_command_id,
-                                                            ),
-                                                            normalize_training_command_id(cid),
-                                                        ) {
-                                                            (
-                                                                Some(card_training),
-                                                                Some(current_training),
-                                                            ) => Some(
-                                                                card_training == current_training,
-                                                            ),
-
-                                                            // Nonstandard
-                                                            // team/friend/
-                                                            // special card.
-                                                            _ => None,
-                                                        }
-                                                    }
-
-                                                    // MasterDB unavailable
-                                                    // or card not found.
+                                                    // Friend/group/team/special card:
+                                                    // ordinary attribute-card rules are insufficient.
                                                     None => None,
                                                 }
                                             }
 
-                                            None => None,
+                                            // Bond, card type or current training could not be
+                                            // resolved safely.
+                                            _ => None,
                                         }
                                     } else {
-                                        // NPC and scenario partners are
-                                        // not ordinary support-card slots.
+                                        // NPC and scenario partners are not equipped support cards.
                                         None
                                     };
 
@@ -4908,7 +4900,17 @@ unsafe fn read_summary_inner_impl() -> String {
                         //         not be classified safely
                         //
                         // TipsEventPartnerArray is intentionally not used.
-                        let shining = if shining_complete { shining_count } else { -1 };
+                        let is_attribute_training = normalize_training_command_id(cid).is_some();
+
+                        let shining = if !is_attribute_training {
+                            // Rest, outing and other non-training commands do not have
+                            // an ordinary friendship-training count.
+                            -1
+                        } else if shining_complete {
+                            shining_count
+                        } else {
+                            -1
+                        };
 
                         let shining_json = if shining >= 0 {
                             shining.to_string()
