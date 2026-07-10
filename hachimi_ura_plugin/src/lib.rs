@@ -2663,9 +2663,15 @@ const RAMEN_CMD_COMMAND_TYPE_OFF: usize = 0x10;        // CommandType (ObscuredI
 const RAMEN_CMD_COMMAND_ID_OFF: usize = 0x24;          // CommandId (ObscuredInt inline, 20 bytes) — key at 0x24, hidden at 0x28
 const RAMEN_CMD_PARAMS_ARRAY_OFF: usize = 0x38;        // ParamsIncDecInfoArray (List ptr)
 const RAMEN_DATASET_CMD_ARRAY_OFF: usize = 0x10;       // DataSet.CommandInfoArray (List ptr at offset 16)
-// SingleModeParamsIncDecInfoData contains two inline ObscuredInt fields.
-const PARAMS_INCDEC_TARGET_TYPE_OFF: i32 = 0x10;
-const PARAMS_INCDEC_VALUE_OFF: i32 = 0x24;
+// SingleModeParamsIncDecInfo: two plain Int32 fields.
+// These constants are retained for Breeders/Ramen DataSet diagnostic paths.
+const PARAMS_INCDEC_TARGET_TYPE_OFF: usize = 0x10;
+const PARAMS_INCDEC_VALUE_OFF: usize = 0x14;
+
+// SingleModeParamsIncDecInfoData: two inline ObscuredInt fields.
+// HomeInfoData.CommandInfoArray uses this layout.
+const PARAMS_INCDEC_DATA_TARGET_TYPE_OFF: i32 = 0x10;
+const PARAMS_INCDEC_DATA_VALUE_OFF: i32 = 0x24;
 // WorkSingleModeCharaData._evaluationList contains Evaluation objects.
 // Runtime diagnostic 2026-07-10 confirmed both fields are inline ObscuredInt values.
 const EVALUATION_PARTNER_ID_OFF: i32 = 0x10;
@@ -3778,17 +3784,15 @@ unsafe fn read_summary_inner_impl() -> String {
                                         continue;
                                     }
 
-                                    let target_type =
-                                        read_obscured_int_at(
-                                            param as *const c_void,
-                                            PARAMS_INCDEC_TARGET_TYPE_OFF
-                                        );
+                                    let target_type = read_obscured_int_at(
+                                        param as *const c_void,
+                                        PARAMS_INCDEC_DATA_TARGET_TYPE_OFF
+                                    );
 
-                                    let value =
-                                        read_obscured_int_at(
-                                            param as *const c_void,
-                                            PARAMS_INCDEC_VALUE_OFF
-                                        );
+                                    let value = read_obscured_int_at(
+                                        param as *const c_void,
+                                        PARAMS_INCDEC_DATA_VALUE_OFF
+                                    );
 
                                     if value == 0 {
                                         continue;
