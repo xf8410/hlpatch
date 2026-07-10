@@ -3391,6 +3391,20 @@ const CMD_KAKUSHIMI: i32 = 304;
 ///   3 = Power   -> 105
 ///   4 = Guts    -> 103
 ///   5 = Wisdom  -> 106
+///
+/// Other values may represent friend/group/team/special cards and
+/// must not be classified using the ordinary five-attribute rule.
+fn support_card_type_to_training_id(support_card_type: i32) -> Option<i32> {
+    match support_card_type {
+        1 => Some(CMD_SPEED),
+        2 => Some(CMD_STAMINA),
+        3 => Some(CMD_POWER),
+        4 => Some(CMD_GUTS),
+        5 => Some(CMD_WISDOM),
+        _ => None,
+    }
+}
+
 /// Normalize normal and scenario-specific training IDs to the same
 /// five standard training IDs.
 fn normalize_training_command_id(command_id: i32) -> Option<i32> {
@@ -4633,11 +4647,11 @@ unsafe fn read_summary_inner_impl() -> String {
         ura_log(2, "evaluation_list is null");
     }
 
-    // Runtime support-card position -> specialty training command ID.
+    // Runtime support-card position -> support_card_type.
     //
     // Position is read dynamically from the equipped-card object.
     // It is not assumed that a particular card is always in a fixed slot.
-    let mut support_command_by_position: std::collections::HashMap<i32, i32> =
+    let mut support_type_by_position: std::collections::HashMap<i32, i32> =
         std::collections::HashMap::new();
 
     // First collect equipped (position, support_card_id) pairs.
@@ -4678,28 +4692,28 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     }
 
-    // Resolve each card's specialty training command from MasterDB:
+    // Resolve each card's type from MasterDB:
     //
-    // support_card_data.command_id:
-    //   101 = Speed
-    //   102 = Stamina
-    //   103 = Guts
-    //   105 = Power
-    //   106 = Wisdom
+    // support_card_data.support_card_type:
+    //   1 = Speed
+    //   2 = Stamina
+    //   3 = Power
+    //   4 = Guts
+    //   5 = Wisdom
     if let Some(mdb_path) = find_mdb_path() {
         if let Ok(connection) =
             Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         {
             if let Ok(mut statement) = connection.prepare(
-                "SELECT command_id \
+                "SELECT support_card_type \
                  FROM support_card_data \
                  WHERE id = ?1",
             ) {
                 for &(position, support_card_id) in &equipped_support_cards {
                     let result = statement.query_row([support_card_id], |row| row.get::<_, i32>(0));
 
-                    if let Ok(specialty_command_id) = result {
-                        support_command_by_position.insert(position, specialty_command_id);
+                    if let Ok(support_card_type) = result {
+                        support_type_by_position.insert(position, support_card_type);
                     }
                 }
             }
@@ -4818,29 +4832,37 @@ unsafe fn read_summary_inner_impl() -> String {
                                         .unwrap_or_else(|| "null".to_string());
 
                                     let is_shining: Option<bool> = if is_support_card {
-                                        match current_bond {
-                                            // 羁绊不足80，普通卡和特殊卡都不会触发友情训练。
-                                            Some(bond) if bond < 80 => Some(false),
-                                            Some(_) => match (
-                                                support_command_by_position
-                                                    .get(&partner_id)
-                                                    .copied()
-                                                    .and_then(normalize_training_command_id),
-                                                normalize_training_command_id(cid),
-                                            ) {
-                                                // 普通五属性卡：比较卡片得意训练与当前训练。
-                                                (
-                                                    Some(card_training),
-                                                    Some(current_training),
-                                                ) => Some(card_training == current_training),
-                                                // command_id=0 的特殊卡不能套用普通规则。
-                                                _ => None,
-                                            },
-                                            // 无法取得羁绊时不进行猜测。
-                                            None => None,
+                                        match (
+                                            current_bond,
+                                            support_type_by_position.get(&partner_id).copied(),
+                                            normalize_training_command_id(cid),
+                                        ) {
+                                            (
+                                                Some(bond),
+                                                Some(support_card_type),
+                                                Some(current_training),
+                                            ) => {
+                                                match support_card_type_to_training_id(
+                                                    support_card_type,
+                                                ) {
+                                                    // Ordinary Speed/Stamina/Power/Guts/Wisdom card.
+                                                    Some(card_training) => Some(
+                                                        bond >= 80
+                                                            && card_training == current_training,
+                                                    ),
+
+                                                    // Friend/group/team/special card:
+                                                    // ordinary attribute-card rules are insufficient.
+                                                    None => None,
+                                                }
+                                            }
+
+                                            // Bond, card type or current training could not be
+                                            // resolved safely.
+                                            _ => None,
                                         }
                                     } else {
-                                        // NPC和场景伙伴不是装备的支援卡。
+                                        // NPC and scenario partners are not equipped support cards.
                                         None
                                     };
 
