@@ -3515,24 +3515,51 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     }
 
-    // Partner evaluation map confirmed by /debug/training_partners (2026-07-10).
-    // Evaluation fields are inline ObscuredInt, not plain Int32.
+    // Partner ID -> current bond.
+    //
+    // _evaluationList is List<Evaluation>, not Evaluation[]:
+    //
+    // List<Evaluation> + 0x10 = _items (Evaluation[])
+    // List<Evaluation> + 0x18 = _size  (Int32)
+    // Evaluation[]     + 0x20 = first element
+    //
+    // Each Evaluation object contains two inline ObscuredInt fields:
+    //
+    // Evaluation + 0x10 = partner ID
+    // Evaluation + 0x24 = current bond
     let mut partner_evaluation: std::collections::HashMap<i32, i32> =
         std::collections::HashMap::new();
 
-    let evaluation_list =
-        read_ptr_at(chara_obj as *const c_void, EVALUATION_LIST_OFF);
+    let evaluation_list = read_ptr_at(
+        chara_obj as *const c_void,
+        EVALUATION_LIST_OFF
+    );
 
     if !evaluation_list.is_null() {
-        let eb = evaluation_list as *const u8;
-        let count = std::ptr::read_unaligned::<usize>(
-            eb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+        // List<T>._size is Int32 at +0x18. Do not read this as usize,
+        // because +0x1c contains List<T>._version.
+        let count = read_int_at(
+            evaluation_list as *const c_void,
+            0x18
         );
 
-        if count > 0 && count < 1000 {
-            for i in 0..count {
+        // List<T>._items is the backing T[] array at +0x10.
+        let evaluation_items = read_ptr_at(
+            evaluation_list as *const c_void,
+            0x10
+        );
+
+        if count > 0
+            && count < 1000
+            && !evaluation_items.is_null()
+        {
+            let items_base = evaluation_items as *const u8;
+
+            for i in 0..count as usize {
+                // Evaluation is a reference type, so the backing array
+                // contains object pointers beginning at array + 0x20.
                 let item = std::ptr::read_unaligned::<*mut c_void>(
-                    eb.add(
+                    items_base.add(
                         IL2CPP_LIST_ITEMS_OFF
                             + i * IL2CPP_LIST_ITEM_SIZE
                     ) as *const *mut c_void
@@ -3542,17 +3569,49 @@ unsafe fn read_summary_inner_impl() -> String {
                     continue;
                 }
 
-                let partner_id =
-                    read_obscured_int_at(item, EVALUATION_PARTNER_ID_OFF);
+                let partner_id = read_obscured_int_at(
+                    item as *const c_void,
+                    EVALUATION_PARTNER_ID_OFF
+                );
 
-                let current_bond =
-                    read_obscured_int_at(item, EVALUATION_VALUE_OFF);
+                let current_bond = read_obscured_int_at(
+                    item as *const c_void,
+                    EVALUATION_VALUE_OFF
+                );
 
-                if partner_id > 0 {
-                    partner_evaluation.insert(partner_id, current_bond);
+                // Guard against corrupt or misread entries.
+                if partner_id > 0
+                    && partner_id < 100_000
+                    && current_bond >= 0
+                    && current_bond <= 100
+                {
+                    partner_evaluation.insert(
+                        partner_id,
+                        current_bond
+                    );
                 }
             }
+
+            ura_log(
+                3,
+                &format!(
+                    "evaluation_list: size={}, decoded={} entries",
+                    count,
+                    partner_evaluation.len()
+                )
+            );
+        } else {
+            ura_log(
+                2,
+                &format!(
+                    "evaluation_list unavailable: size={}, items_null={}",
+                    count,
+                    evaluation_items.is_null()
+                )
+            );
         }
+    } else {
+        ura_log(2, "evaluation_list is null");
     }
 
     // --- Training data via HomeInfoData (ALL scenarios) ---
