@@ -1,4 +1,5 @@
-//! URA Plugin v3.24.11
+//! URA Plugin (version from Cargo.toml)
+const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -4228,12 +4229,15 @@ unsafe fn read_summary_inner_impl() -> String {
     if sid == 14 {
         ura_log(3, "v3.22.51 ramen: direct memory read");
         log_predict_step("S:ramen start");
+        log_predict_step("S:ramen dataset before scenario");
         let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
         if !scenario_obj.is_null() {
             let sc_class =
                 std::ptr::read_unaligned::<*mut c_void>(scenario_obj as *const *mut c_void);
             log_predict_step("S:ramen sc_obj");
+            log_predict_step("S:ramen dataset before getter");
             let dataset_obj = call_getter_ref(sc_class, scenario_obj, "get_DataSet");
+            log_predict_step("S:ramen dataset after getter");
             if !dataset_obj.is_null() {
                 let ds_class =
                     std::ptr::read_unaligned::<*mut c_void>(dataset_obj as *const *mut c_void);
@@ -4253,6 +4257,7 @@ unsafe fn read_summary_inner_impl() -> String {
                         cp_pt, sf_num, rec_type, uraf_t, uraf_s
                     ),
                 );
+                log_predict_step("S:ramen dataset scalars done");
                 // SelectedRegionIdArray (List<ObscuredInt>)
                 let sra_off = cached_find_field_offset(ds_class, "SelectedRegionIdArray");
                 if sra_off >= 0 {
@@ -4273,6 +4278,7 @@ unsafe fn read_summary_inner_impl() -> String {
                         }
                     }
                 }
+                log_predict_step("S:ramen regions done");
                 // ActiveEffectArray (List<ActiveEffectInfo>)
                 let ae_off = cached_find_field_offset(ds_class, "ActiveEffectArray");
                 if ae_off >= 0 {
@@ -4328,6 +4334,7 @@ unsafe fn read_summary_inner_impl() -> String {
                         }
                     }
                 }
+                log_predict_step("S:ramen effects done");
                 // ★ v3.22.39: CommandFeelingInfoArray — dump element class name + gauge data
                 // Skip in /summary for now, use /debug/gauge for safe testing
                 // TODO: re-enable after /debug/gauge confirms element type and GetGainCount works
@@ -4390,6 +4397,7 @@ unsafe fn read_summary_inner_impl() -> String {
                 // ★ v3.24.9: Reverted to read_ptr_at — call_getter_ref caused crash during loading
                 // The offset 16 is confirmed correct by /debug/dumpclass
                 // Original code worked in v3.24.2, crash was introduced by getter call
+                log_predict_step("S:ramen feelings done");
                 let cmd_list = read_ptr_at(dataset_obj, RAMEN_DATASET_CMD_ARRAY_OFF as i32);
                 if !cmd_list.is_null() {
                     let cmd_lb = cmd_list as *const u8;
@@ -4520,6 +4528,7 @@ unsafe fn read_summary_inner_impl() -> String {
                     }
                 }
                 // ★ v3.22.89: Build gauge_gains JSON from ramen_gauge_gains_map
+                log_predict_step("S:ramen commands done");
                 if !ramen_gauge_gains_map.is_empty() {
                     let mut gg_parts: Vec<String> = Vec::new();
                     for (&cmd_id, &gauge_val) in &ramen_gauge_gains_map {
@@ -4646,8 +4655,10 @@ unsafe fn read_summary_inner_impl() -> String {
     // First collect equipped (position, support_card_id) pairs.
     let mut equipped_support_cards: Vec<(i32, i32)> = Vec::new();
 
+    log_predict_step("S:support equip before getter");
     let support_array_for_shining =
         call_getter_on_instance(chara_class, chara_obj, "get_EquipSupportCardArray");
+    log_predict_step("S:support equip after getter");
 
     if !support_array_for_shining.is_null() {
         let support_array_base = support_array_for_shining as *const u8;
@@ -4684,6 +4695,7 @@ unsafe fn read_summary_inner_impl() -> String {
     // Resolve each ordinary card's training specialty from MasterDB:
     //
     // command_id=0 is intentionally retained as an unclassified special card.
+    log_predict_step("S:support mdb before");
     if let Some(mdb_path) = find_mdb_path() {
         if let Ok(connection) =
             Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -4704,6 +4716,7 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     }
 
+    log_predict_step("S:support mdb done");
     // --- Training data via HomeInfoData (ALL scenarios) ---
     log_predict_step("S:ramen end");
     ura_log(3, "★ read_summary phase2: training data");
@@ -4711,7 +4724,9 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut tr_json = "[]".to_string();
     // ★ v3.15.1: collect eval_trainings in same pass (eliminate dangerous double-read)
     let mut eval_trainings: Vec<(i32, [i32; 5], i32, i32, i32, i32, i32, i32)> = Vec::new();
+    log_predict_step("S:homeinfo before getter");
     let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
+    log_predict_step("S:homeinfo after getter");
     if !home_info_obj.is_null() {
         let hi_class = find_class(
             image,
@@ -4720,13 +4735,14 @@ unsafe fn read_summary_inner_impl() -> String {
         );
         if !hi_class.is_null() {
             // CommandInfoArray is a public field (not a getter), at offset 0x10
+            log_predict_step("S:homeinfo commands before");
             let cmd_arr = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
+            log_predict_step("S:homeinfo commands after");
             if !cmd_arr.is_null() {
                 let cmd_base = cmd_arr as *const u8;
                 let cmd_len = std::ptr::read_unaligned::<usize>(
                     cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize,
                 );
-                if cmd_len > 0 && cmd_len < 100 {
                     let mut trs = Vec::new();
                     for i in 0..cmd_len {
                         let ep = std::ptr::read_unaligned::<*mut c_void>(
@@ -5030,6 +5046,7 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     }
 
+    log_predict_step("S:training partners done");
     // --- Support cards (graceful fallback) ---
     log_predict_step("S:p2 done");
     ura_log(3, "★ read_summary phase3: support cards");
@@ -5431,7 +5448,8 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"3.24.11","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"{}","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        PLUGIN_VERSION,
         mon,
         half,
         scn_s,
@@ -5932,7 +5950,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         .unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        r#"{"status":"ok","version":"3.24.11","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}"#.to_string()
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -7978,7 +7996,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr("URA Assistant v3.24.11").as_ptr());
+            f(ui, to_cstr(&format!("URA Assistant v{}", PLUGIN_VERSION)).as_ptr());
         }
         if let Some(f) = api.gui_ui_separator_fn {
             f(ui);
@@ -8380,7 +8398,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
     ura_log(3, "URA plugin v3.24.9 loaded (Interceptor API hooks)");
 
     if let Some(f) = (*API).gui_show_notification_fn {
-        f(to_cstr("URA v3.24.11 Loaded!").as_ptr());
+        f(to_cstr(&format!("URA v{} Loaded!", PLUGIN_VERSION)).as_ptr());
     }
 
     if let Some(f) = (*API).gui_register_menu_item_fn {
@@ -13132,7 +13150,8 @@ unsafe fn read_turn_log() -> String {
     }
 
     format!(
-        r#"{{"version":"3.24.11","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        r#"{{"version":"{}","current":{{"month":{},"half":{},"scenario_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"vital":{},"max_vital":{},"motivation":{},"skill_point":{},"fan":{}}},"training_levels":{},"turn_config":[{}],"history":{}}}"#,
+        PLUGIN_VERSION,
         mon,
         half,
         sid,
