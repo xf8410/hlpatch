@@ -1,5 +1,4 @@
-//! URA Plugin (version from Cargo.toml)
-const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
+//! URA Plugin v3.24.12
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -20,6 +19,7 @@ const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 //! ObscuredInt getters: get_SkillPoint() returns ObscuredInt (boxed) - needs special handling
 
 #![allow(dead_code)]
+const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 use rusqlite::{Connection, OpenFlags};
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -4742,6 +4742,7 @@ unsafe fn read_summary_inner_impl() -> String {
                 let cmd_base = cmd_arr as *const u8;
                 let cmd_len = std::ptr::read_unaligned::<usize>(
                     cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize,
+                if cmd_len > 0 && cmd_len < 100 {
                 );
                     let mut trs = Vec::new();
                     for i in 0..cmd_len {
