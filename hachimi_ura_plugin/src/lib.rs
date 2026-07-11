@@ -3381,26 +3381,15 @@ const CMD_URA_POWER: i32 = 604;
 const CMD_URA_WISDOM: i32 = 605;
 const CMD_KAKUSHIMI: i32 = 304;
 
-/// Convert a support-card type into its corresponding normal
-/// training command ID.
+/// Validate the ordinary training specialty stored in
+/// support_card_data.command_id.
 ///
-/// support_card_type and training CommandId use different numbering:
-///
-///   1 = Speed   -> 101
-///   2 = Stamina -> 102
-///   3 = Power   -> 105
-///   4 = Guts    -> 103
-///   5 = Wisdom  -> 106
-///
-/// Other values may represent friend/group/team/special cards and
-/// must not be classified using the ordinary five-attribute rule.
-fn support_card_type_to_training_id(support_card_type: i32) -> Option<i32> {
-    match support_card_type {
-        1 => Some(CMD_SPEED),
-        2 => Some(CMD_STAMINA),
-        3 => Some(CMD_POWER),
-        4 => Some(CMD_GUTS),
-        5 => Some(CMD_WISDOM),
+/// MasterDB v2.28.5 contains the five normal command IDs below plus 0.
+/// A value of 0 belongs to friend/group/special cards, whose shining rules
+/// cannot use the ordinary attribute-card rule.
+fn support_card_command_id_to_training_id(command_id: i32) -> Option<i32> {
+    match command_id {
+        CMD_SPEED | CMD_STAMINA | CMD_POWER | CMD_GUTS | CMD_WISDOM => Some(command_id),
         _ => None,
     }
 }
@@ -4647,11 +4636,11 @@ unsafe fn read_summary_inner_impl() -> String {
         ura_log(2, "evaluation_list is null");
     }
 
-    // Runtime support-card position -> support_card_type.
+    // Runtime support-card position -> support_card_data.command_id.
     //
     // Position is read dynamically from the equipped-card object.
     // It is not assumed that a particular card is always in a fixed slot.
-    let mut support_type_by_position: std::collections::HashMap<i32, i32> =
+    let mut support_command_by_position: std::collections::HashMap<i32, i32> =
         std::collections::HashMap::new();
 
     // First collect equipped (position, support_card_id) pairs.
@@ -4692,28 +4681,23 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     }
 
-    // Resolve each card's type from MasterDB:
+    // Resolve each ordinary card's training specialty from MasterDB:
     //
-    // support_card_data.support_card_type:
-    //   1 = Speed
-    //   2 = Stamina
-    //   3 = Power
-    //   4 = Guts
-    //   5 = Wisdom
+    // command_id=0 is intentionally retained as an unclassified special card.
     if let Some(mdb_path) = find_mdb_path() {
         if let Ok(connection) =
             Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         {
             if let Ok(mut statement) = connection.prepare(
-                "SELECT support_card_type \
+                "SELECT command_id \
                  FROM support_card_data \
                  WHERE id = ?1",
             ) {
                 for &(position, support_card_id) in &equipped_support_cards {
                     let result = statement.query_row([support_card_id], |row| row.get::<_, i32>(0));
 
-                    if let Ok(support_card_type) = result {
-                        support_type_by_position.insert(position, support_card_type);
+                    if let Ok(support_command_id) = result {
+                        support_command_by_position.insert(position, support_command_id);
                     }
                 }
             }
@@ -4834,16 +4818,16 @@ unsafe fn read_summary_inner_impl() -> String {
                                     let is_shining: Option<bool> = if is_support_card {
                                         match (
                                             current_bond,
-                                            support_type_by_position.get(&partner_id).copied(),
+                                            support_command_by_position.get(&partner_id).copied(),
                                             normalize_training_command_id(cid),
                                         ) {
                                             (
                                                 Some(bond),
-                                                Some(support_card_type),
+                                                Some(support_command_id),
                                                 Some(current_training),
                                             ) => {
-                                                match support_card_type_to_training_id(
-                                                    support_card_type,
+                                                match support_card_command_id_to_training_id(
+                                                    support_command_id,
                                                 ) {
                                                     // Ordinary Speed/Stamina/Power/Guts/Wisdom card.
                                                     Some(card_training) => Some(
