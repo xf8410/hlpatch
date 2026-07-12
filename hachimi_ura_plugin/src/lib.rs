@@ -14591,8 +14591,8 @@ fn update_so() -> String {
         None => return format!(r#"{{"error":"no_so_asset_url","tag":"{}"}}"#, tag_name),
     };
 
-    // Compare versions: current is "3.22.89"
-    let current_ver = "3.22.92";
+    // Compare versions: use CARGO_PKG_VERSION (auto-synced with Cargo.toml)
+    let current_ver = PLUGIN_VERSION;
     if tag_name == format!("v{}", current_ver) {
         return format!(
             r#"{{"status":"already_latest","current":"{}","latest":"{}"}}"#,
