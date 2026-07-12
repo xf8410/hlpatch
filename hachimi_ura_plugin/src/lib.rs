@@ -13589,7 +13589,11 @@ unsafe fn read_win_saddle_analysis() -> String {
             // Call get_Name on the saddle object
             let name = if !saddle_class.is_null() {
                 let n = call_getter_string(saddle_class, elem_ptr as *mut c_void, "get_Name");
-                n
+                if n.is_null() {
+                    String::new()
+                } else {
+                    read_il2cpp_string(n)
+                }
             } else {
                 String::new()
             };
@@ -13603,19 +13607,20 @@ unsafe fn read_win_saddle_analysis() -> String {
 
             // Call IsRelationBonusWinSaddle (returns bool)
             let is_relation_bonus = if !saddle_class.is_null() {
-                let m = (api.il2cpp_class_get_method_from_name_fn)(
-                    saddle_class,
-                    to_cstr("IsRelationBonusWinSaddle").as_ptr(),
-                    0,
-                );
-                if !m.is_null() {
-                    let ret = (api.il2cpp_runtime_invoke_fn)(
-                        m,
-                        elem_ptr as *mut c_void,
-                        std::ptr::null(),
-                        std::ptr::null_mut(),
-                    );
-                    ret as i32 != 0
+                let get_method_fn = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+                let invoke_fn = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+                if !get_method_fn.is_null() && !invoke_fn.is_null() {
+                    type FnGetMethod = unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *mut c_void;
+                    type FnInvoke = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
+                    let f: FnGetMethod = std::mem::transmute(get_method_fn);
+                    let inv: FnInvoke = std::mem::transmute(invoke_fn);
+                    let m = f(saddle_class, to_cstr("IsRelationBonusWinSaddle").as_ptr(), 0);
+                    if !m.is_null() {
+                        let ret = inv(m, elem_ptr as *mut c_void, std::ptr::null(), std::ptr::null_mut());
+                        ret as i32 != 0
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
@@ -13625,21 +13630,21 @@ unsafe fn read_win_saddle_analysis() -> String {
 
             // Call GetRelationPoint
             let relation_point = if !saddle_class.is_null() {
-                let m = (api.il2cpp_class_get_method_from_name_fn)(
-                    saddle_class,
-                    to_cstr("GetRelationPoint").as_ptr(),
-                    0,
-                );
-                if !m.is_null() {
-                    let ret = (api.il2cpp_runtime_invoke_fn)(
-                        m,
-                        elem_ptr as *mut c_void,
-                        std::ptr::null(),
-                        std::ptr::null_mut(),
-                    );
-                    // ret is a boxed int value
-                    if !ret.is_null() {
-                        std::ptr::read_unaligned::<i32>(ret as *const i32)
+                let get_method_fn = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+                let invoke_fn = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+                if !get_method_fn.is_null() && !invoke_fn.is_null() {
+                    type FnGetMethod = unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *mut c_void;
+                    type FnInvoke = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
+                    let f: FnGetMethod = std::mem::transmute(get_method_fn);
+                    let inv: FnInvoke = std::mem::transmute(invoke_fn);
+                    let m = f(saddle_class, to_cstr("GetRelationPoint").as_ptr(), 0);
+                    if !m.is_null() {
+                        let ret = inv(m, elem_ptr as *mut c_void, std::ptr::null(), std::ptr::null_mut());
+                        if !ret.is_null() {
+                            std::ptr::read_unaligned::<i32>(ret as *const i32)
+                        } else {
+                            0
+                        }
                     } else {
                         0
                     }
@@ -13721,7 +13726,8 @@ unsafe fn read_win_saddle_analysis() -> String {
                         continue;
                     }
                     let name = if !saddle_class.is_null() {
-                        call_getter_string(saddle_class, elem_ptr as *mut c_void, "get_Name")
+                        let n = call_getter_string(saddle_class, elem_ptr as *mut c_void, "get_Name");
+                        if n.is_null() { String::new() } else { read_il2cpp_string(n) }
                     } else {
                         String::new()
                     };
