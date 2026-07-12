@@ -4742,8 +4742,8 @@ unsafe fn read_summary_inner_impl() -> String {
                 let cmd_base = cmd_arr as *const u8;
                 let cmd_len = std::ptr::read_unaligned::<usize>(
                     cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize,
-                if cmd_len > 0 && cmd_len < 100 {
                 );
+                if cmd_len > 0 && cmd_len < 100 {
                     let mut trs = Vec::new();
                     for i in 0..cmd_len {
                         let ep = std::ptr::read_unaligned::<*mut c_void>(
