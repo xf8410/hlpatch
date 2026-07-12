@@ -4066,12 +4066,20 @@ unsafe fn read_summary_inner_impl() -> String {
     }
     log_predict_step("S:wdm");
 
+    log_predict_step("S:before_sm_class");
     let sm_class = find_class(
         image,
         to_cstr("Gallop").as_ptr(),
         to_cstr("WorkSingleModeData").as_ptr(),
     );
+    log_predict_step("S:after_sm_class");
+    if sm_class.is_null() {
+        return r#"{"error":"no_sm_class"}"#.to_string();
+    }
+
+    log_predict_step("S:before_get_single_mode");
     let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    log_predict_step("S:after_get_single_mode");
     if sm_obj.is_null() {
         return r#"{"error":"no_sm"}"#.to_string();
     }
