@@ -1,4 +1,4 @@
-//! URA Plugin v3.24.14
+//! URA Plugin v3.24.15
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -3450,7 +3450,8 @@ const PARAMS_INCDEC_DATA_VALUE_OFF: i32 = 0x24;
 // Runtime diagnostic 2026-07-10 confirmed both fields are inline ObscuredInt values.
 const EVALUATION_PARTNER_ID_OFF: i32 = 0x10;
 const EVALUATION_VALUE_OFF: i32 = 0x24;
-const TRAINING_PARTNER_ARRAY_OFF: i32 = 0x50;
+const TRAINING_PARTNER_ARRAY_OFF: i32 = 0x50;  // = 80
+const TIPS_EVENT_PARTNER_ARRAY_OFF: i32 = 0x58;  // = 88
 const EVALUATION_LIST_OFF: i32 = 0x3f8;
 const OBSCURED_INT_SIZE: usize = 20;
 const IL2CPP_COMMAND_ID_OFF: usize = 0x10; // SingleModeCommandId.commandId (IL2CPP /fields/ offset=16)
@@ -4688,6 +4689,9 @@ unsafe fn read_summary_inner_impl() -> String {
     /// ★ v3.24.14: position → bond_threshold from MasterDB unique_effect
     let mut bond_threshold_by_position: std::collections::HashMap<i32, i32> =
         std::collections::HashMap::new();
+    /// ★ v3.24.15: position → support_card_type (1=普通, 2=友人, 3=团体)
+    let mut support_card_type_by_position: std::collections::HashMap<i32, i32> =
+        std::collections::HashMap::new();
 
     // First collect equipped (position, support_card_id) pairs.
     let mut equipped_support_cards: Vec<(i32, i32)> = Vec::new();
@@ -4737,13 +4741,13 @@ unsafe fn read_summary_inner_impl() -> String {
     //   type_0=101 → value_0 = bond threshold for unique effect / friendship training.
     //   Cards without unique_effect_id get threshold = i32::MAX (never shines).
     log_predict_step("S:support mdb before");
-    /// position → (command_id, bond_threshold)
+    /// position → (command_id, bond_threshold, support_card_type)
     static SUPPORT_CARD_INFO_CACHE: std::sync::Mutex<
-        Option<std::collections::HashMap<i32, (i32, i32)>>,
+        Option<std::collections::HashMap<i32, (i32, i32, i32)>>,
     > = std::sync::Mutex::new(None);
 
     // Try cache first; rebuild if empty.
-    let mut info_map: std::collections::HashMap<i32, (i32, i32)> =
+    let mut info_map: std::collections::HashMap<i32, (i32, i32, i32)> =
         SUPPORT_CARD_INFO_CACHE.lock().unwrap().clone().unwrap_or_default();
 
     if info_map.is_empty() {
@@ -4751,10 +4755,10 @@ unsafe fn read_summary_inner_impl() -> String {
             if let Ok(connection) =
                 Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             {
-                // Query command_id and unique effect threshold in one JOIN.
+                // Query command_id, unique effect threshold, and support_card_type in one JOIN.
                 // type_0=101 is the bond-threshold marker in support_card_unique_effect.
                 if let Ok(mut statement) = connection.prepare(
-                    "SELECT sc.id, sc.command_id, \
+                    "SELECT sc.id, sc.command_id, sc.support_card_type, \
                      COALESCE(ue.value_0, 999999) AS threshold \
                      FROM support_card_data sc \
                      LEFT JOIN support_card_unique_effect ue \
@@ -4766,14 +4770,16 @@ unsafe fn read_summary_inner_impl() -> String {
                             Ok((
                                 row.get::<_, i32>(0)?, // id
                                 row.get::<_, i32>(1)?, // command_id
-                                row.get::<_, i32>(2)?, // threshold
+                                row.get::<_, i32>(2)?, // support_card_type
+                                row.get::<_, i32>(3)?, // threshold
                             ))
                         });
 
-                        if let Ok((_id, support_command_id, threshold)) = result {
+                        if let Ok((_id, support_command_id, sc_type, threshold)) = result {
                             support_command_by_position.insert(position, support_command_id);
                             bond_threshold_by_position.insert(position, threshold);
-                            info_map.insert(support_card_id, (support_command_id, threshold));
+                            support_card_type_by_position.insert(position, sc_type);
+                            info_map.insert(support_card_id, (support_command_id, threshold, sc_type));
                         }
                     }
                 }
@@ -4787,9 +4793,10 @@ unsafe fn read_summary_inner_impl() -> String {
     } else {
         // Cache hit — populate from cache without DB access.
         for &(position, support_card_id) in &equipped_support_cards {
-            if let Some(&(cmd_id, threshold)) = info_map.get(&support_card_id) {
+            if let Some(&(cmd_id, threshold, sc_type)) = info_map.get(&support_card_id) {
                 support_command_by_position.insert(position, cmd_id);
                 bond_threshold_by_position.insert(position, threshold);
+                support_card_type_by_position.insert(position, sc_type);
             }
         }
     }
@@ -4863,6 +4870,31 @@ unsafe fn read_summary_inner_impl() -> String {
                         // inline 20-byte values.
                         let tp_arr = read_ptr_at(ep as *const c_void, TRAINING_PARTNER_ARRAY_OFF);
 
+                        // ★ v3.24.15: Read TipsEventPartnerArray for group card shining.
+                        // Group cards (support_card_type=3) shine when they trigger a
+                        // special tips event, not based on bond threshold.
+                        // TipsEventPartnerArray is at offset 0x58 (88), same ObscuredInt[] format.
+                        let tips_arr = read_ptr_at(ep as *const c_void, TIPS_EVENT_PARTNER_ARRAY_OFF);
+                        let mut tips_partner_ids: std::collections::HashSet<i32> =
+                            std::collections::HashSet::new();
+                        if !tips_arr.is_null() {
+                            let tips_base = tips_arr as *const u8;
+                            let tips_len = std::ptr::read_unaligned::<usize>(
+                                tips_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize,
+                            );
+                            if tips_len <= 100 {
+                                for ti in 0..tips_len {
+                                    let tval = tips_base
+                                        .add(IL2CPP_LIST_ITEMS_OFF + ti * OBSCURED_INT_SIZE);
+                                    let tips_id =
+                                        read_obscured_int_at(tval as *const c_void, 0);
+                                    if tips_id > 0 {
+                                        tips_partner_ids.insert(tips_id);
+                                    }
+                                }
+                            }
+                        }
+
                         let mut partner_ids: Vec<i32> = Vec::new();
                         let mut partners_json: Vec<String> = Vec::new();
 
@@ -4910,45 +4942,67 @@ unsafe fn read_summary_inner_impl() -> String {
                                         .map(|value| value.to_string())
                                         .unwrap_or_else(|| "null".to_string());
 
-                                    // ★ v3.24.14: Dynamic bond threshold from MasterDB.
-                                    //   threshold = support_card_unique_effect.value_0 (type_0=101)
-                                    //   Default 999999 if card has no unique effect.
-                                    //   Friend cards (友人卡) threshold = 60.
-                                    //   Some SSR cards threshold = 100.
+                                    // ★ v3.24.15: Card-type-aware shining logic.
+                                    //
+                                    //   support_card_type=1 (普通卡): bond >= threshold && training match
+                                    //   support_card_type=2 (友人卡): always false (友人卡不彩圈)
+                                    //   support_card_type=3 (团体卡): partner_id in TipsEventPartnerArray
+                                    //     (触发特殊启示事件就彩圈，不管 bond)
+                                    //   Unknown type: null (conservative)
+                                    let sc_type = support_card_type_by_position
+                                        .get(&partner_id)
+                                        .copied();
+
                                     let bond_threshold = bond_threshold_by_position
                                         .get(&partner_id)
                                         .copied()
                                         .unwrap_or(999999);
 
                                     let is_shining: Option<bool> = if is_support_card {
-                                        match (
-                                            current_bond,
-                                            support_command_by_position.get(&partner_id).copied(),
-                                            normalize_training_command_id(cid),
-                                        ) {
-                                            (
-                                                Some(bond),
-                                                Some(support_command_id),
-                                                Some(current_training),
-                                            ) => {
-                                                match support_card_command_id_to_training_id(
-                                                    support_command_id,
+                                        match sc_type {
+                                            // 普通卡: bond >= threshold && training match
+                                            Some(1) => {
+                                                match (
+                                                    current_bond,
+                                                    support_command_by_position.get(&partner_id).copied(),
+                                                    normalize_training_command_id(cid),
                                                 ) {
-                                                    // Ordinary Speed/Stamina/Power/Guts/Wisdom card.
-                                                    Some(card_training) => Some(
-                                                        bond >= bond_threshold
-                                                            && card_training == current_training,
-                                                    ),
-
-                                                    // Friend/group/team/special card:
-                                                    // ordinary attribute-card rules are insufficient.
-                                                    None => None,
+                                                    (Some(bond), Some(support_command_id), Some(current_training)) => {
+                                                        match support_card_command_id_to_training_id(support_command_id) {
+                                                            Some(card_training) => Some(
+                                                                bond >= bond_threshold
+                                                                    && card_training == current_training,
+                                                            ),
+                                                            None => None,
+                                                        }
+                                                    }
+                                                    _ => None,
                                                 }
                                             }
-
-                                            // Bond, card type or current training could not be
-                                            // resolved safely.
-                                            _ => None,
+                                            // 友人卡: 永远不彩圈
+                                            Some(2) => Some(false),
+                                            // 团体卡: 启示事件触发就彩圈
+                                            Some(3) => Some(tips_partner_ids.contains(&partner_id)),
+                                            // 未知类型: 保守 null
+                                            _ => {
+                                                // Fallback to old logic for untyped cards
+                                                match (
+                                                    current_bond,
+                                                    support_command_by_position.get(&partner_id).copied(),
+                                                    normalize_training_command_id(cid),
+                                                ) {
+                                                    (Some(bond), Some(support_command_id), Some(current_training)) => {
+                                                        match support_card_command_id_to_training_id(support_command_id) {
+                                                            Some(card_training) => Some(
+                                                                bond >= bond_threshold
+                                                                    && card_training == current_training,
+                                                            ),
+                                                            None => None,
+                                                        }
+                                                    }
+                                                    _ => None,
+                                                }
+                                            }
                                         }
                                     } else {
                                         // NPC and scenario partners are not equipped support cards.
@@ -4957,9 +5011,20 @@ unsafe fn read_summary_inner_impl() -> String {
 
                                     // ★ v3.24.14: Unique effect active = bond >= threshold.
                                     //   Triggers on ANY training, not just得意训练.
-                                    //   Separate from is_shining (which requires training match).
+                                    //   友人卡: threshold=60, 团体卡: threshold=80/100
                                     let is_unique_active: Option<bool> = if is_support_card {
-                                        current_bond.map(|bond| bond >= bond_threshold)
+                                        if sc_type == Some(2) {
+                                            // 友人卡固有: bond >= 60
+                                            current_bond.map(|bond| bond >= bond_threshold)
+                                        } else if sc_type == Some(3) {
+                                            // 团体卡固有: bond >= threshold (80 or 100)
+                                            current_bond.map(|bond| bond >= bond_threshold)
+                                        } else if sc_type == Some(1) {
+                                            // 普通卡固有: bond >= threshold (80 or 100)
+                                            current_bond.map(|bond| bond >= bond_threshold)
+                                        } else {
+                                            None
+                                        }
                                     } else {
                                         None
                                     };
@@ -4984,14 +5049,23 @@ unsafe fn read_summary_inner_impl() -> String {
                                         None => "null",
                                     };
 
+                                    let sc_type_json = match sc_type {
+                                        Some(t) => t.to_string(),
+                                        None => "null".to_string(),
+                                    };
+
+                                    let is_tips_event = tips_partner_ids.contains(&partner_id);
+
                                     partners_json.push(format!(
-                                        r#"{{"partner_id":{},"support_position":{},"current_bond":{},"is_shining":{},"is_unique_active":{},"bond_threshold":{},"bond_gain":null}}"#,
+                                        r#"{{"partner_id":{},"support_position":{},"current_bond":{},"is_shining":{},"is_unique_active":{},"bond_threshold":{},"support_card_type":{},"is_tips_event":{},"bond_gain":null}}"#,
                                         partner_id,
                                         support_position,
                                         bond_json,
                                         is_shining_json,
                                         is_unique_json,
                                         bond_threshold,
+                                        sc_type_json,
+                                        is_tips_event,
                                     ));
                                 }
                             }
