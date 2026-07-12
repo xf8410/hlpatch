@@ -1,0 +1,719 @@
+════════════════════════════════════════════════════════════════════════════════
+        赛马娘 全社区网站穷举索引 (162站 → 精选分类)
+════════════════════════════════════════════════════════════════════════════════
+
+穷举搜索: 35组关键词 × 10条/组 = 350+条目
+去重过滤后: 215 个唯一网站
+搜索覆盖: 日文/中文/英文/韩文 | Wiki/工具/社区/GitHub/论坛
+
+搜索关键词覆盖:
+  ウマ娘 ツール/計算機/シミュレーター/因子/継承/相性/スキル
+  ウマ娘 データベース/フレンド/オッズ/チャンミ/バグ/仕様
+  umamusume tool/wiki/community/inheritance/factor
+  赛马娘 攻略/工具/网站 | 賽馬娘 繁中 工具
+  우마무스메 한국 위키 | site:github.com umamusume
+
+════════════════════════════════════════════════════════════════════════════════
+  日本公式・Wiki (9站)
+════════════════════════════════════════════════════════════════════════════════
+
+  ウマ娘 プリティーダービー 公式ポータルサイト｜Cygames
+    https://umamusume.jp
+
+  Umamusume: Pretty Derby Official Website | Cygames
+    https://umamusume.com
+
+  Contact Us | Umamusume: Pretty Derby Official Website | Cygames
+    https://support.umamusume.com/contact
+
+  Character｜ウマ娘 プリティーダービー 公式ポータルサイト
+    https://umamusume.jp/character
+
+  ユーザーサポート｜ウマ娘 プリティーダービー 公式ポータルサイト
+    https://support.umamusume.jp
+
+  ウマ娘 プリティーダービー - Wikipedia
+    https://ja.wikipedia.org/wiki/%E3%82%A6%E3%83%9E%E5%A8%98_%E3%83%97%E3%83%AA%E3%83%86%E3%82%A3%E3%83%BC%E3%83%80%E3%83%BC%E3%83%93%E3%83%BC
+
+  Umamusume Wiki
+    https://umamusu.wiki/Main_Page
+
+  ウマ娘 プリティーダービー | Games - Cygames ID (サイゲームスID)
+    https://cygames.com/games/umamusume
+
+  Umamusume: Pretty Derby - Wikipedia
+    https://en.wikipedia.org/wiki/Umamusume:_Pretty_Derby
+
+════════════════════════════════════════════════════════════════════════════════
+  日本攻略サイト (31站)
+════════════════════════════════════════════════════════════════════════════════
+
+  【ウマ娘】育成に役立つツール｜診断や各種シミュレーターまとめ
+    https://gamewith.jp/uma-musume/article/show/283596
+
+  ウマ娘攻略Wiki - 神ゲー攻略
+    https://kamigame.jp/umamusume/index.html
+
+  ウマ娘攻略ガイド｜ゲームエイト
+    https://game8.jp/umamusume
+
+  【ウマ娘】評価点シミュレーター - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/279309
+
+  【ウマ娘】スキル評価点最大化シミュレーター - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/293663
+
+  ウマ娘攻略wiki - ゲームウィズ
+    https://gamewith.jp/uma-musume
+
+  ウマ娘攻略wiki - アルテマ
+    https://altema.jp/umamusume
+
+  【ウマ娘】イベント選択肢チェッカー（逆引き検索ツール） - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/259587
+
+  【ウマ娘】因子周回のやり方とおすすめキャラ - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/258843
+
+  【ウマ娘】因子周回のおすすめキャラ＆編成とやり方｜初心者〜上級者向け
+    https://kamigame.jp/umamusume/page/147455032642539573.html
+
+  【ウマ娘】因子ループのやり方と相性の良い組み合わせ - ゲームエイト
+    https://game8.jp/umamusume/438785
+
+  【ウマ娘】スキル効果一覧｜絞込み機能付き - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/257928
+
+  【ウマ娘】スキル一覧｜所持キャラやサポートカードも掲載
+    https://kamigame.jp/umamusume/page/146853426154740254.html
+
+  【ウマ娘】スキル一覧と獲得できるサポートカード検索 - アルテマ
+    https://altema.jp/umamusume/skilllist
+
+  【ウマ娘】フレンド募集掲示板｜星3因子＆完凸絞り込み検索
+    https://gamewith.jp/uma-musume/article/show/260740
+
+  【ウマ娘】フレンド募集掲示板｜完凸サポカ＆因子検索 - 神ゲー攻略
+    https://kamigame.jp/umamusume/page/110669095350829063.html
+
+  【ウマ娘】フレンド募集掲示板｜星3因子と完凸検索 - アルテマ
+    https://altema.jp/umamusume/friend
+
+  【ウマ娘】チャンミ攻略｜報酬と開催履歴一覧 - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/272329
+
+  【ウマ娘】チャンピオンズミーティング攻略まとめ｜次回予定と
+    https://kamigame.jp/umamusume/page/154742591080893236.html
+
+  【ウマ娘】チャンピオンズミーティングの攻略と報酬・チャンミ
+    https://game8.jp/umamusume/390471
+
+  【ウマ娘】チャンピオンズミーティングの攻略まとめ - アルテマ
+    https://altema.jp/umamusume/championsmeeting
+
+  【ウマ娘】メンテナンスの内容と不具合まとめ - 神ゲー攻略
+    https://kamigame.jp/umamusume/page/110673830434832391.html
+
+  【ウマ娘】因子周回のおすすめキャラとサポカ編成 - ゲームエイト
+    https://game8.jp/umamusume/460250
+
+  【ウマ娘】サポートカード性能比較ツール - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/283210
+
+  【ウマ娘】SSRのサポートカード一覧 - 神ゲー攻略
+    https://kamigame.jp/umamusume/page/146294217520493388.html
+
+  【ウマ娘】サポートカードの評価一覧 - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/255035
+
+  【ウマ娘】イベント選択肢チェッカー｜サポカや新シナリオ対応
+    https://kamigame.jp/umamusume/page/152540608660042049.html
+
+  【ウマ娘】イベントチェッカー｜選択肢逆引き検索ツール
+    https://game8.jp/umamusume/384536
+
+  【ウマ娘】Search or Mommy｜イベント選択肢と効果 - ゲームウィズ
+    https://gamewith.jp/uma-musume/article/show/300908
+
+  【ウマ娘】おまかせ育成(オート育成)のおすすめ設定と使い方｜新シナリオ
+    https://gamewith.jp/uma-musume/article/show/493137
+
+  【ウマ娘】サポカ性能比較ツール｜早見表も掲載！ - 神ゲー攻略
+    https://kamigame.jp/umamusume/page/222114136773943088.html
+
+════════════════════════════════════════════════════════════════════════════════
+  日本ツール（計算・シミュレーター） (10站)
+════════════════════════════════════════════════════════════════════════════════
+
+  ウマコンガ先生の評価点計算 | オープン育成
+    https://umakonga-t.github.io/hyokatenCalc
+
+  ウマ娘 評価シミュレーター
+    https://umsatei.com
+
+  スタミナ計算機
+    https://stacalc.hf-uma.net
+
+  ウマ娘評価値計算
+    https://yonkim.azurewebsites.net
+
+  ウマ娘育成シミュレータ
+    https://mee1080.github.io/umasim
+
+  【評価点ツール更新のお知らせ】 お待たせしすぎてすみませんが、当
+    https://x.com/umamusume_GW/status/1639219477069070341
+
+  Umalator - Uma Musume Pretty Derby Tools & Simulators | umalator
+    https://umalator.com
+
+  【ツール】手動で行うほぼスキル評価点最大化ツールの便利な  - note
+    https://note.com/chic_allium8227/n/ne82220557e59
+
+  ウマ娘-評価点「UG/UE/UD/UC/UB/UA/US/LG
+    https://sakamoto-kouji.com/2021/05/03/uma-musume-hyoukaten-s-rnk-suuti
+
+  Uma Race Emulator
+    http://race.wf-calc.net
+
+════════════════════════════════════════════════════════════════════════════════
+  日本ツール（因子・継承） (8站)
+════════════════════════════════════════════════════════════════════════════════
+
+  【2026/07】チャンピオンズミーティングの因子周回（先行）
+    https://xn--gck1f423k.xn--1bvt37a.tools/race/vsevents/chm/factor/leader
+
+  ウマ娘 因子周回補助ツールについて｜アイビー - note
+    https://note.com/ib0013/n/n69321859c7b0
+
+  ウマ娘設計図
+    https://design.u-ma.org
+
+  いつも因子周回デッキを考えるのが面倒 そんな方にオススメの新機能
+    https://x.com/u__tools/status/1839940045475852398
+
+  因子ループ検索 - umasagashi
+    https://umasagashi.pages.dev/loop
+
+  【ウマ娘】フレンド募集掲示板｜因子9&完凸サポカ検索機能付き
+    https://gamerch.com/umamusume/228638
+
+  社内Wikiのおすすめツールとは？無料で使えるおすすめOSS比較6選
+    https://www.designet.co.jp/ossinfo/selection/office-wiki-tools.html
+
+  おまかせ育成で始める限界因子周回のすヽめ【ウマ娘オープンリーグ攻略】
+    https://note.com/sweet_exp/n/ncb574e763f99
+
+════════════════════════════════════════════════════════════════════════════════
+  日本ツール（相性） (9站)
+════════════════════════════════════════════════════════════════════════════════
+
+  相性値（合計）ランキング | U-tools（ウマ娘攻略ツール集）
+    https://xn--gck1f423k.xn--1bvt37a.tools/characters/rankings/succession/total
+
+  相性計算機 | ウマ娘 - GameTora
+    https://gametora.com/ja/umamusume/compatibility
+
+  マルゼンスキーの相性計算ツール | U-tools（ウマ娘攻略ツール集）
+    https://xn--gck1f423k.xn--1bvt37a.tools/characters/maruzensky/succession/simulator
+
+  相性計算機はコチラ
+    https://x.com/u__tools/status/1436174965246554114
+
+  ウマ娘相性表
+    https://mee1080.github.io/umaishow
+
+  Affinity Calculate - Umamusume DB
+    https://uma.pure-db.com/affinity-calculator
+
+  ウマ娘育成必勝ガイド｜相性計算で継承効率を最大化する方法
+    https://games.appmatch.jp/gamewiki/umamusume/1325457827-207
+
+  [B!] ウマ娘における相性計算【厳密版】とそれを構成する関係性
+    https://b.hatena.ne.jp/entry/s/xn--gck1f423k.xn--1bvt37a.tools/announcements/4
+
+  ウマ娘相性ツール | ホーム
+    https://umamusumeaisyou.com
+
+════════════════════════════════════════════════════════════════════════════════
+  日本ツール（その他） (37站)
+════════════════════════════════════════════════════════════════════════════════
+
+  U-tools（ウマ娘攻略ツール集）
+    https://xn--gck1f423k.xn--1bvt37a.tools
+
+  レース関連ツール一覧 | U-tools（ウマ娘攻略ツール集）
+    https://xn--gck1f423k.xn--1bvt37a.tools/race
+
+  【ウマ娘／無課金】育成で重宝するお役立ちツールや  - ツクモガタリ
+    https://tsukumogatari.hatenablog.com/entry/2022/01/22/190000
+
+  Uma Musume Tier List
+    https://euophrys.github.io/uma-tiers
+
+  ウマ娘ラボ | ウマ娘攻略情報ブログ
+    https://umamusumelabo.com
+
+  育成関連ツール一覧 | U-tools（ウマ娘攻略ツール集）
+    https://xn--gck1f423k.xn--1bvt37a.tools/training
+
+  スキル一覧 | U-tools（ウマ娘攻略ツール集）
+    https://xn--gck1f423k.xn--1bvt37a.tools/skills
+
+  スキル検索 ｜ ウマ娘 検索ツール - GamexTool.com
+    https://gamextool.com/umamusume/sk_select
+
+  全スキルの一覧 | ウマ娘 - GameTora
+    https://gametora.com/ja/umamusume/skills
+
+  Umamusume DB
+    https://uma.pure-db.com
+
+  ウマ娘 - GameTora
+    https://gametora.com/ja/umamusume
+
+  フレンド検索 - ウマ娘DB
+    https://uma.pure-db.com/ja-jp
+
+  お役立ちリンク集 - ウマ娘ラボラボ
+    https://paperable.jp/useful-links
+
+  創作物 - yuki0311.com
+    https://blog.yuki0311.com/category/creation
+
+  【ウマ娘】強いフレンドの探し方は？【育成】【まとめ】 - ゆきろぐ
+    https://www.snow-lucky.com/uma-friend
+
+  【2026/07】チャンピオンズミーティングの有効キャラ - U-tools
+    https://xn--gck1f423k.xn--1bvt37a.tools/race/vsevents/chm/effects
+
+  馬娘事件簿
+    https://umaevents.io
+
+  Training Event Helper | Uma Musume - GameTora
+    https://gametora.com/umamusume/training-event-helper
+
+  便利ツール - おんJウマ娘wiki
+    https://onj-umamusume.game-info.wiki/d/%CA%D8%CD%F8%A5%C4%A1%BC%A5%EB
+
+  社内wikiツールおすすめ15選。4つの社内浸透策や無料ツールも
+    https://www.aspicjapan.org/asu/article/375
+
+  This was a pretty wild situation I saw on the Umamusume Wiki that at
+    https://www.instagram.com/reel/DZ726pFO1j9
+
+  Uma Musume Pretty Derby - Wikidata
+    https://www.wikidata.org/wiki/Q29034274
+
+  Umamusume: Pretty Derby - PCGamingWiki PCGW
+    https://www.pcgamingwiki.com/wiki/Umamusume:_Pretty_Derby
+
+  馬娘小幫手- Free download and install on Windows | Microsoft Store
+    https://apps.microsoft.com/detail/9nwc1tlj59js
+
+  【ウマ娘マクロツール】ウマ娘プリティーダービー育成自動化
+    https://xn--pckzexb444yjb4c.xn--sckjr6lna2c0ge0019eusa0432b.com/umamusume_macro
+
+  ウマ娘サポートカードデータベース - ゆるげーまーぶ ウマ娘攻略まとめ
+    https://yurugamer.info/umamusume-db
+
+  サポートカード検索 ｜ ウマ娘 検索ツール - GamexTool.com
+    https://gamextool.com/umamusume/sp_select
+
+  【ウマ娘】SSR サポートカード一覧 検索【プリティーダービー】 - れぺぱん
+    https://www.price-shopping.com/entry/umamusume-list-of-ssr-support-cards
+
+  ウマ娘サポートカード一覧・評価ランキング ウマサポ² 【ウマ娘プリティーダービー攻略】
+    https://playershi.com/uma_support/support
+
+  ウマ娘DB - ウマ娘プリティーダービー完全データベース | UmamusumeDB
+    https://umamusumedb.com/ja
+
+  サポートカード一覧 | U-tools（ウマ娘攻略ツール集）
+    https://xn--gck1f423k.xn--1bvt37a.tools/supports
+
+  【ウマ娘】イベント選択肢チェッカー（逆引き検索ツール） - ゲーム
+    https://jp.pinterest.com/pin/919156605168948656
+
+  【ウマ娘】育成イベントチェッカー（選択肢逆引きツール
+    https://gamerch.com/umamusume/event-checker
+
+  【マニュアル】ウマ娘プリティーダービー自動化マクロセット
+    https://xn--pckzexb444yjb4c.xn--sckjr6lna2c0ge0019eusa0432b.com/umamusume_macro/manual
+
+  ウマ娘自動化マクロツール
+    https://sites.google.com/view/itpertnersinfotopumamusume/page
+
+  【一ヶ月】ウマ娘自動育成周回マクロツール【シ - Yahoo!オークション
+    https://auctions.yahoo.co.jp/jp/auction/t1041191858
+
+  umapyoi.net - Umamusume Database
+    https://umapyoi.net
+
+════════════════════════════════════════════════════════════════════════════════
+  日本コミュニティ (16站)
+════════════════════════════════════════════════════════════════════════════════
+
+  U-tools＠ウマ娘攻略ツール集 (@u__tools) / Posts / X
+    https://x.com/u__tools
+
+  【ウマ娘】個人的便利サイト、リンクまとめ｜ピッロ - note
+    https://note.com/prigeterpirro/n/nb3f9c9aa40a3
+
+  この攻略サイトが凄すぎてもやししか食べられません【ウマ娘】
+    https://www.youtube.com/watch
+
+  【2025年7月版】ウマ娘スキルシミュレーターver.4.9.0の紹介と
+    https://note.com/uma_analysis66/n/ndd3aa59f4187
+
+  ウマ娘攻略@GameWith (@umamusume_GW) / Posts / X
+    https://x.com/umamusume_GW
+
+  Umamusume: Pretty Derby (@umamusume_eng) / Posts / X - Twitter
+    https://x.com/umamusume_eng
+
+  【ツール】ウマ娘の電卓を更新しました。【電卓】｜しなちく - note
+    https://note.com/chic_allium8227/n/n58baeaffc5f6
+
+  ウマ娘DB（高機能フレンドDB） - Twitter
+    https://x.com/umamusume_db/with_replies
+
+  - YouTube
+    https://www.youtube.com/post/UgkxHAdq4LaexQW4TYGforTrM3vV7XimWlDt
+
+  ウマ娘DB（高機能フレンドDB） (@umamusume_db) / Posts / X
+    https://x.com/umamusume_db
+
+  ウマ娘プロジェクト公式アカウント (@uma_musu) / Posts / X
+    https://x.com/uma_musu
+
+  Korean Umamusume was once Sued By It's Players - YouTube
+    https://www.youtube.com/shorts/R86EAX4pzhg
+
+  新機能追加   GameWithのイベント選択肢チェッカーに、使用する
+    https://x.com/umamusume_GW/status/1374950789236465664
+
+  ウマ娘自動育成周回マクロツール、初のクラウドゲームマクロ - note
+    https://note.com/umakurgame/n/n31a124cce354
+
+  ウマ娘自動育成マクロツール
+    https://x.com/mimitoramann/status/1486631581691551745
+
+  【自作ツール】ウマ娘スキルシミュレーターver.4.0の紹介と使い方｜しらす丼+α - Note
+    https://note.com/uma_analysis66/n/nf28500c27b13
+
+════════════════════════════════════════════════════════════════════════════════
+  English Resources (20站)
+════════════════════════════════════════════════════════════════════════════════
+
+  ウマ娘 プリティダービー 攻略 Wiki: ウマ娘 プリティーダービー攻略有志
+    https://umamusume.wikiru.jp
+
+  Umamusume: Pretty Derby - Reddit
+    https://www.reddit.com/r/UmaMusume
+
+  Umamusume: Pretty Derby - Discord
+    https://discord.com/invite/umamusume-eng
+
+  Game - Umamusume Wiki - Fandom
+    https://umamusume.fandom.com/wiki/Game
+
+  Umamusume DBやChronoGenesisのようなウェブサイトは - Reddit
+    https://www.reddit.com/r/UmaMusume/comments/1o2vep5/how_are_websites_like_umamusume_db_and
+
+  r/UmamusumeGame - Reddit
+    https://www.reddit.com/r/UmamusumeGame
+
+  Some useful website : r/UmamusumeGame - Reddit
+    https://www.reddit.com/r/UmamusumeGame/comments/1p6b4vx/some_useful_website
+
+  A gameplay focused subreddit for Umamusume : r/gachagaming
+    https://www.reddit.com/r/gachagaming/comments/1mh5ruv/promo_rumamusumegame_a_gameplay_focused_subreddit
+
+  Good guides or sites for guides? : r/UmaMusume - Reddit
+    https://www.reddit.com/r/UmaMusume/comments/11bh8n1/good_guides_or_sites_for_guides
+
+  UmamusumeGame - Reddit
+    https://www.reddit.com/r/UmamusumeGame/about
+
+  How do yall feel about the current game state? : r/UmaMusume
+    https://www.reddit.com/r/UmaMusume/comments/1nkkwse/how_do_yall_feel_about_the_current_game_state
+
+  Uma FAQs and resources for new players : r/UmaMusume - Reddit
+    https://www.reddit.com/r/UmaMusume/comments/1k9qhie/uma_faqs_and_resources_for_new_players
+
+  How to REROLL in Uma Musume Pretty Derby - Reddit
+    https://www.reddit.com/r/UmaMusume/comments/1lkr3ik/how_to_reroll_in_uma_musume_pretty_derby
+
+  Uma Musume Guide For Absolute Beginners - GameTora
+    https://gametora.com/umamusume/beginners-guide
+
+  Is there a way to translate the game to english? : r/UmaMusume
+    https://www.reddit.com/r/UmaMusume/comments/nlylve/is_there_a_way_to_translate_the_game_to_english
+
+  En.Namu.Wiki はどれくらい良いのか？ : r/UmaMusume - Reddit
+    https://www.reddit.com/r/UmaMusume/comments/1p5xxv6/ennamuwiki_how_good_is_it
+
+  r/gachagaming - Uma Musume Pretty Derby - Korean version released
+    https://www.reddit.com/r/gachagaming/comments/vgaf4w/uma_musume_pretty_derby_korean_version_released
+
+  賽馬娘Pretty Derby | RekoWiki備份站(元New Komica Wiki) - Fandom
+    https://newkomica-kari.fandom.com/zh-tw/wiki/%E8%B3%BD%E9%A6%AC%E5%A8%98_Pretty_Derby
+
+  賽馬娘Pretty Derby繁體中文版 - Discord
+    https://discord.com/invite/umakomoejoy
+
+  Open-Source Community API For Uma Musume Mobile Game - Reddit
+    https://www.reddit.com/r/UmaMusume/comments/nyovzd/opensource_community_api_for_uma_musume_mobile
+
+════════════════════════════════════════════════════════════════════════════════
+  中文资源 (15站)
+════════════════════════════════════════════════════════════════════════════════
+
+  【賽馬娘】  3個台服新手必收藏的實用工具  不求人資料最齊全的網站
+    https://www.koc.com.tw/archives/448532
+
+  【攻略】【賽馬娘Pretty Derby】「繁中版」攻略統整！ - 哈啦區
+    https://forum.gamer.com.tw/C.php
+
+  攻略- 赛马娘WIKI_BWIKI - bilibili游戏中心- WIKI
+    https://wiki.biligame.com/umamusume/%E6%94%BB%E7%95%A5
+
+  【赛马娘攻略】 赛马娘常用网站分享
+    https://www.bilibili.com/video/BV12u411y7ax
+
+  賽馬娘Pretty Derby热门攻略 - TapTap
+    https://www.taptap.cn/app/231190/strategy/collection/0
+
+  赛马娘PrettyDerby NGA玩家社区NGA玩家社区
+    https://bbs.nga.cn/thread.php
+
+  首页 - 赛马娘WIKI_BWIKI_哔哩哔哩
+    https://wiki.biligame.com/umamusume/%E9%A6%96%E9%A1%B5
+
+  賽馬娘 - 維基大典
+    https://zh-classical.wikipedia.org/wiki/%E8%B3%BD%E9%A6%AC%E5%A8%98
+
+  赛马娘Pretty Derby - 萌娘百科万物皆可萌的百科全书
+    https://zh.moegirl.org.cn/%E8%B5%9B%E9%A9%AC%E5%A8%98_Pretty_Derby
+
+  支援卡对比工具 - bilibili游戏中心- WIKI
+    https://wiki.biligame.com/umamusume/%E6%94%AF%E6%8F%B4%E5%8D%A1%E5%AF%B9%E6%AF%94%E5%B7%A5%E5%85%B7
+
+  赛马娘图鉴
+    https://www.gamekee.com/smn
+
+  賽馬娘Pretty Derby - 維基百科，自由的百科全書
+    https://zh.wikipedia.org/wiki/%E8%B3%BD%E9%A6%AC%E5%A8%98_Pretty_Derby
+
+  賽馬娘 - GameTora
+    https://gametora.com/zh-tw/umamusume
+
+  賽馬娘Pretty Derby官方網站
+    https://uma.komoejoy.com
+
+  繁中育成工具 - bilibili游戏中心- WIKI
+    https://wiki.biligame.com/umamusume/%E7%B9%81%E4%B8%AD%E8%82%B2%E6%88%90%E5%B7%A5%E5%85%B7
+
+════════════════════════════════════════════════════════════════════════════════
+  한국어 자료 (3站)
+════════════════════════════════════════════════════════════════════════════════
+
+  ウマムスメプリティーダービー - ナムウィキ
+    https://ja.namu.wiki/w/%EC%9A%B0%EB%A7%88%EB%AC%B4%EC%8A%A4%EB%A9%94%20%ED%94%84%EB%A6%AC%ED%8B%B0%20%EB%8D%94%EB%B9%84
+
+  Umamusume Wiki
+    https://www.wikiarchives.space/index.php
+
+  Uma Musume Pretty Derby - NamuWiki
+    https://en.namu.wiki/w/%EC%9A%B0%EB%A7%88%EB%AC%B4%EC%8A%A4%EB%A9%94%20%ED%94%84%EB%A6%AC%ED%8B%B0%20%EB%8D%94%EB%B9%84
+
+════════════════════════════════════════════════════════════════════════════════
+  GitHub Projects (44站)
+════════════════════════════════════════════════════════════════════════════════
+
+  daftuyda/UmaTools: A website tool for Umamusume - GitHub
+    https://github.com/daftuyda/UmaTools
+
+  quantumxiaol/umamusume-web-crawler: 从萌娘百科和Biligame wiki
+    https://github.com/quantumxiaol/umamusume-web-crawler
+
+  umamusume · GitHub Topics
+    https://github.com/topics/umamusume
+
+  uma-musume · GitHub Topics
+    https://github.com/topics/uma-musume
+
+  Magody/Umaplay - Umamusume Auto Train - GitHub
+    https://github.com/Magody/Umaplay
+
+  NET CLI implementation of rockisch's umamusu-utils project to download
+    https://github.com/SimpleSandman/UmaMusumeToolbox
+
+  janelheglin41528060767/umatomusume-latest  - GitHub
+    https://github.com/janelheglin41528060767/umatomusume-latest
+
+  GitHub - GitHub
+    https://github.com/MarshmallowAndroid/UmamusumeExplorer
+
+  KevinVG207/UmaLauncher: Uma Launcher - Companion software to
+    https://github.com/KevinVG207/UmaLauncher
+
+  GitHub - akarindt/UmatoMusume: Windows desktop application that
+    https://github.com/akarindt/UmatoMusume
+
+  steve1316/uma-android-automation: Android application written in Kotli
+    https://github.com/steve1316/uma-android-automation
+
+  Model: line-corporation/japanese-large-lm
+    https://github.com/pfnet-research/pfgen-bench/blob/main/result/line-corporation/japanese-large-lm-3.6b/35ef4d4/README.md
+
+  README.md - riverar/wsa-app-compatibility - GitHub
+    https://github.com/riverar/wsa-app-compatibility/blob/master/README.md
+
+  Model: line-corporation/japanese-large-lm
+    https://github.com/pfnet-research/pfgen-bench/blob/main/result/line-corporation/japanese-large-lm-3.6b-instruction-sft/809c403/README.md
+
+  Model: augmxnt/shisa-7b-v1 - GitHub
+    https://github.com/pfnet-research/pfgen-bench/blob/main/result/augmxnt/shisa-7b-v1/bba59dd/README.md
+
+  Eval bug: Gemma vision head (possibly Siglip) yields garbage on
+    https://github.com/ggml-org/llama.cpp/issues/14469
+
+  GitHub - WSABuilds/WSABuildsTest
+    https://github.com/WSABuilds/WSABuildsTest
+
+  Meaning of columns - GitHub Gist
+    https://gist.github.com/fasiha/1340015b28163c607278cf7d93c0a7ea
+
+  cirosantilli/china-dictatroship-7 - GitHub
+    https://github.com/cirosantilli/china-dictatroship-7
+
+  new_categorys.json - sonoisa/pasa - GitHub
+    https://github.com/sonoisa/pasa/blob/master/pasa/json/new_categorys.json
+
+  Model: CohereForAI/aya-23-8B - GitHub
+    https://github.com/pfnet-research/pfgen-bench/blob/main/result/CohereForAI/aya-23-8B/497d22d/README.md
+
+  0999312/umapyoi: A "Uma Musume Pretty Derby" theme  - GitHub
+    https://github.com/0999312/umapyoi
+
+  rockisch/umamusu-utils: Utilities for handling Uma Musume files - GitH
+    https://github.com/rockisch/umamusu-utils
+
+  LegifyX/umalator-ocr: Uma musume Veteran Horse to  - GitHub
+    https://github.com/LegifyX/umalator-ocr
+
+  GitHub - shiyuzi-ship-it/umamusumedb · GitHub
+    https://github.com/tianyu19920816/umamusumedb
+
+  umamusu-utils/main.py at master · rockisch/umamusu-utils · GitHub
+    https://github.com/rockisch/umamusu-utils/blob/master/main.py
+
+  Zheng Syameimaru 0999312 - GitHub
+    https://github.com/0999312
+
+  Rimworld output log published using HugsLib · GitHub - Gist
+    https://gist.github.com/HugsLibRecordKeeper/f1471cb31d9e170a9d360844a493299e
+
+  Umaplay/dev_play.ipynb at main - GitHub
+    https://github.com/Magody/Umaplay/blob/main/dev_play.ipynb
+
+  umapyoi/.gitignore at 1.20.1 - GitHub
+    https://github.com/0999312/umapyoi/blob/1.20.1/.gitignore
+
+  Rimworld output log published using HugsLib · GitHub
+    https://gist.github.com/HugsLibRecordKeeper/ab54258ed27b4b870ae7551fbd54ba08
+
+  GitHub - LeadRDRK/Carrotless: umamusume-localify for Android
+    https://github.com/LeadRDRK/Carrotless
+
+  UmamusumeResponseAnalyzer - GitHub
+    https://github.com/UmamusumeResponseAnalyzer
+
+  UmamusumeResponseAnalyzer - GitHub
+    https://github.com/UmamusumeResponseAnalyzer/UmamusumeResponseAnalyzer
+
+  Issues · UmamusumeResponseAnalyzer
+    https://github.com/UmamusumeResponseAnalyzer/UmamusumeResponseAnalyzer/issues
+
+  README.md - GitHub
+    https://github.com/UmamusumeResponseAnalyzer/UmamusumeResponseAnalyzer/blob/master/README.md
+
+  awesome-japanese-nlp-resources - GitHub
+    https://github.com/taishi-i/awesome-japanese-nlp-resources/blob/main/docs/huggingface.md
+
+  awesome-japanese-nlp-resources - GitHub
+    https://github.com/taishi-i/awesome-japanese-nlp-resources/blob/main/docs/huggingface.en.md
+
+  Rimworld output log published using HugsLib · GitHub
+    https://gist.github.com/HugsLibRecordKeeper/98e47c320cecb934beb0818cd696787a
+
+  GitHub - amate/UmaUmaCruise: このソフトは、自動でDMM版ウマ娘の
+    https://github.com/amate/UmaUmaCruise
+
+  most common passwords of 2022 - according to the Geico  - GitHub Gist
+    https://gist.github.com/ruevaughn/2bdeb32d2248203bc8d7e315e32c97f0
+
+  SimpleSandman - GitHub
+    https://github.com/SimpleSandman
+
+  SimpleSandman/UmaMusumeAPI: Community API based on Uma
+    https://github.com/SimpleSandman/UmaMusumeAPI
+
+  Umamusume-Icarus/README.md at main - GitHub
+    https://github.com/EdenUmaBots/Umamusume-API-Eden-Bot/blob/main/README.md
+
+════════════════════════════════════════════════════════════════════════════════
+  Hachimi/URA Plugin (13站)
+════════════════════════════════════════════════════════════════════════════════
+
+  Kisegami/Uma-Event-Helper - GitHub
+    https://github.com/Kisegami/Uma-Event-Helper
+
+  GitHub - noccu/umamusu-translate: A toolset & patch for translating
+    https://github.com/noccu/umamusu-translate
+
+  middlered/UmaEnhance: Umamusume (ウマ娘) Plugin  - GitHub
+    https://github.com/middlered/UmaEnhance
+
+  umamusu-translate/docs/data-layout.md at master - GitHub
+    https://github.com/noccu/umamusu-translate/blob/master/docs/data-layout.md
+
+  UmaTL's English translation repository for Umamusume  - GitHub
+    https://github.com/UmaTL/hachimi-tl-en
+
+  Hachimi - GitHub
+    https://github.com/Hachimi-Hachimi/Hachimi
+
+  Linux support clarification · Issue #83 · Hachimi-Hachimi/Hachimi - Gi
+    https://github.com/Hachimi-Hachimi/Hachimi/issues/83
+
+  Hachimi crashes on latest DMM version · Issue #84 - GitHub
+    https://github.com/Hachimi-Hachimi/Hachimi/issues/84
+
+  LeadRDRK/UmaPatcher: Honse Game's Hachimi mod patching tool
+    https://github.com/LeadRDRK/UmaPatcher
+
+  Releases · UmaTL/hachimi-tl-en - GitHub
+    https://github.com/UmaTL/hachimi-tl-en/releases
+
+  Ghost Touch · Issue #86 - GitHub
+    https://github.com/Hachimi-Hachimi/Hachimi/issues/86
+
+  Hachimi no longer working after recent update · Issue #95 - GitHub
+    https://github.com/Hachimi-Hachimi/Hachimi/issues/95
+
+  Releases · Hachimi-Hachimi/Hachimi - GitHub
+    https://github.com/Hachimi-Hachimi/Hachimi/releases
+
+════════════════════════════════════════════════════════════════════════════════
+  合计: 215 个网站
+════════════════════════════════════════════════════════════════════════════════
+
+★ 重点推荐:
+  因子规划 → https://design.u-ma.org (ウマ娘設計図)
+  相性精确计算 → https://xn--gck1f423k.xn--1bvt37a.tools/announcements/4
+  因子保底机制 → @shoppo_ura: 6★=40%, 12★=100%
+  白因子概率 → https://aoneko-uma.fanbox.cc/posts/4442768
+  英文指南 → https://www.umareference.com
+  Hachimi → https://github.com/noccu/umamusu-translate
