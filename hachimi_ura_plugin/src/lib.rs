@@ -1,4 +1,4 @@
-//! URA Plugin v3.24.13
+//! URA Plugin v3.24.14
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -4685,6 +4685,9 @@ unsafe fn read_summary_inner_impl() -> String {
     // It is not assumed that a particular card is always in a fixed slot.
     let mut support_command_by_position: std::collections::HashMap<i32, i32> =
         std::collections::HashMap::new();
+    /// ★ v3.24.14: position → bond_threshold from MasterDB unique_effect
+    let mut bond_threshold_by_position: std::collections::HashMap<i32, i32> =
+        std::collections::HashMap::new();
 
     // First collect equipped (position, support_card_id) pairs.
     let mut equipped_support_cards: Vec<(i32, i32)> = Vec::new();
@@ -4729,23 +4732,64 @@ unsafe fn read_summary_inner_impl() -> String {
     // Resolve each ordinary card's training specialty from MasterDB:
     //
     // command_id=0 is intentionally retained as an unclassified special card.
+    //
+    // ★ v3.24.14: Also read bond_threshold from support_card_unique_effect.
+    //   type_0=101 → value_0 = bond threshold for unique effect / friendship training.
+    //   Cards without unique_effect_id get threshold = i32::MAX (never shines).
     log_predict_step("S:support mdb before");
-    if let Some(mdb_path) = find_mdb_path() {
-        if let Ok(connection) =
-            Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        {
-            if let Ok(mut statement) = connection.prepare(
-                "SELECT command_id \
-                 FROM support_card_data \
-                 WHERE id = ?1",
-            ) {
-                for &(position, support_card_id) in &equipped_support_cards {
-                    let result = statement.query_row([support_card_id], |row| row.get::<_, i32>(0));
+    /// position → (command_id, bond_threshold)
+    static SUPPORT_CARD_INFO_CACHE: std::sync::Mutex<
+        Option<std::collections::HashMap<i32, (i32, i32)>>,
+    > = std::sync::Mutex::new(None);
 
-                    if let Ok(support_command_id) = result {
-                        support_command_by_position.insert(position, support_command_id);
+    // Try cache first; rebuild if empty.
+    let mut info_map: std::collections::HashMap<i32, (i32, i32)> =
+        SUPPORT_CARD_INFO_CACHE.lock().unwrap().clone().unwrap_or_default();
+
+    if info_map.is_empty() {
+        if let Some(mdb_path) = find_mdb_path() {
+            if let Ok(connection) =
+                Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            {
+                // Query command_id and unique effect threshold in one JOIN.
+                // type_0=101 is the bond-threshold marker in support_card_unique_effect.
+                if let Ok(mut statement) = connection.prepare(
+                    "SELECT sc.id, sc.command_id, \
+                     COALESCE(ue.value_0, 999999) AS threshold \
+                     FROM support_card_data sc \
+                     LEFT JOIN support_card_unique_effect ue \
+                       ON sc.unique_effect_id = ue.id AND ue.type_0 = 101 \
+                     WHERE sc.id = ?1",
+                ) {
+                    for &(position, support_card_id) in &equipped_support_cards {
+                        let result = statement.query_row([support_card_id], |row| {
+                            Ok((
+                                row.get::<_, i32>(0)?, // id
+                                row.get::<_, i32>(1)?, // command_id
+                                row.get::<_, i32>(2)?, // threshold
+                            ))
+                        });
+
+                        if let Ok((_id, support_command_id, threshold)) = result {
+                            support_command_by_position.insert(position, support_command_id);
+                            bond_threshold_by_position.insert(position, threshold);
+                            info_map.insert(support_card_id, (support_command_id, threshold));
+                        }
                     }
                 }
+
+                // Cache for next call.
+                if !info_map.is_empty() {
+                    *SUPPORT_CARD_INFO_CACHE.lock().unwrap() = Some(info_map.clone());
+                }
+            }
+        }
+    } else {
+        // Cache hit — populate from cache without DB access.
+        for &(position, support_card_id) in &equipped_support_cards {
+            if let Some(&(cmd_id, threshold)) = info_map.get(&support_card_id) {
+                support_command_by_position.insert(position, cmd_id);
+                bond_threshold_by_position.insert(position, threshold);
             }
         }
     }
@@ -4866,6 +4910,16 @@ unsafe fn read_summary_inner_impl() -> String {
                                         .map(|value| value.to_string())
                                         .unwrap_or_else(|| "null".to_string());
 
+                                    // ★ v3.24.14: Dynamic bond threshold from MasterDB.
+                                    //   threshold = support_card_unique_effect.value_0 (type_0=101)
+                                    //   Default 999999 if card has no unique effect.
+                                    //   Friend cards (友人卡) threshold = 60.
+                                    //   Some SSR cards threshold = 100.
+                                    let bond_threshold = bond_threshold_by_position
+                                        .get(&partner_id)
+                                        .copied()
+                                        .unwrap_or(999999);
+
                                     let is_shining: Option<bool> = if is_support_card {
                                         match (
                                             current_bond,
@@ -4882,7 +4936,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                                 ) {
                                                     // Ordinary Speed/Stamina/Power/Guts/Wisdom card.
                                                     Some(card_training) => Some(
-                                                        bond >= 80
+                                                        bond >= bond_threshold
                                                             && card_training == current_training,
                                                     ),
 
@@ -4901,6 +4955,15 @@ unsafe fn read_summary_inner_impl() -> String {
                                         None
                                     };
 
+                                    // ★ v3.24.14: Unique effect active = bond >= threshold.
+                                    //   Triggers on ANY training, not just得意训练.
+                                    //   Separate from is_shining (which requires training match).
+                                    let is_unique_active: Option<bool> = if is_support_card {
+                                        current_bond.map(|bond| bond >= bond_threshold)
+                                    } else {
+                                        None
+                                    };
+
                                     if is_support_card && is_shining.is_none() {
                                         shining_complete = false;
                                     }
@@ -4915,12 +4978,20 @@ unsafe fn read_summary_inner_impl() -> String {
                                         None => "null",
                                     };
 
+                                    let is_unique_json = match is_unique_active {
+                                        Some(true) => "true",
+                                        Some(false) => "false",
+                                        None => "null",
+                                    };
+
                                     partners_json.push(format!(
-                                        r#"{{"partner_id":{},"support_position":{},"current_bond":{},"is_shining":{},"bond_gain":null}}"#,
+                                        r#"{{"partner_id":{},"support_position":{},"current_bond":{},"is_shining":{},"is_unique_active":{},"bond_threshold":{},"bond_gain":null}}"#,
                                         partner_id,
                                         support_position,
                                         bond_json,
                                         is_shining_json,
+                                        is_unique_json,
+                                        bond_threshold,
                                     ));
                                 }
                             }
