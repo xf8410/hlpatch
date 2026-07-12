@@ -6130,7 +6130,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         .unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6529,6 +6529,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         debug_unique_skills()
     } else if path == "/debug/mdb_all_tables" {
         debug_mdb_all_tables()
+    } else if path == "/debug/mdb_schema_dump" {
+        debug_mdb_schema_dump()
     } else if path == "/debug/hint_gain" {
         debug_hint_gain()
     } else if path == "/debug/sc_effect" {
@@ -10746,6 +10748,166 @@ fn debug_mdb_all_tables() -> String {
         tables_json.join(","),
         cond_tables.len(),
         cond_details.join(",")
+    )
+}
+
+/// /debug/mdb_schema_dump — 一键扒取所有表名+schema+关键表前20行样本
+/// 专门为"纯安卓端无 Termux"场景设计，juece 调一次拿到全部信息
+fn debug_mdb_schema_dump() -> String {
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
+    };
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
+    };
+
+    // 1. 获取所有表名
+    let all_tables: Vec<String> =
+        match conn.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name") {
+            Ok(mut stmt) => stmt
+                .query_map([], |row| Ok(row.get::<_, String>(0).unwrap_or_default()))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect(),
+            Err(e) => return format!(r#"{{"error":"table_list_failed","detail":"{}"}}"#, e),
+        };
+
+    // 2. 筛选关键表（按关键词）
+    let key_keywords = [
+        "goal", "target", "race", "fan", "career", "turn", "program",
+        "condition", "saddle", "story", "event", "choice", "reward",
+        "skill", "hint", "chara", "card", "support", "relation",
+        "succession", "inherit", "factor", "gauge", "training",
+        "single_mode", "text_data", "grade", "rank", "point",
+    ];
+    let key_lower = |t: &str| t.to_lowercase();
+    let is_key_table = |name: &str| {
+        let nl = key_lower(name);
+        key_keywords.iter().any(|k| nl.contains(k))
+    };
+
+    // 3. 对关键表: schema + 前20行
+    let mut tables_json: Vec<String> = Vec::new();
+    for name in &all_tables {
+        let safe_name = name.replace("]", "]]");
+        let row_count: i32 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM [{}]", safe_name), [], |r| {
+                r.get(0)
+            })
+            .unwrap_or(0);
+
+        let is_key = is_key_table(name);
+
+        // schema
+        let schema_json: String = if is_key {
+            match conn.prepare(&format!("PRAGMA table_info([{}])", safe_name)) {
+                Ok(mut stmt) => {
+                    let cols: Vec<String> = stmt
+                        .query_map([], |row| {
+                            Ok(format!(
+                                r#"{{"name":"{}","type":"{}","notnull":{}}}"#,
+                                json_escape(&row.get::<_, String>(1).unwrap_or_default()),
+                                json_escape(&row.get::<_, String>(2).unwrap_or_default()),
+                                row.get::<_, i32>(3).unwrap_or(0),
+                            ))
+                        })
+                        .unwrap()
+                        .filter_map(|r| r.ok())
+                        .collect();
+                    format!("[{}]", cols.join(","))
+                }
+                Err(_) => "[]".to_string(),
+            }
+        } else {
+            "[]".to_string()
+        };
+
+        // sample rows (only for key tables, max 20)
+        let sample_json: String = if is_key && row_count > 0 {
+            match conn.prepare(&format!(
+                "SELECT * FROM [{}] LIMIT 20",
+                safe_name
+            )) {
+                Ok(mut stmt) => {
+                    let col_count = stmt.column_count().unwrap_or(0);
+                    // Get column names
+                    let col_names: Vec<String> = (0..col_count)
+                        .map(|i| stmt.column_name(i).unwrap_or("").to_string())
+                        .collect();
+                    let rows: Vec<String> = stmt
+                        .query_map([], |row| {
+                            let mut pairs: Vec<String> = Vec::new();
+                            for ci in 0..col_count {
+                                let cn = col_names.get(ci).cloned().unwrap_or_default();
+                                let int_val: Option<i64> = row.get(ci).ok();
+                                let val = if let Some(v) = int_val {
+                                    v.to_string()
+                                } else {
+                                    let str_val: Option<String> = row.get(ci).ok();
+                                    match str_val {
+                                        Some(s) => format!(r#""{}""#, json_escape(&s)),
+                                        None => {
+                                            let float_val: Option<f64> = row.get(ci).ok();
+                                            match float_val {
+                                                Some(f) => format!("{}", f),
+                                                None => "null".to_string(),
+                                            }
+                                        }
+                                    }
+                                };
+                                pairs.push(format!(r#""{}":{}"#, json_escape(&cn), val));
+                            }
+                            Ok(format!(r#"{{{}}}"#, pairs.join(",")))
+                        })
+                        .unwrap()
+                        .filter_map(|r| r.ok())
+                        .collect();
+                    format!("[{}]", rows.join(","))
+                }
+                Err(_) => "[]".to_string(),
+            }
+        } else {
+            "[]".to_string()
+        };
+
+        tables_json.push(format!(
+            r#"{{"name":"{}","rows":{},"key":{},"schema":{},"sample":{}}}"#,
+            json_escape(name),
+            row_count,
+            is_key,
+            schema_json,
+            sample_json,
+        ));
+    }
+
+    // 4. 额外查询: single_mode_turn 的 race_entry_type 分布
+    let turn_dist: Vec<String> = match conn.prepare(
+        "SELECT race_entry_type, COUNT(*) FROM single_mode_turn GROUP BY race_entry_type ORDER BY race_entry_type"
+    ) {
+        Ok(mut stmt) => stmt
+            .query_map([], |row| {
+                Ok(format!(
+                    r#"{{"type":{},"count":{}}}"#,
+                    row.get::<_, i32>(0).unwrap_or(0),
+                    row.get::<_, i32>(1).unwrap_or(0),
+                ))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+
+    drop(conn);
+
+    format!(
+        r#"{{"ok":true,"total_tables":{},"key_table_count":{},"tables":[{}],"turn_race_entry_dist":[{}]}}"#,
+        all_tables.len(),
+        tables_json.iter().filter(|t| t.contains("\"key\":true")).count(),
+        tables_json.join(","),
+        turn_dist.join(","),
     )
 }
 
