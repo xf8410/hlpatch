@@ -1,129 +1,167 @@
-# 赛马娘 v2.28.5 逆向工程报告索引
+# hlpatch 逆向工程完整索引
 
-**生成时间**: 2026-07-11  
-**游戏版本**: v2.28.5 (日服)  
-**libil2cpp.so**: 209MB (ARM64, IL2CPP v31)  
-**数据源**: IL2CPP方法转储 (27,695类, 160,909方法) + hlpatch插件源码 (1,856行) + libil2cpp.so二进制
-
----
-
-## 文件列表
-
-### 主报告
-| 文件 | 大小 | 说明 |
-|---|---|---|
-| `master_analysis.md` | 33KB | **总报告** — 14剧本总览、核心数据路径、ID映射、支援卡、羁绊、训练、彩圈、角色、技能、比赛、事件、ObscuredInt加密、属性变化、AI评价 |
-| `master_db_sql_queries.md` | 27KB | Master数据库SQL查询模板 — 角色ID、支援卡ID、技能、训练效果、剧本机制等查询语句 |
-| `librs_offset_analysis.md` | 3.4KB | lib.rs已知偏移量分析 — 字段偏移、常量、映射表 |
-| `so_string_search.md` | 14KB | libil2cpp.so字符串搜索 — 8,901个字符串，按关键词分类 |
-| `all_classes_dump.md` | 49KB | 全量类名转储 — 按命名空间分类统计 |
-
-### 剧本报告 (14个)
-| 文件 | 剧本 | ID | 说明 |
-|---|---|---|---|
-| `scenario_01_URA.md` | URA育成シナリオ | 1 | 66个专用类，原始育成剧本 |
-| `scenario_02_TeamRace.md` | チームレース | 2 | 团队竞赛剧本 |
-| `scenario_03_Live.md` | ライブ | 3 | Live表演剧本 |
-| `scenario_04_Free.md` | フリー | 4 | 自由剧本 |
-| `scenario_05_Venus.md` | ヴィーナス | 5 | 维纳斯剧本 |
-| `scenario_06_Arc.md` | アーク | 6 | Arc剧本 |
-| `scenario_07_Sport.md` | スポーツ | 7 | 运动剧本 |
-| `scenario_08_Cook.md` | クック | 8 | 料理剧本 |
-| `scenario_09_Mecha.md` | メカ | 9 | 16个专用类，机甲剧本 |
-| `scenario_10_Legend.md` | レジェンド | 10 | 14个专用类，传说剧本 |
-| `scenario_11_Pioneer.md` | パイオニア/青春杯 | 11 | 11个专用类，青春/种田杯 |
-| `scenario_12_Onsen.md` | 温泉 | 12 | 15个专用类，温泉剧本 |
-| `scenario_13_Breeders.md` | ブリーダーズ/種田杯 | 13 | 10个专用类，育成者杯 |
-| `scenario_14_Ramen.md` | ラーメン/トゥインクル・ラーメン杯 | 14 | 16个专用类，拉面杯 |
-| `scenario_14_ramen_deep.md` | 拉面杯深度分析 | 14 | 97个类详细分析：Feeling、CheckPoint、Uraf、Tasting、Region、Command系统 |
-
-### 参考文件 (前次分析)
-| 文件 | 说明 |
-|---|---|
-| `uploaded_global_metadata_report.txt` | global-metadata.dat解析摘要 — 53,684类型定义, 336,729方法 |
-| `uploaded_il2cpp_analysis_report.txt` | IL2CPP全量分析 — 35个子项，含偏移和逻辑描述 |
-| `uploaded_il2cpp_class_dump.txt` | IL2CPP类名转储 — 11,499个类名 |
+**项目**: 赛马娘 v2.28.5 全量逆向分析
+**仓库**: https://github.com/xf8410/hlpatch
+**更新日期**: 2026-07-12
 
 ---
 
-## 关键发现摘要
+## 一、逆向数据文件 (JSON)
 
-### ID映射系统
-- **CommandId**: 101=Speed, 102=Stamina, **103=Guts(非Power!)**, **105=Power(非104!)**, 106=Wisdom
-- **TargetType**: 1=Speed, 2=Stamina, 3=Guts, 4=Power, 5=Wiz, 10=HP, 20=Motivation, 30=SkillPt
-- **Motivation**: 5=Best, 4=Good, 3=Normal, 2=Bad, 1=Worst
-- **剧本ID**: 1=URA, 2=TeamRace, 3=Live, 4=Free, 5=Venus, 6=Arc, 7=Sport, 8=Cook, 9=Mecha, 10=Legend, 11=Pioneer, 12=Onsen, 13=Breeders, 14=Ramen
+### 支援卡
+| 文件 | 大小 | 内容 |
+|------|------|------|
+| `all_support_cards_full.json` | 1.8MB | 541张卡全属性(基本+effect_table全等级+unique_effect全等级) |
+| `all_special_unique_effects.md` | — | 44张特殊固有卡清单(type 30,102-122) |
+| `effect_type_mapping.md` | — | SupportCardEffectType枚举完整映射(type 1-32) |
+| `unique_effect_analysis.md` | — | 三层效果体系(面板/标准固有/特殊条件固有) |
 
-### 核心数据路径
-```
-WorkSingleModeData → WorkSingleModeCharaData (211 methods, 81 getters)
-  ├→ get_SupportCardArray() → SupportCardEntry[] (+0x10=position, +0x14=card_id, +0x18=limit_break, +0x20=partner_state)
-  ├→ get_EvaluationInfoArray() → EvaluationInfo[] (+0x10=target_id, +0x14=evaluation, +0x20=is_appear)
-  ├→ get_TrainingLevelInfoArray() → TrainingLevelInfo[] (+0x10=command_id, +0x14=level)
-  └→ get_HomeInfoData() → WorkSingleModeHomeInfoData
-       └→ CommandInfoArray → SingleModeCommandInfoData[]
-            ├→ get_CommandId() → ObscuredInt (101-106)
-            ├→ get_IsEnable() → ObscuredInt (0/1)
-            ├→ get_FailureRate() → ObscuredInt (%)
-            ├→ get_TrainingPartnerArray() → 训练伙伴列表
-            ├→ get_TipsEventPartnerArray() → 彩圈伙伴列表
-            └→ get_ParamsIncDecInfoArray() → SingleModeParamsIncDecInfoData[]
-                 ├→ get_TargetType() → ObscuredInt (1-30)
-                 └→ get_Value() → ObscuredInt
-```
+### 马娘
+| 文件 | 内容 |
+|------|------|
+| `all_chara_cards_complete.json` | 169角色/258换皮卡/805星级属性(★3-5)完整 |
+| `chara_relation_ranking.txt` | 高相性组合排列(8点28组/7点10组/2点150组) |
 
-### ObscuredInt加密
-```
-20 bytes inline: key(4) + hidden(4) + inited(4) + fake(4) + fakeActive(4)
-解密: actual = key ^ hidden
-共有 233 种 Obscured 类型
-```
+### 技能
+| 文件 | 内容 |
+|------|------|
+| `all_skill_and_factor_data.json` | 2099技能+技能升级条件+特殊条件+继承技能 |
 
-### 彩圈(Shining)判定
-```
-彩圈 = TipsEventPartnerArray.Length > 0
-条件(推断): bond ≥ 80 + support_card_type 匹配 CommandId + specialty 匹配
-```
+### 因子/继承
+| 文件 | 内容 |
+|------|------|
+| `succession_complete.json` | 因子(2517)+效果(6508)+相性(3037+7249成员)+种马(7450)+等级阈值+初始因子条件 |
 
-### 拉面杯(Scenario 14)核心机制
-- **Feeling系统**: 3种Feeling + SpecialFeeling，每种有FeelingId和RemainTurn
-- **CheckPoint**: 检查点类型 + 结果状态 + 进度点数 (CheckPointPt)
-- **Uraf**: 裏面效果系统 (UrafEffectType + UrafEffectState)
-- **Tasting(试食会)**: LastTastingInfo记录上次试食的Feeling数量和RegionId
-- **Region选择**: Junior/Classic/Senior各阶段选地区，AutoSelect支持
-- **CommandFeeling**: 每个训练指令关联FeelingId
-- **TrainingExec**: 记录BaseCommandId和ExecCount
-- **ReduceBaseTurn**: FeelingId关联的减少基础回合数
-- **ActiveEffect**: EffectCategory + EffectId + EffectValue
+### 事件
+| 文件 | 内容 |
+|------|------|
+| `all_event_data.json` | 支援卡事件(1178)+触发条件(478)+优先级(81)+加成(945)+启发(4919) |
+| `all_story_and_ramen_events.json` | 故事事件(19943)+角色固定(917)+拉面杯完整 |
 
-### 各剧本属性变化类 (WorkSingleModeChangeParameterInfoScenarioN)
-每个剧本有独立的属性变化子类，包含剧本特有的getter：
-- Scenario 10 (Legend): 18个getter (BuffGauge, FriendGauge, Masterly等)
-- Scenario 13 (Breeders): 12个getter (TeamMember, EnhancePoint, DreamPoint等)
-- Scenario 14 (Ramen): 7个getter (Feeling, CheckPoint, Uraf等)
-- Scenario 8 (Cook): 7个getter (Dish, Material, CarePoint等)
+### MDB 全量
+| 文件 | 大小 | 内容 |
+|------|------|------|
+| `mdb_table_catalog.json` | 165KB | 619张表完整目录(名称/行数/列名) |
+| `mdb_key_tables_export.json` | 4.4MB | 14张关键表(支援卡/训练/NPC/心情/拉面杯) |
+| `mdb_all_scenario_tables.json` | 583KB | 74张剧本专属表(6个剧本完整) |
+| `mdb_game_mode_tables.json` | 3.1MB | 80+张游戏模式表(champions/team/ultimate/collect/crane) |
+| `mdb_all_remaining_tables.json` | 6.9MB | 29张补充表(动画/语音/因子/技能/比赛) |
+| `mdb_export_a_g.json` | 60MB | A-G 开头的表全量(134张) |
+| `mdb_export_h_r.json` | 29MB | H-R 开头的表全量(162张) |
+| `mdb_export_s_z.json` | 67MB | S-Z 开头的表全量(323张) |
 
-### 特殊NPC (理事长/记者)
-- 通过 EvaluationInfo.target_id 识别
-- 理事长 → MiniDirector类系 (52方法)
-- 记者 → 相关Dialog类系
-- 非支援卡羁绊使用固定target_id
-
-### AI评价系统
-- 2801个评价值 (索引=总修正属性值, 值=评价分数)
-- 基础五维上限: [2300, 2200, 1800, 1400, 1400]
-- URA剧本78回合，其他72回合
+**MDB 合计: 619张表 / 524,170行 / 100%覆盖**
 
 ---
 
-## 限制说明
+## 二、逆向分析报告 (MD)
 
-1. **global-metadata.dat 未提取**: Cygames加密了metadata，APK中未找到明文。需要运行时Zygisk-Il2CppDumper提取
-2. **master.mdb 未提取**: Master数据库运行时从服务器下载，不在APK中
-3. **libil2cpp.so 字符串有限**: 游戏类名被IL2CPP metadata加密，SO中只有Unity引擎层字符串
-4. **字段偏移来源**: 来自lib.rs中实测验证的值，非静态分析结果
-5. **RNG系统**: _fixedTurnCharaSeed (offset 408) 的精确算法需ARM64反汇编确认
+### 核心机制
+| 文件 | 内容 |
+|------|------|
+| `training_gain_formula.md` | 训练增益完整公式(心情×干劲×友情×训练×人头) |
+| `mechanism_analysis.md` | 心情/逛街/伙伴/彩圈完整机制 |
+| `complete_call_chain.md` | 训练执行调用链(服务器端计算确认) |
+| `complete_analysis_summary.md` | 全部逆向成果总结 |
+
+### SO 反汇编
+| 文件 | 内容 |
+|------|------|
+| `so_complete_disasm_report.md` | 98MB代码全反汇编(179K函数/144K浮点) |
+| `so_deep_analysis.md` | SO深度分析(基址/函数地址/心情倍率搜索) |
+| `so_disasm_index_summary.json` | 反汇编索引摘要(179K函数/291万调用) |
+| `so_float_constants.txt` | 316个唯一浮点常量(adrp+ldr追踪) |
+| `so_disasm_analysis.md` | 初步反汇编分析 |
+| `so_string_search.md` | SO字符串搜索结果 |
+
+### APK 分析
+| 文件 | 内容 |
+|------|------|
+| `apk_complete_analysis.md` | APK完整分析(3801文件+native库+classes.dex) |
+| `injection_and_anticheat_analysis.md` | 反作弊+插件注入(241个IL2CPP API+_Cyan.dll) |
+| `packet_interception_analysis.md` | 服务器请求拦截(三个Hook点+SSL不需绕过) |
+
+### 三文件状态
+| 文件 | 内容 |
+|------|------|
+| `three_files_complete_status.md` | libil2cpp.so + global-metadata.dat + master.mdb 最终扒光状态 |
+
+### 剧本报告
+| 文件 | 内容 |
+|------|------|
+| `scenario_01_URA.md` ~ `scenario_14_Ramen.md` | 14个剧本的IL2CPP类分析 |
+| `scenario_14_ramen_deep.md` | 拉面杯深度分析 |
+
+### IL2CPP
+| 文件 | 内容 |
+|------|------|
+| `il2cpp_all_classes_by_category.json` | 27,695类按14分类导出(160,909方法) |
+| `il2cpp_key_classes_methods.txt` | 16个核心类方法+地址索引 |
+| `all_classes_dump.md` | 全量类名dump |
+
+### 工作报告
+| 文件 | 内容 |
+|------|------|
+| `WORK_REPORT.md` | 逆向工程工作报告 |
+| `master_analysis.md` | MasterDB分析 |
+| `master_db_sql_queries.md` | SQL查询模板 |
+| `librs_offset_analysis.md` | lib.rs偏移量分析 |
 
 ---
 
-*由 Nova ⚡ 基于hlpatch仓库逆向数据生成*
+## 三、工具脚本 (Python)
+
+| 文件 | 用途 |
+|------|------|
+| `analyze.py` | IL2CPP dump分析脚本 |
+| `extract_metadata.py` | global-metadata.dat解析器 |
+| `so_search_script.py` | SO字符串搜索脚本 |
+
+---
+
+## 四、IL2CPP 剧本映射
+
+| ID | 剧本 | 报告 |
+|----|------|------|
+| 1 | URA | scenario_01_URA.md |
+| 2 | 青春杯 | scenario_02_TeamRace.md |
+| 3 | LIVE | scenario_03_Live.md |
+| 4 | 自由赛 | scenario_04_Free.md |
+| 5 | 维纳斯 | scenario_05_Venus.md |
+| 6 | 开发者杯 | scenario_06_Arc.md |
+| 7 | 体育杯 | scenario_07_Sport.md |
+| 8 | 厨艺杯 | scenario_08_Cook.md |
+| 9 | 机甲杯 | scenario_09_Mecha.md |
+| 10 | 传奇杯 | scenario_10_Legend.md |
+| 11 | 开拓者杯 | scenario_11_Pioneer.md |
+| 12 | 温泉杯 | scenario_12_Onsen.md |
+| 13 | 育成者杯 | scenario_13_Breeders.md |
+| 14 | 拉面杯 | scenario_14_Ramen.md + scenario_14_ramen_deep.md |
+
+---
+
+## 五、关键结论
+
+1. **训练增益**: 服务器端计算，客户端只存储显示
+2. **心情倍率**: 公式计算 `1+0.1×(motiv-3)×(1+0.01×ganJing)`，不查表
+3. **彩圈判定**: 普通卡=bond+训练匹配 / 友人卡=不彩圈 / 团体卡=TipsEvent
+4. **反作弊**: _Cyan.dll(未知) + Google.Play.Integrity + libnative.so(SQLCipher+mbedTLS)
+5. **拦包**: 三个Hook点已实现(CompressRequest/Post/DecompressResponse)，SSL不需绕过
+6. **透视**: 能提前读取当前回合结果，不能预测未来
+7. **IL2CPP API**: 241个导出函数，可通过dlsym直接调用
+8. **G1因子**: 获取概率在服务器端，MDB只有因子定义不含概率
+
+---
+
+## 六、反汇编数据(未入git)
+
+| 路径 | 大小 | 内容 |
+|------|------|------|
+| `artifacts/disasm/` | 926MB | 95个ASM分块文件(90 il2cpp + 5 .text) |
+| `artifacts/disasm/index.json` | 143MB | 完整索引(函数/调用图/浮点/立即数) |
+| `artifacts/libil2cpp.so` | 209MB | 原始SO |
+| `artifacts/global-metadata.dat` | 44MB | 原始metadata |
+| `artifacts/libnative.so` | 2.5MB | Cygames native库(curl+sqlite+mbedTLS) |
+| `artifacts/libunity.so` | 18MB | Unity引擎 |
+
+*最后更新: 2026-07-12*
