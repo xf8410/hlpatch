@@ -1,0 +1,9026 @@
+[
+  {
+    "name": "announce_character",
+    "rows": 178,
+    "columns": [
+      "id",
+      "movie_id",
+      "can_end_second"
+    ]
+  },
+  {
+    "name": "announce_data",
+    "rows": 305,
+    "columns": [
+      "id",
+      "announce_type",
+      "announce_id",
+      "priority",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "announce_event",
+    "rows": 52,
+    "columns": [
+      "id",
+      "cue_name",
+      "cue_sheet_name",
+      "voice_text_asset",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "announce_support_card",
+    "rows": 127,
+    "columns": [
+      "id",
+      "type",
+      "cuts_pattern",
+      "support_card_id_a",
+      "support_card_id_b",
+      "support_card_id_c"
+    ]
+  },
+  {
+    "name": "audience_data",
+    "rows": 176,
+    "columns": [
+      "audience_id",
+      "chara_face_model",
+      "chara_skin_color",
+      "chara_hair_model",
+      "chara_hair_color",
+      "prop_id_1",
+      "prop_attach_node_name_type_1",
+      "prop_id_2",
+      "prop_attach_node_name_type_2",
+      "chara_height",
+      "shape",
+      "chara_bust_size",
+      "dress_id",
+      "dress_color_id"
+    ]
+  },
+  {
+    "name": "audience_dress_color_set",
+    "rows": 124,
+    "columns": [
+      "id",
+      "color_r1",
+      "color_r2",
+      "color_g1",
+      "color_g2",
+      "color_b1",
+      "color_b2",
+      "toon_color_r1",
+      "toon_color_r2",
+      "toon_color_g1",
+      "toon_color_g2",
+      "toon_color_b1",
+      "toon_color_b2"
+    ]
+  },
+  {
+    "name": "audience_hair_color_set",
+    "rows": 210,
+    "columns": [
+      "id",
+      "hair_color_r1",
+      "hair_color_r2",
+      "hair_color_g1",
+      "hair_color_g2",
+      "hair_color_b1",
+      "hair_color_b2",
+      "hair_toon_color_r1",
+      "hair_toon_color_r2",
+      "hair_toon_color_g1",
+      "hair_toon_color_g2",
+      "hair_toon_color_b1",
+      "hair_toon_color_b2",
+      "mayu_color_r1",
+      "mayu_color_r2",
+      "mayu_color_g1",
+      "mayu_color_g2",
+      "mayu_color_b1",
+      "mayu_color_b2",
+      "mayu_toon_color_r1",
+      "mayu_toon_color_r2",
+      "mayu_toon_color_g1",
+      "mayu_toon_color_g2",
+      "mayu_toon_color_b1",
+      "mayu_toon_color_b2",
+      "eye_color_r1",
+      "eye_color_r2",
+      "eye_color_g1",
+      "eye_color_g2",
+      "eye_color_b1",
+      "eye_color_b2"
+    ]
+  },
+  {
+    "name": "audience_impostor",
+    "rows": 192,
+    "columns": [
+      "scene_type",
+      "audience_group_id",
+      "season",
+      "weather",
+      "group_id",
+      "pattern_1",
+      "pattern_2",
+      "pattern_3",
+      "pattern_4",
+      "pattern_5",
+      "pattern_6",
+      "pattern_7",
+      "pattern_8",
+      "pattern_9",
+      "pattern_10",
+      "situation_type"
+    ]
+  },
+  {
+    "name": "audience_impostor_color_set",
+    "rows": 0,
+    "columns": [
+      "color_group_id",
+      "color",
+      "odds"
+    ]
+  },
+  {
+    "name": "audience_impostor_lottery",
+    "rows": 528,
+    "columns": [
+      "group_id",
+      "pattern",
+      "asset_id",
+      "odds"
+    ]
+  },
+  {
+    "name": "audio_cuesheet",
+    "rows": 12,
+    "columns": [
+      "id",
+      "cue_sheet",
+      "attribute"
+    ]
+  },
+  {
+    "name": "audio_ignored_cue_on_highspeed",
+    "rows": 7,
+    "columns": [
+      "id",
+      "cue_name",
+      "cue_sheet"
+    ]
+  },
+  {
+    "name": "audio_story_effect",
+    "rows": 18,
+    "columns": [
+      "id",
+      "effect_name",
+      "cue_name",
+      "cue_sheet",
+      "loop_set"
+    ]
+  },
+  {
+    "name": "available_skill_set",
+    "rows": 1810,
+    "columns": [
+      "id",
+      "available_skill_set_id",
+      "skill_id",
+      "need_rank"
+    ]
+  },
+  {
+    "name": "background_data",
+    "rows": 903,
+    "columns": [
+      "id",
+      "bg_id",
+      "bg_sub",
+      "cue_name",
+      "sheet_name",
+      "bus_param_set_name",
+      "pos_x",
+      "pos_y",
+      "width",
+      "height"
+    ]
+  },
+  {
+    "name": "background_offset_data",
+    "rows": 664,
+    "columns": [
+      "id",
+      "bg_id",
+      "bg_sub",
+      "offset_id",
+      "pos_x",
+      "pos_y",
+      "width",
+      "height"
+    ]
+  },
+  {
+    "name": "banner_data",
+    "rows": 994,
+    "columns": [
+      "id",
+      "banner_id",
+      "banner_image_id",
+      "type",
+      "group_id",
+      "transition",
+      "priority",
+      "condition_value",
+      "dialog_image_id",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "campaign_chara_story_schedule",
+    "rows": 3348,
+    "columns": [
+      "campaign_id",
+      "chara_id",
+      "story_id"
+    ]
+  },
+  {
+    "name": "campaign_cutt_data",
+    "rows": 1849,
+    "columns": [
+      "id",
+      "chara_id",
+      "campaign_id",
+      "dress_id",
+      "color_type",
+      "chara_no_change",
+      "trainer_gender_type",
+      "cut_id",
+      "cut_sub_id",
+      "motion_type",
+      "motion_rate"
+    ]
+  },
+  {
+    "name": "campaign_data",
+    "rows": 975,
+    "columns": [
+      "campaign_id",
+      "target_type",
+      "target_id",
+      "effect_type_1",
+      "effect_value_1",
+      "open_flag_id",
+      "user_show",
+      "disp_order",
+      "image_icon_id",
+      "transition_type",
+      "image_change",
+      "logo_type",
+      "start_time",
+      "end_time"
+    ]
+  },
+  {
+    "name": "campaign_n_present_bonus_data",
+    "rows": 243,
+    "columns": [
+      "id",
+      "target_type",
+      "card_id",
+      "count",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1"
+    ]
+  },
+  {
+    "name": "campaign_present_bonus_detail",
+    "rows": 68,
+    "columns": [
+      "id",
+      "campaign_id",
+      "card_id",
+      "count",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1",
+      "item_category_2",
+      "item_id_2",
+      "item_num_2"
+    ]
+  },
+  {
+    "name": "campaign_rental_support_card",
+    "rows": 15,
+    "columns": [
+      "id",
+      "campaign_rental_support_data_id",
+      "support_card_id",
+      "limit_break_count"
+    ]
+  },
+  {
+    "name": "campaign_rental_support_data",
+    "rows": 1,
+    "columns": [
+      "id",
+      "rental_limit",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "campaign_single_race_add_data",
+    "rows": 112,
+    "columns": [
+      "id",
+      "race_additional_id",
+      "race_program_id",
+      "race_additional_reward_id",
+      "reward_limit"
+    ]
+  },
+  {
+    "name": "campaign_single_race_add_reward",
+    "rows": 336,
+    "columns": [
+      "id",
+      "race_additional_reward_id",
+      "item_category",
+      "item_id",
+      "reward_type",
+      "reward_value",
+      "reward_rate"
+    ]
+  },
+  {
+    "name": "campaign_sp_present_bonus_data",
+    "rows": 243,
+    "columns": [
+      "id",
+      "target_type",
+      "card_id",
+      "count",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1",
+      "prop_id",
+      "location_id",
+      "motion_type",
+      "replace_index"
+    ]
+  },
+  {
+    "name": "campaign_story_data",
+    "rows": 16,
+    "columns": [
+      "id",
+      "campaign_id",
+      "condition_type",
+      "condition_value",
+      "story_id"
+    ]
+  },
+  {
+    "name": "campaign_swap_motion_data",
+    "rows": 101,
+    "columns": [
+      "id",
+      "chara_id",
+      "dress_id",
+      "cut_id",
+      "cut_sub_id",
+      "replace_index"
+    ]
+  },
+  {
+    "name": "campaign_target_scenario",
+    "rows": 1,
+    "columns": [
+      "id",
+      "target_id",
+      "single_mode_scenario_group_id"
+    ]
+  },
+  {
+    "name": "campaign_walking_chara",
+    "rows": 590,
+    "columns": [
+      "campaign_id",
+      "chara_id",
+      "location_1",
+      "location_2",
+      "location_3"
+    ]
+  },
+  {
+    "name": "campaign_walking_data",
+    "rows": 5,
+    "columns": [
+      "id",
+      "campaign_id",
+      "special_campaign_type",
+      "logo_id",
+      "map_id",
+      "icon_id_location_1",
+      "icon_id_location_2",
+      "icon_id_location_3",
+      "walking_limit",
+      "gauge_consume_num",
+      "gauge_max",
+      "gauge_up_singlemode",
+      "gauge_up_teamstadium",
+      "gauge_up_dailyrace",
+      "gauge_up_dailylegendrace",
+      "gauge_up_login"
+    ]
+  },
+  {
+    "name": "campaign_walking_friend",
+    "rows": 6,
+    "columns": [
+      "id",
+      "friend_list_id",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "campaign_walking_location",
+    "rows": 313,
+    "columns": [
+      "id",
+      "cut_id",
+      "cut_sub_id",
+      "material_id",
+      "background_data_id",
+      "bg_position_custom",
+      "bg_position_x",
+      "reward_set_id",
+      "love_point",
+      "friend_list_id",
+      "place_tail",
+      "place_position_x",
+      "place_position_y",
+      "place_color_main",
+      "place_color_sub",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "env_cue_name",
+      "env_cuesheet_name"
+    ]
+  },
+  {
+    "name": "campaign_walking_reward_set",
+    "rows": 66,
+    "columns": [
+      "id",
+      "reward_set_id",
+      "limit_num",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "card_data",
+    "rows": 260,
+    "columns": [
+      "id",
+      "chara_id",
+      "default_rarity",
+      "limited_chara",
+      "available_skill_set_id",
+      "talent_speed",
+      "talent_stamina",
+      "talent_pow",
+      "talent_guts",
+      "talent_wiz",
+      "talent_group_id",
+      "bg_id",
+      "get_piece_id",
+      "running_style"
+    ]
+  },
+  {
+    "name": "card_rarity_data",
+    "rows": 805,
+    "columns": [
+      "id",
+      "card_id",
+      "rarity",
+      "race_dress_id",
+      "skill_set",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "max_speed",
+      "max_stamina",
+      "max_pow",
+      "max_guts",
+      "max_wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "get_dress_id_1",
+      "get_dress_id_2"
+    ]
+  },
+  {
+    "name": "card_talent_hint_upgrade",
+    "rows": 14,
+    "columns": [
+      "id",
+      "card_id",
+      "rarity",
+      "talent_level",
+      "item_category_1",
+      "item_id_1",
+      "item_disp_order_1",
+      "item_num_1",
+      "item_category_2",
+      "item_id_2",
+      "item_disp_order_2",
+      "item_num_2",
+      "item_category_3",
+      "item_id_3",
+      "item_disp_order_3",
+      "item_num_3",
+      "item_category_4",
+      "item_id_4",
+      "item_disp_order_4",
+      "item_num_4",
+      "item_category_5",
+      "item_id_5",
+      "item_disp_order_5",
+      "item_num_5",
+      "item_category_6",
+      "item_id_6",
+      "item_disp_order_6",
+      "item_num_6",
+      "money_num"
+    ]
+  },
+  {
+    "name": "card_talent_level_upgrade_item",
+    "rows": 2602,
+    "columns": [
+      "id",
+      "talent_group_id",
+      "talent_level",
+      "upgrade_talent_level",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1",
+      "item_category_2",
+      "item_id_2",
+      "item_num_2",
+      "item_category_3",
+      "item_id_3",
+      "item_num_3",
+      "item_category_4",
+      "item_id_4",
+      "item_num_4",
+      "item_category_5",
+      "item_id_5",
+      "item_num_5",
+      "item_category_6",
+      "item_id_6",
+      "item_num_6",
+      "item_category_7",
+      "item_id_7",
+      "item_num_7",
+      "item_category_8",
+      "item_id_8",
+      "item_num_8",
+      "item_category_9",
+      "item_id_9",
+      "item_num_9",
+      "item_category_10",
+      "item_id_10",
+      "item_num_10",
+      "item_category_11",
+      "item_id_11",
+      "item_num_11",
+      "item_category_12",
+      "item_id_12",
+      "item_num_12",
+      "item_category_13",
+      "item_id_13",
+      "item_num_13",
+      "start_date"
+    ]
+  },
+  {
+    "name": "card_talent_level_upgrade_money",
+    "rows": 21,
+    "columns": [
+      "id",
+      "talent_level",
+      "upgrade_talent_level",
+      "money_num"
+    ]
+  },
+  {
+    "name": "card_talent_upgrade_money_num",
+    "rows": 6,
+    "columns": [
+      "id",
+      "talent_level",
+      "money_num"
+    ]
+  },
+  {
+    "name": "challenge_match_boss_npc",
+    "rows": 42,
+    "columns": [
+      "id",
+      "chara_id",
+      "race_dress_id",
+      "nickname_id",
+      "card_rarity_data_id",
+      "post",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id"
+    ]
+  },
+  {
+    "name": "challenge_match_data",
+    "rows": 7,
+    "columns": [
+      "challenge_match_id",
+      "announce_id",
+      "bonus_skill_id",
+      "bonus_factor_id",
+      "item_exchange_top_id",
+      "challenge_match_top_bg_id",
+      "challenge_match_top_bg_sub_id",
+      "notice_date",
+      "start_date",
+      "ending_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "challenge_match_race",
+    "rows": 42,
+    "columns": [
+      "id",
+      "challenge_match_id",
+      "disp_order",
+      "challenge_match_bg_id",
+      "challenge_match_bg_sub_id",
+      "difficulty",
+      "race_type",
+      "race_appearance_rate",
+      "race_instance_id",
+      "season",
+      "weather",
+      "ground",
+      "challenge_match_race_boss_npc_id",
+      "cost_rp",
+      "drop_reward_odds_id",
+      "victory_reward_odds_id",
+      "first_clear_item_category_1",
+      "first_clear_item_id_1",
+      "first_clear_item_num_1",
+      "first_clear_item_category_2",
+      "first_clear_item_id_2",
+      "first_clear_item_num_2",
+      "first_clear_item_category_3",
+      "first_clear_item_id_3",
+      "first_clear_item_num_3",
+      "pick_up_item_category_1",
+      "pick_up_item_id_1",
+      "pick_up_item_num_1",
+      "pick_up_item_category_2",
+      "pick_up_item_id_2",
+      "pick_up_item_num_2",
+      "pick_up_item_category_3",
+      "pick_up_item_id_3",
+      "pick_up_item_num_3",
+      "pick_up_item_category_4",
+      "pick_up_item_id_4",
+      "pick_up_item_num_4",
+      "pick_up_item_category_5",
+      "pick_up_item_id_5",
+      "pick_up_item_num_5"
+    ]
+  },
+  {
+    "name": "challenge_match_raw_point",
+    "rows": 93,
+    "columns": [
+      "id",
+      "priority",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "point",
+      "race_point_name_id",
+      "sort_order"
+    ]
+  },
+  {
+    "name": "champions_bgm",
+    "rows": 55,
+    "columns": [
+      "id",
+      "round_id",
+      "scene_type",
+      "race_number",
+      "cue_name",
+      "cuesheet_name",
+      "first_bgm_pattern",
+      "second_bgm_pattern"
+    ]
+  },
+  {
+    "name": "champions_entry_reward",
+    "rows": 2,
+    "columns": [
+      "champions_id",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "champions_evaluation_rate",
+    "rows": 16,
+    "columns": [
+      "id",
+      "proper_type",
+      "proper_rank",
+      "rate"
+    ]
+  },
+  {
+    "name": "champions_news_chara_comment",
+    "rows": 1708,
+    "columns": [
+      "id",
+      "round_id",
+      "chara_id",
+      "big_flag"
+    ]
+  },
+  {
+    "name": "champions_news_race",
+    "rows": 211,
+    "columns": [
+      "id",
+      "round_id",
+      "win_percent_type",
+      "text_number",
+      "resource_id",
+      "race_track_id",
+      "ground",
+      "distance",
+      "weather"
+    ]
+  },
+  {
+    "name": "champions_news_title",
+    "rows": 467,
+    "columns": [
+      "id",
+      "round_id",
+      "win_percent_type",
+      "resource_id",
+      "race_track_id",
+      "ground",
+      "distance",
+      "weather",
+      "title",
+      "sub_title"
+    ]
+  },
+  {
+    "name": "champions_news_win_comment",
+    "rows": 1577,
+    "columns": [
+      "id",
+      "round_id",
+      "chara_id",
+      "big_flag"
+    ]
+  },
+  {
+    "name": "champions_news_win_title",
+    "rows": 580,
+    "columns": [
+      "id",
+      "round_id",
+      "win_percent_type",
+      "resource_id",
+      "bashin_min",
+      "bashin_max",
+      "running_style",
+      "race_track_id",
+      "ground",
+      "distance",
+      "weather",
+      "sub_title"
+    ]
+  },
+  {
+    "name": "champions_race_condition",
+    "rows": 322,
+    "columns": [
+      "champions_id",
+      "round_id",
+      "race_instance_id",
+      "race_condition_id"
+    ]
+  },
+  {
+    "name": "champions_reward_rate",
+    "rows": 2208,
+    "columns": [
+      "id",
+      "champions_id",
+      "league_type",
+      "round_id",
+      "win_count",
+      "ranking",
+      "rate",
+      "reward_set_id",
+      "box_grade"
+    ]
+  },
+  {
+    "name": "champions_round_detail",
+    "rows": 644,
+    "columns": [
+      "id",
+      "champions_id",
+      "league_type",
+      "round_id",
+      "round",
+      "tier",
+      "round_number",
+      "breakthrough_number_1",
+      "breakthrough_number_2",
+      "entry_number",
+      "free_entry_number"
+    ]
+  },
+  {
+    "name": "champions_round_schedule",
+    "rows": 276,
+    "columns": [
+      "id",
+      "champions_id",
+      "round",
+      "round_detail",
+      "start_date",
+      "end_date",
+      "interval_start_time",
+      "interval_end_time"
+    ]
+  },
+  {
+    "name": "champions_schedule",
+    "rows": 46,
+    "columns": [
+      "id",
+      "resource_id",
+      "info_detail_1",
+      "info_detail_2",
+      "champions_bg_id",
+      "champions_league_select_bg_sub_id",
+      "champions_bg_sub_id",
+      "champions_finish_bg_sub_id",
+      "champions_bg_position_x",
+      "champions_chara_select_bg_id",
+      "champions_chara_select_bg_sub_id",
+      "start_date",
+      "end_date",
+      "info_detail",
+      "champions_finish_bg_id",
+      "champions_finish_bg_position_x",
+      "notice_date"
+    ]
+  },
+  {
+    "name": "champions_stand_motion",
+    "rows": 18,
+    "columns": [
+      "chara_id",
+      "type",
+      "race_dress_id",
+      "motion_set"
+    ]
+  },
+  {
+    "name": "chara_category_motion",
+    "rows": 131,
+    "columns": [
+      "chara_id",
+      "standby_motion_1",
+      "standby_motion_2",
+      "standby_motion_3",
+      "standby_motion_4",
+      "standby_motion_5",
+      "standby_motion_6"
+    ]
+  },
+  {
+    "name": "chara_data",
+    "rows": 169,
+    "columns": [
+      "id",
+      "birth_year",
+      "birth_month",
+      "birth_day",
+      "last_year",
+      "sex",
+      "image_color_main",
+      "image_color_sub",
+      "ui_color_main",
+      "ui_color_sub",
+      "ui_training_color_1",
+      "ui_training_color_2",
+      "ui_border_color",
+      "ui_num_color_1",
+      "ui_num_color_2",
+      "ui_turn_color",
+      "ui_wipe_color_1",
+      "ui_wipe_color_2",
+      "ui_wipe_color_3",
+      "ui_speech_color_1",
+      "ui_speech_color_2",
+      "ui_nameplate_color_1",
+      "ui_nameplate_color_2",
+      "height",
+      "bust",
+      "scale",
+      "skin",
+      "shape",
+      "socks",
+      "personal_dress",
+      "tail_model_id",
+      "race_running_type",
+      "ear_random_time_min",
+      "ear_random_time_max",
+      "tail_random_time_min",
+      "tail_random_time_max",
+      "story_ear_random_time_min",
+      "story_ear_random_time_max",
+      "story_tail_random_time_min",
+      "story_tail_random_time_max",
+      "attachment_model_id",
+      "mini_mayu_shader_type",
+      "start_date",
+      "chara_category",
+      "love_rank_limit"
+    ]
+  },
+  {
+    "name": "chara_data_group",
+    "rows": 3,
+    "columns": [
+      "id",
+      "group_id",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "chara_dress_color_set",
+    "rows": 56,
+    "columns": [
+      "id",
+      "dress_id",
+      "area_map_id",
+      "color_r1",
+      "color_r2",
+      "color_g1",
+      "color_g2",
+      "color_b1",
+      "color_b2",
+      "toon_color_r1",
+      "toon_color_r2",
+      "toon_color_g1",
+      "toon_color_g2",
+      "toon_color_b1",
+      "toon_color_b2"
+    ]
+  },
+  {
+    "name": "chara_dress_color_set_default",
+    "rows": 1,
+    "columns": [
+      "id",
+      "chara_id",
+      "color_set_id"
+    ]
+  },
+  {
+    "name": "chara_motion_act",
+    "rows": 36,
+    "columns": [
+      "id",
+      "chara_id",
+      "target_motion",
+      "command_name"
+    ]
+  },
+  {
+    "name": "chara_motion_set",
+    "rows": 10149,
+    "columns": [
+      "id",
+      "body_motion",
+      "body_motion_type",
+      "body_motion_path_segment",
+      "body_motion_play_type",
+      "face_type",
+      "cheek",
+      "eye_default",
+      "ear_motion",
+      "tail_motion",
+      "tail_motion_type"
+    ]
+  },
+  {
+    "name": "chara_story_data",
+    "rows": 917,
+    "columns": [
+      "id",
+      "chara_id",
+      "episode_index",
+      "story_id",
+      "lock_type_1",
+      "lock_value_1_1",
+      "lock_value_1_2",
+      "add_reward_category_1",
+      "add_reward_id_1",
+      "add_reward_num_1",
+      "exp_type"
+    ]
+  },
+  {
+    "name": "chara_type",
+    "rows": 24505,
+    "columns": [
+      "id",
+      "chara_id",
+      "target_scene",
+      "target_cut",
+      "target_type",
+      "value"
+    ]
+  },
+  {
+    "name": "chara_type_event_cut",
+    "rows": 20,
+    "columns": [
+      "id",
+      "event_category",
+      "event_id",
+      "chara_id",
+      "cut_id",
+      "cut_sub_id",
+      "motion_type"
+    ]
+  },
+  {
+    "name": "character_prop_animation",
+    "rows": 21,
+    "columns": [
+      "id",
+      "prop_id",
+      "prop_anim_id",
+      "layer_index",
+      "use_state_name",
+      "scene_type"
+    ]
+  },
+  {
+    "name": "character_prop_system_text",
+    "rows": 1,
+    "columns": [
+      "id",
+      "prop_id",
+      "lip_sync_data"
+    ]
+  },
+  {
+    "name": "character_system_lottery",
+    "rows": 11462,
+    "columns": [
+      "id",
+      "chara_id",
+      "card_id",
+      "card_rarity_id",
+      "trigger",
+      "param1",
+      "per",
+      "priority",
+      "sys_text_id"
+    ]
+  },
+  {
+    "name": "character_system_text",
+    "rows": 32561,
+    "columns": [
+      "character_id",
+      "voice_id",
+      "text",
+      "cue_sheet",
+      "cue_id",
+      "motion_set",
+      "scene",
+      "use_gallery",
+      "card_id",
+      "lip_sync_data",
+      "lip_sync_flag",
+      "gender",
+      "motion_second_set",
+      "motion_second_start",
+      "gallery_key_usage_condition",
+      "prop_system_text_id",
+      "start_date"
+    ]
+  },
+  {
+    "name": "circle_rank_data",
+    "rows": 11,
+    "columns": [
+      "id",
+      "need_ranking_max",
+      "need_ranking_min",
+      "reward_item_category_1",
+      "reward_item_id_1",
+      "reward_num_1",
+      "reward_item_category_2",
+      "reward_item_id_2",
+      "reward_num_2"
+    ]
+  },
+  {
+    "name": "circle_stamp_data",
+    "rows": 133,
+    "columns": [
+      "id",
+      "type",
+      "disp_order",
+      "start_date"
+    ]
+  },
+  {
+    "name": "collect_event_map_bg_data",
+    "rows": 1,
+    "columns": [
+      "id",
+      "bg_id",
+      "bg_sub_id",
+      "bgm_cue_name",
+      "bgm_cuesheet_name"
+    ]
+  },
+  {
+    "name": "collect_event_map_master",
+    "rows": 1,
+    "columns": [
+      "id",
+      "bg_data_id",
+      "short_episode_id",
+      "tips_group_id",
+      "login_bonus_id",
+      "banner_id",
+      "collect_tap_max_pos_index",
+      "collect_tap_reward_set_id",
+      "collect_tap_end_date",
+      "start_date",
+      "event_end_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "collect_raid_all_reward",
+    "rows": 41,
+    "columns": [
+      "id",
+      "all_reward_set_id",
+      "all_collect_item_num",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "collect_raid_dress_color",
+    "rows": 4,
+    "columns": [
+      "id",
+      "collect_raid_id",
+      "chara_id",
+      "dress_id",
+      "color_id"
+    ]
+  },
+  {
+    "name": "collect_raid_individual_reward",
+    "rows": 32,
+    "columns": [
+      "id",
+      "individual_reward_set_id",
+      "individual_collect_item_num",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "collect_raid_master",
+    "rows": 4,
+    "columns": [
+      "id",
+      "use_mission",
+      "use_transition_dialog",
+      "story_extra_id",
+      "story_voice_type",
+      "use_all_reward_voice",
+      "ending_play_order",
+      "collect_item_id",
+      "raid_type",
+      "gain_collect_item_rate",
+      "gain_collect_item_min",
+      "individual_reward_set_id",
+      "all_reward_set_id",
+      "mission_top_chara_group_id",
+      "staging_mini_chara_group_id",
+      "story_list_bg_id",
+      "story_list_bg_sub_id",
+      "collect_event_map_master_id",
+      "notice_date",
+      "start_date",
+      "calc_start_date",
+      "calc_end_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "collect_raid_message",
+    "rows": 437,
+    "columns": [
+      "id",
+      "collect_raid_id",
+      "category_id"
+    ]
+  },
+  {
+    "name": "collect_raid_mission",
+    "rows": 18,
+    "columns": [
+      "id",
+      "collect_raid_master_id",
+      "mission_data_id"
+    ]
+  },
+  {
+    "name": "collect_raid_mission_top_chara",
+    "rows": 4,
+    "columns": [
+      "id",
+      "mission_top_chara_group_id",
+      "ending_flag",
+      "chara_id",
+      "dress_id",
+      "bg_id",
+      "bg_sub_id"
+    ]
+  },
+  {
+    "name": "collect_raid_segment_cutt",
+    "rows": 3,
+    "columns": [
+      "id",
+      "cut_id",
+      "cut_sub_id"
+    ]
+  },
+  {
+    "name": "collect_raid_staging_mini_chara",
+    "rows": 51,
+    "columns": [
+      "id",
+      "staging_mini_chara_group_id",
+      "staging_type",
+      "chara_id",
+      "dress_id",
+      "mini_motion_id",
+      "chara_angle",
+      "chara_id_2",
+      "dress_id_2",
+      "mini_motion_id_2",
+      "chara_angle_2",
+      "chara_id_3",
+      "dress_id_3",
+      "mini_motion_id_3",
+      "chara_angle_3",
+      "chara_id_4",
+      "dress_id_4",
+      "mini_motion_id_4",
+      "chara_angle_4",
+      "rate"
+    ]
+  },
+  {
+    "name": "collect_raid_story",
+    "rows": 12,
+    "columns": [
+      "id",
+      "collect_raid_id",
+      "story_condition_type",
+      "unlock_condition",
+      "episode_index_id",
+      "story_type_1",
+      "story_id_1",
+      "story_type_2",
+      "story_id_2",
+      "story_type_3",
+      "story_id_3"
+    ]
+  },
+  {
+    "name": "collect_raid_top_data",
+    "rows": 15,
+    "columns": [
+      "id",
+      "collect_raid_id",
+      "cut_id",
+      "cut_sub_id",
+      "random_chara_group_id",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "env_cue_name",
+      "env_cuesheet_name",
+      "segment_cutt_id",
+      "condition_type",
+      "condition_value"
+    ]
+  },
+  {
+    "name": "collect_raid_top_random_chara_group",
+    "rows": 20,
+    "columns": [
+      "id",
+      "group_id",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "constant_walking_data",
+    "rows": 4,
+    "columns": [
+      "id",
+      "campaign_id",
+      "start_time"
+    ]
+  },
+  {
+    "name": "crane_game_arm_swing",
+    "rows": 3,
+    "columns": [
+      "result_type",
+      "odds_1",
+      "odds_2",
+      "odds_3"
+    ]
+  },
+  {
+    "name": "crane_game_catch_result",
+    "rows": 68,
+    "columns": [
+      "odds_id",
+      "get_num",
+      "lottery_weight_1_1",
+      "lottery_weight_1_2",
+      "lottery_weight_2_1",
+      "lottery_weight_2_2",
+      "lottery_weight_3_1",
+      "lottery_weight_3_2",
+      "lottery_weight_extra_1",
+      "lottery_weight_extra_2"
+    ]
+  },
+  {
+    "name": "crane_game_define_param",
+    "rows": 1,
+    "columns": [
+      "id",
+      "distance1",
+      "distance2",
+      "move_speed_1",
+      "move_speed_2",
+      "move_speed_3"
+    ]
+  },
+  {
+    "name": "crane_game_extra_odds_condition",
+    "rows": 1,
+    "columns": [
+      "credit",
+      "get_num"
+    ]
+  },
+  {
+    "name": "crane_game_hidden_odds",
+    "rows": 33,
+    "columns": [
+      "id",
+      "animation_id",
+      "crane_animation_id",
+      "type_id",
+      "num",
+      "big",
+      "big_index",
+      "odds_1",
+      "odds_2",
+      "odds_3",
+      "odds_extra",
+      "rare_effect_odds",
+      "joint_type",
+      "lift_type",
+      "push_type"
+    ]
+  },
+  {
+    "name": "crane_game_prize_face",
+    "rows": 3,
+    "columns": [
+      "id",
+      "face_type"
+    ]
+  },
+  {
+    "name": "crane_game_prize_pattern",
+    "rows": 3,
+    "columns": [
+      "id",
+      "prop_pattern_id"
+    ]
+  },
+  {
+    "name": "crane_game_prop",
+    "rows": 2,
+    "columns": [
+      "type",
+      "num"
+    ]
+  },
+  {
+    "name": "daily_legend_race",
+    "rows": 98,
+    "columns": [
+      "id",
+      "group_id",
+      "legend_bg_id",
+      "legend_bg_sub_id",
+      "has_unique_bg_env",
+      "image_id",
+      "difficulty",
+      "race_instance_id",
+      "season",
+      "weather",
+      "ground",
+      "legend_race_boss_npc_id",
+      "cost_num",
+      "drop_reward_odds_id",
+      "victory_reward_odds_id",
+      "first_clear_item_category_1",
+      "first_clear_item_id_1",
+      "first_clear_item_num_1",
+      "first_clear_item_category_2",
+      "first_clear_item_id_2",
+      "first_clear_item_num_2",
+      "first_clear_item_category_3",
+      "first_clear_item_id_3",
+      "first_clear_item_num_3",
+      "pick_up_item_category_1",
+      "pick_up_item_id_1",
+      "pick_up_item_num_1",
+      "pick_up_item_category_2",
+      "pick_up_item_id_2",
+      "pick_up_item_num_2",
+      "pick_up_item_category_3",
+      "pick_up_item_id_3",
+      "pick_up_item_num_3",
+      "start_date"
+    ]
+  },
+  {
+    "name": "daily_pack",
+    "rows": 9,
+    "columns": [
+      "shop_data_id",
+      "platform_id",
+      "term",
+      "repurchase_day",
+      "group_id",
+      "daily_free_num",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "daily_race",
+    "rows": 10,
+    "columns": [
+      "id",
+      "group_id",
+      "difficulty",
+      "race_instance_id",
+      "cost_num",
+      "unique_chara_npc_min",
+      "unique_chara_npc_max",
+      "normal_rewards_odds_id",
+      "bonus_rewards_odds_id",
+      "rare_reward_odds_id",
+      "first_clear_item_category_1",
+      "first_clear_item_id_1",
+      "first_clear_item_num_1",
+      "first_clear_item_category_2",
+      "first_clear_item_id_2",
+      "first_clear_item_num_2",
+      "first_clear_item_category_3",
+      "first_clear_item_id_3",
+      "first_clear_item_num_3",
+      "pick_up_item_category_1",
+      "pick_up_item_id_1",
+      "pick_up_item_num_1",
+      "pick_up_item_category_2",
+      "pick_up_item_id_2",
+      "pick_up_item_num_2",
+      "pick_up_item_category_3",
+      "pick_up_item_id_3",
+      "pick_up_item_num_3",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "daily_race_billing",
+    "rows": 1,
+    "columns": [
+      "id",
+      "frequency",
+      "pay_cost"
+    ]
+  },
+  {
+    "name": "daily_race_npc",
+    "rows": 220,
+    "columns": [
+      "id",
+      "npc_group_id",
+      "chara_id",
+      "mob_id",
+      "race_dress_id",
+      "race_instance_id",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id"
+    ]
+  },
+  {
+    "name": "deck_recommend_exception",
+    "rows": 89,
+    "columns": [
+      "support_card_id",
+      "distribution_flag"
+    ]
+  },
+  {
+    "name": "deck_recommend_lv_correction",
+    "rows": 1,
+    "columns": [
+      "condition_type",
+      "correction_lv"
+    ]
+  },
+  {
+    "name": "deck_recommend_organize",
+    "rows": 5,
+    "columns": [
+      "id",
+      "distance_type",
+      "priority",
+      "command_id_1",
+      "command_id_2",
+      "command_id_3",
+      "command_id_4",
+      "command_id_5",
+      "command_id_6",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "directory",
+    "rows": 350,
+    "columns": [
+      "id",
+      "required_point",
+      "rank_level",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1"
+    ]
+  },
+  {
+    "name": "dress_data",
+    "rows": 501,
+    "columns": [
+      "id",
+      "condition_type",
+      "have_mini",
+      "general_purpose",
+      "costume_type",
+      "chara_id",
+      "use_gender",
+      "body_shape",
+      "body_type",
+      "body_type_sub",
+      "body_setting",
+      "use_race",
+      "use_live",
+      "use_live_theater",
+      "use_home",
+      "use_dress_change",
+      "is_wet",
+      "is_dirt",
+      "head_sub_id",
+      "use_season",
+      "dress_color_main",
+      "dress_color_sub",
+      "color_num",
+      "disp_order",
+      "tail_model_id",
+      "tail_model_sub_id",
+      "mini_mayu_shader_type",
+      "start_time",
+      "end_time"
+    ]
+  },
+  {
+    "name": "event_motion_data",
+    "rows": 2190,
+    "columns": [
+      "id",
+      "command_name",
+      "base_state_name",
+      "pose_blend",
+      "type",
+      "state_group",
+      "category",
+      "start_blend_time",
+      "end_blend_time"
+    ]
+  },
+  {
+    "name": "event_motion_plus_data",
+    "rows": 153,
+    "columns": [
+      "id",
+      "command_name",
+      "base_state_name",
+      "layer_index",
+      "tail_motion_type",
+      "start_blend_time",
+      "end_blend_time"
+    ]
+  },
+  {
+    "name": "exchange_ticket_detail",
+    "rows": 444,
+    "columns": [
+      "id",
+      "card_type",
+      "card_id",
+      "additional_piece_num",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "face_type_data",
+    "rows": 124,
+    "columns": [
+      "label",
+      "eyebrow_l",
+      "eyebrow_r",
+      "eye_l",
+      "eye_r",
+      "mouth",
+      "mouth_shape_type",
+      "inverce_face_type",
+      "set_face_group"
+    ]
+  },
+  {
+    "name": "facial_mouth_change",
+    "rows": 14,
+    "columns": [
+      "id",
+      "chara_id",
+      "before_facialname",
+      "after_facialname"
+    ]
+  },
+  {
+    "name": "factor_research_animation_data",
+    "rows": 7,
+    "columns": [
+      "id",
+      "special_event_type",
+      "prise_type",
+      "chara_order",
+      "chara_angle",
+      "chara_id",
+      "dress_id",
+      "in_motion",
+      "stand_motion",
+      "prize_motion"
+    ]
+  },
+  {
+    "name": "factor_research_box",
+    "rows": 22,
+    "columns": [
+      "box_id",
+      "factor_research_event_id",
+      "box_step"
+    ]
+  },
+  {
+    "name": "factor_research_box_reward",
+    "rows": 323,
+    "columns": [
+      "id",
+      "box_id",
+      "box_num",
+      "item_category",
+      "item_id",
+      "item_num",
+      "rate",
+      "prize_type"
+    ]
+  },
+  {
+    "name": "factor_research_data",
+    "rows": 22,
+    "columns": [
+      "factor_research_event_id",
+      "consume_tp_ratio",
+      "bonus_reward_ratio",
+      "result_type",
+      "special_event_type",
+      "chara_id",
+      "dress_id",
+      "in_motion",
+      "stand_motion",
+      "prize_motion1",
+      "prize_motion2",
+      "notice_date",
+      "start_date",
+      "ending_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "factor_research_factor_upgrade",
+    "rows": 14,
+    "columns": [
+      "id",
+      "factor_type",
+      "is_upgradable",
+      "factor_rarity",
+      "use_item_num"
+    ]
+  },
+  {
+    "name": "factor_research_top",
+    "rows": 50,
+    "columns": [
+      "id",
+      "factor_research_event_id",
+      "ending_flag",
+      "character_id",
+      "dress_id",
+      "menu_bg_id",
+      "menu_bg_sub_id",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "env_cue_name",
+      "env_cuesheet_name"
+    ]
+  },
+  {
+    "name": "gacha_available",
+    "rows": 109443,
+    "columns": [
+      "gacha_id",
+      "card_id",
+      "card_type",
+      "rarity",
+      "odds",
+      "is_pickup",
+      "recommend_order",
+      "is_prize_selectable"
+    ]
+  },
+  {
+    "name": "gacha_card_addition_num",
+    "rows": 0,
+    "columns": [
+      "id",
+      "gacha_id",
+      "support_card_id",
+      "additional_num"
+    ]
+  },
+  {
+    "name": "gacha_data",
+    "rows": 670,
+    "columns": [
+      "id",
+      "type",
+      "paid_gacha_button_type",
+      "card_type",
+      "force_exchange",
+      "daily_pay_cost",
+      "disp_order",
+      "only_once_flag",
+      "draw_limit",
+      "gacha_odds_id",
+      "rarity_odds_id",
+      "draw_guarantee_type",
+      "draw_guarantee_rarity",
+      "draw_guarantee_num",
+      "cost_type",
+      "cost_single",
+      "prize_odds_id",
+      "additional_piece_target_card_type_1",
+      "additional_piece_target_card_id_1",
+      "additional_piece_target_rarity_1",
+      "additional_piece_num_1",
+      "additional_piece_target_card_type_2",
+      "additional_piece_target_card_id_2",
+      "additional_piece_target_rarity_2",
+      "additional_piece_num_2",
+      "additional_piece_target_card_type_3",
+      "additional_piece_target_card_id_3",
+      "additional_piece_target_rarity_3",
+      "additional_piece_num_3",
+      "additional_piece_target_card_type_4",
+      "additional_piece_target_card_id_4",
+      "additional_piece_target_rarity_4",
+      "additional_piece_num_4",
+      "additional_piece_target_card_type_5",
+      "additional_piece_target_card_id_5",
+      "additional_piece_target_rarity_5",
+      "additional_piece_num_5",
+      "additional_piece_target_card_type_6",
+      "additional_piece_target_card_id_6",
+      "additional_piece_target_rarity_6",
+      "additional_piece_num_6",
+      "bonus_target_draw_num",
+      "bonus_item_category_1",
+      "bonus_item_id_1",
+      "bonus_item_num_1",
+      "bonus_item_category_2",
+      "bonus_item_id_2",
+      "bonus_item_num_2",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "gacha_exchange",
+    "rows": 1868,
+    "columns": [
+      "gacha_id",
+      "card_id",
+      "card_type",
+      "pay_item_num",
+      "disp_order"
+    ]
+  },
+  {
+    "name": "gacha_free_campaign",
+    "rows": 70,
+    "columns": [
+      "id",
+      "gacha_id",
+      "target_draw_type",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "gacha_group",
+    "rows": 46,
+    "columns": [
+      "id",
+      "group_id",
+      "target_gacha_id",
+      "disp_order"
+    ]
+  },
+  {
+    "name": "gacha_item_exchange",
+    "rows": 6,
+    "columns": [
+      "id",
+      "gacha_id",
+      "item_id",
+      "item_category",
+      "item_num",
+      "pay_item_num",
+      "disp_order"
+    ]
+  },
+  {
+    "name": "gacha_piece",
+    "rows": 3,
+    "columns": [
+      "id",
+      "rarity",
+      "piece_type",
+      "piece_num",
+      "item_category",
+      "item_id"
+    ]
+  },
+  {
+    "name": "gacha_prize_odds",
+    "rows": 0,
+    "columns": [
+      "prize_odds_id",
+      "place",
+      "odds",
+      "piece_num",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1",
+      "item_category_2",
+      "item_id_2",
+      "item_num_2",
+      "item_category_3",
+      "item_id_3",
+      "item_num_3",
+      "item_category_4",
+      "item_id_4",
+      "item_num_4",
+      "item_category_5",
+      "item_id_5",
+      "item_num_5",
+      "item_category_6",
+      "item_id_6",
+      "item_num_6"
+    ]
+  },
+  {
+    "name": "gacha_stampsheet",
+    "rows": 12,
+    "columns": [
+      "id",
+      "gacha_id",
+      "sheet_num",
+      "is_loop",
+      "stampsheet_reward_group_id",
+      "stampsheet_odds_group_id"
+    ]
+  },
+  {
+    "name": "gacha_stampsheet_reward",
+    "rows": 43,
+    "columns": [
+      "id",
+      "group_id",
+      "reward_type",
+      "reward_order",
+      "item_id",
+      "item_category",
+      "item_num"
+    ]
+  },
+  {
+    "name": "gacha_stepup",
+    "rows": 40,
+    "columns": [
+      "id",
+      "stepup_id",
+      "target_gacha_id",
+      "stepup_step"
+    ]
+  },
+  {
+    "name": "gacha_top_bg",
+    "rows": 670,
+    "columns": [
+      "id",
+      "gacha_id",
+      "logo_size_x",
+      "logo_size_y"
+    ]
+  },
+  {
+    "name": "generate_succession_trained_chara_trade_item",
+    "rows": 1,
+    "columns": [
+      "id",
+      "min_value",
+      "max_value",
+      "trade_item_category",
+      "trade_item_id",
+      "trade_item_num"
+    ]
+  },
+  {
+    "name": "gift_message",
+    "rows": 176,
+    "columns": [
+      "id",
+      "type_1",
+      "type_2",
+      "type_3",
+      "type_4"
+    ]
+  },
+  {
+    "name": "heroes_data",
+    "rows": 15,
+    "columns": [
+      "heroes_id",
+      "info_detail_1",
+      "info_detail_2",
+      "info_detail_3",
+      "ticket_add",
+      "ticket_max",
+      "race_item_limit",
+      "hero_gauge_max",
+      "final_stage_user_num",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "heroes_final_stage_race",
+    "rows": 24,
+    "columns": [
+      "id",
+      "ranking_min",
+      "ranking_max",
+      "group_id",
+      "race_number",
+      "race_play",
+      "heroes_special_reward"
+    ]
+  },
+  {
+    "name": "heroes_gauge",
+    "rows": 8,
+    "columns": [
+      "id",
+      "priority",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "gauge_up",
+      "add_timing"
+    ]
+  },
+  {
+    "name": "heroes_league_rank",
+    "rows": 16,
+    "columns": [
+      "id",
+      "league_rank_type",
+      "league_rank",
+      "league_min_value",
+      "league_max_value",
+      "ticket_num",
+      "reward_group_id",
+      "top_bgm_cue_name",
+      "top_bgm_cuesheet_name",
+      "racing_base_bgm_cue_name",
+      "racing_base_bgm_cuesheet_name"
+    ]
+  },
+  {
+    "name": "heroes_league_rank_reward_group",
+    "rows": 85,
+    "columns": [
+      "id",
+      "reward_group_id",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "heroes_league_score",
+    "rows": 12,
+    "columns": [
+      "id",
+      "league_rank",
+      "order",
+      "league_score"
+    ]
+  },
+  {
+    "name": "heroes_lottery_message",
+    "rows": 19,
+    "columns": [
+      "id",
+      "view_type",
+      "condition_flag"
+    ]
+  },
+  {
+    "name": "heroes_race_condition",
+    "rows": 45,
+    "columns": [
+      "id",
+      "heroes_id",
+      "stage",
+      "race_instance_id",
+      "season",
+      "weather",
+      "ground"
+    ]
+  },
+  {
+    "name": "heroes_race_default_npc",
+    "rows": 159,
+    "columns": [
+      "id",
+      "default_npc_group_id",
+      "default_npc_team_id",
+      "card_rarity_data_id",
+      "chara_id",
+      "race_dress_id",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_id",
+      "skill_level",
+      "skill_set_id"
+    ]
+  },
+  {
+    "name": "heroes_race_default_user",
+    "rows": 63,
+    "columns": [
+      "default_npc_team_id"
+    ]
+  },
+  {
+    "name": "heroes_race_mob_npc",
+    "rows": 100,
+    "columns": [
+      "id",
+      "npc_group_id",
+      "mob_id",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id_1",
+      "skill_set_id_2"
+    ]
+  },
+  {
+    "name": "heroes_ranking_border",
+    "rows": 8,
+    "columns": [
+      "id",
+      "rank_start",
+      "rank_end"
+    ]
+  },
+  {
+    "name": "heroes_ranking_reward",
+    "rows": 40,
+    "columns": [
+      "id",
+      "heroes_id",
+      "heroes_ranking_border_id",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "heroes_skill",
+    "rows": 7,
+    "columns": [
+      "id",
+      "league_rank_min",
+      "league_rank_max",
+      "skill_id",
+      "rate"
+    ]
+  },
+  {
+    "name": "heroes_skill_item",
+    "rows": 7,
+    "columns": [
+      "id",
+      "skill_id",
+      "item_category",
+      "item_id"
+    ]
+  },
+  {
+    "name": "heroes_skill_motion",
+    "rows": 8,
+    "columns": [
+      "character_id",
+      "race_dress_id",
+      "motion_set_1",
+      "stay_motion_set_1",
+      "motion_set_2",
+      "time_motion_set_2"
+    ]
+  },
+  {
+    "name": "heroes_special_reward",
+    "rows": 13,
+    "columns": [
+      "id",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "heroes_stage_schedule",
+    "rows": 105,
+    "columns": [
+      "id",
+      "heroes_id",
+      "stage",
+      "stage_step",
+      "race_num",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "hide_chara_text_scenario",
+    "rows": 72,
+    "columns": [
+      "id",
+      "scenario_id",
+      "period",
+      "character_id",
+      "dress_id",
+      "voice_id"
+    ]
+  },
+  {
+    "name": "hide_chara_text_special",
+    "rows": 12,
+    "columns": [
+      "id",
+      "special_voice_except_id",
+      "character_id",
+      "voice_id"
+    ]
+  },
+  {
+    "name": "highlight_interpolate",
+    "rows": 3,
+    "columns": [
+      "id",
+      "in_time",
+      "out_time"
+    ]
+  },
+  {
+    "name": "home_character_type",
+    "rows": 26,
+    "columns": [
+      "pos_id",
+      "original_personality",
+      "change_personality"
+    ]
+  },
+  {
+    "name": "home_eat",
+    "rows": 308,
+    "columns": [
+      "chara_id",
+      "event_type",
+      "body_shape",
+      "prop_id_right",
+      "prop_eat_animation_right",
+      "override_motion_right",
+      "prop_id_left",
+      "prop_eat_animation_left",
+      "override_motion_left",
+      "walk_motion",
+      "walk_chara_face_type",
+      "eat_motion",
+      "eat_facial_motion",
+      "odds"
+    ]
+  },
+  {
+    "name": "home_env_setting",
+    "rows": 168,
+    "columns": [
+      "id",
+      "home_set_id",
+      "home_event_type",
+      "resource_event_check",
+      "season",
+      "weather",
+      "timezone",
+      "resource",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "env_cue_name",
+      "env_cuesheet_name"
+    ]
+  },
+  {
+    "name": "home_event_schedule",
+    "rows": 19,
+    "columns": [
+      "id",
+      "event_id",
+      "event_story_type",
+      "event_walk_type",
+      "event_walk_propid",
+      "event_footer_type",
+      "event_footer_propid",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "home_poster_data",
+    "rows": 103,
+    "columns": [
+      "id",
+      "pos_index",
+      "priority",
+      "height",
+      "width",
+      "posi_vertical",
+      "posi_horizontal",
+      "detail_value",
+      "url_value",
+      "url",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "home_prop_setting",
+    "rows": 20,
+    "columns": [
+      "pos_id",
+      "personality",
+      "prop_id",
+      "attach_node"
+    ]
+  },
+  {
+    "name": "home_story_trigger",
+    "rows": 1431,
+    "columns": [
+      "id",
+      "pos_id",
+      "home_event_type",
+      "num",
+      "story_id",
+      "chara_id_1",
+      "chara_id_2",
+      "chara_id_3",
+      "condition_type",
+      "gallery_chara_id",
+      "disp_order",
+      "available_gallery_key",
+      "start_date"
+    ]
+  },
+  {
+    "name": "home_walk_group",
+    "rows": 153,
+    "columns": [
+      "id",
+      "chara_id_1",
+      "dress_id_1",
+      "enable_eat_1",
+      "chara_id_2",
+      "dress_id_2",
+      "enable_eat_2",
+      "chara_id_3",
+      "dress_id_3",
+      "enable_eat_3"
+    ]
+  },
+  {
+    "name": "home_walk_path_restriction",
+    "rows": 3,
+    "columns": [
+      "id",
+      "chara_id",
+      "route"
+    ]
+  },
+  {
+    "name": "homestory_hip_offset",
+    "rows": 90,
+    "columns": [
+      "id",
+      "home_event_type",
+      "num",
+      "story_id",
+      "chara_id",
+      "offset"
+    ]
+  },
+  {
+    "name": "honor_data",
+    "rows": 1368,
+    "columns": [
+      "id",
+      "rank",
+      "category",
+      "start_date",
+      "end_date",
+      "condition_type",
+      "condition_value",
+      "condition_value_2",
+      "step_group_id",
+      "step_order"
+    ]
+  },
+  {
+    "name": "idle_single_mode_training_cut",
+    "rows": 20,
+    "columns": [
+      "id",
+      "scenario_id",
+      "command_id",
+      "max_training_lv",
+      "designated_chara_id"
+    ]
+  },
+  {
+    "name": "item_data",
+    "rows": 785,
+    "columns": [
+      "id",
+      "item_category",
+      "group_id",
+      "effect_type_1",
+      "effect_target_1",
+      "effect_value_1",
+      "effect_type_2",
+      "effect_target_2",
+      "effect_value_2",
+      "add_value_1",
+      "add_value_2",
+      "add_value_3",
+      "limit_num",
+      "possession_limit_num",
+      "disp_limit_num",
+      "sort",
+      "rare",
+      "enable_request",
+      "request_reward",
+      "item_place_id",
+      "sell_item_id",
+      "sell_price",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "item_exchange",
+    "rows": 7261,
+    "columns": [
+      "id",
+      "item_exchange_top_id",
+      "disp_order",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "change_item_limit_type",
+      "change_item_limit_num",
+      "change_unit_type",
+      "change_item_category",
+      "change_item_id",
+      "change_item_num",
+      "additional_piece_num",
+      "pay_item_category",
+      "pay_item_id",
+      "pay_item_num",
+      "price_change_group_id",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "item_exchange_top",
+    "rows": 95,
+    "columns": [
+      "id",
+      "item_exchange_disp_order",
+      "item_exchange_type",
+      "item_top_category",
+      "is_anniv_shop_top",
+      "shop_enter_trigger",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "item_group",
+    "rows": 39,
+    "columns": [
+      "id",
+      "group_id"
+    ]
+  },
+  {
+    "name": "item_pack",
+    "rows": 169,
+    "columns": [
+      "id",
+      "item_pack_id",
+      "item_category",
+      "item_id",
+      "item_num",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "jobs_genre",
+    "rows": 36,
+    "columns": [
+      "id",
+      "mini_bg_id_1",
+      "mini_bg_id_2",
+      "mini_bg_id_3",
+      "mini_bg_id_4",
+      "mini_bg_id_5"
+    ]
+  },
+  {
+    "name": "jobs_limited_schedule",
+    "rows": 5,
+    "columns": [
+      "id",
+      "start_date",
+      "ending_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "jobs_place",
+    "rows": 14,
+    "columns": [
+      "id",
+      "race_track_id"
+    ]
+  },
+  {
+    "name": "jobs_point_limit",
+    "rows": 1,
+    "columns": [
+      "id",
+      "jobs_story_event_point_limit",
+      "jobs_story_event_roulette_coin_limit",
+      "jobs_training_challenge_coin_limit"
+    ]
+  },
+  {
+    "name": "jobs_reward",
+    "rows": 89,
+    "columns": [
+      "id",
+      "place_id",
+      "genre_id",
+      "main_reward_slots_id",
+      "main_reward_1_item_disp_type",
+      "main_reward_1_item_category",
+      "main_reward_1_item_id",
+      "main_reward_1_item_num",
+      "main_reward_2_item_disp_type",
+      "main_reward_2_item_category",
+      "main_reward_2_item_id",
+      "main_reward_2_item_num",
+      "main_reward_3_item_disp_type",
+      "main_reward_3_item_category",
+      "main_reward_3_item_id",
+      "main_reward_3_item_num",
+      "main_reward_4_item_disp_type",
+      "main_reward_4_item_category",
+      "main_reward_4_item_id",
+      "main_reward_4_item_num",
+      "main_reward_5_item_disp_type",
+      "main_reward_5_item_category",
+      "main_reward_5_item_id",
+      "main_reward_5_item_num",
+      "main_reward_6_item_disp_type",
+      "main_reward_6_item_category",
+      "main_reward_6_item_id",
+      "main_reward_6_item_num",
+      "main_reward_7_item_disp_type",
+      "main_reward_7_item_category",
+      "main_reward_7_item_id",
+      "main_reward_7_item_num",
+      "main_reward_8_item_disp_type",
+      "main_reward_8_item_category",
+      "main_reward_8_item_id",
+      "main_reward_8_item_num",
+      "main_reward_9_item_disp_type",
+      "main_reward_9_item_category",
+      "main_reward_9_item_id",
+      "main_reward_9_item_num",
+      "random_drop_reward_group_id",
+      "money_reward_item_odds_group_id",
+      "money_min",
+      "support_point_reward_item_odds_group_id",
+      "support_point_min",
+      "trainer_medal",
+      "fan_num_odds_group_id",
+      "fan_num_min",
+      "love_point",
+      "minutes_to_job_complete",
+      "story_event_event_pt",
+      "story_event_roulette_coin",
+      "factor_research_gauge_up",
+      "campaign_walking_gauge_up",
+      "training_challenge_reward_coin",
+      "training_report_pt",
+      "limited_schedule_id",
+      "limited_max_count"
+    ]
+  },
+  {
+    "name": "jobs_reward_sort_disp_order",
+    "rows": 40,
+    "columns": [
+      "id",
+      "item_category",
+      "item_id",
+      "disp_order"
+    ]
+  },
+  {
+    "name": "jukebox_comment",
+    "rows": 486,
+    "columns": [
+      "id",
+      "comment_id",
+      "chara_id",
+      "comment_type",
+      "variation_type",
+      "variation_value"
+    ]
+  },
+  {
+    "name": "jukebox_motion_data",
+    "rows": 16,
+    "columns": [
+      "id",
+      "song_type",
+      "motion_id"
+    ]
+  },
+  {
+    "name": "jukebox_music_data",
+    "rows": 193,
+    "columns": [
+      "music_id",
+      "sort",
+      "condition_type",
+      "is_hidden",
+      "version_type",
+      "request_type",
+      "lamp_color",
+      "lamp_animation",
+      "name_texture_length",
+      "song_type",
+      "bgm_cue_name_short",
+      "bgm_cuesheet_name_short",
+      "bgm_cue_name_gamesize",
+      "bgm_cuesheet_name_gamesize",
+      "short_length",
+      "alter_jacket",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "jukebox_setlist_data",
+    "rows": 16,
+    "columns": [
+      "id",
+      "disp_order",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "jukebox_setlist_music_data",
+    "rows": 420,
+    "columns": [
+      "id",
+      "setlist_id",
+      "set_order",
+      "music_id",
+      "play_length"
+    ]
+  },
+  {
+    "name": "jukebox_setlist_singer_data",
+    "rows": 3147,
+    "columns": [
+      "id",
+      "setlist_music_id",
+      "performer"
+    ]
+  },
+  {
+    "name": "legend_race",
+    "rows": 124,
+    "columns": [
+      "id",
+      "group_id",
+      "legend_bg_id",
+      "legend_bg_sub_id",
+      "has_unique_bg_env",
+      "image_id",
+      "difficulty",
+      "race_instance_id",
+      "season",
+      "weather",
+      "ground",
+      "legend_race_boss_npc_id",
+      "cost_num",
+      "drop_reward_odds_id",
+      "victory_reward_odds_id",
+      "first_clear_item_category_1",
+      "first_clear_item_id_1",
+      "first_clear_item_num_1",
+      "first_clear_item_category_2",
+      "first_clear_item_id_2",
+      "first_clear_item_num_2",
+      "first_clear_item_category_3",
+      "first_clear_item_id_3",
+      "first_clear_item_num_3",
+      "pick_up_item_category_1",
+      "pick_up_item_id_1",
+      "pick_up_item_num_1",
+      "pick_up_item_category_2",
+      "pick_up_item_id_2",
+      "pick_up_item_num_2",
+      "pick_up_item_category_3",
+      "pick_up_item_id_3",
+      "pick_up_item_num_3",
+      "notice_date",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "legend_race_billing",
+    "rows": 1,
+    "columns": [
+      "id",
+      "frequency",
+      "pay_cost"
+    ]
+  },
+  {
+    "name": "legend_race_boss_npc",
+    "rows": 129,
+    "columns": [
+      "id",
+      "chara_id",
+      "race_dress_id",
+      "nickname_id",
+      "card_rarity_data_id",
+      "post",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id"
+    ]
+  },
+  {
+    "name": "legend_race_cutt_chara_data",
+    "rows": 1,
+    "columns": [
+      "id",
+      "sub_id",
+      "chara_num",
+      "chara_id",
+      "target_timeline",
+      "target_list_index"
+    ]
+  },
+  {
+    "name": "legend_race_npc",
+    "rows": 2087,
+    "columns": [
+      "id",
+      "npc_group_id",
+      "chara_id",
+      "mob_id",
+      "race_dress_id",
+      "race_instance_id",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id"
+    ]
+  },
+  {
+    "name": "live_data",
+    "rows": 203,
+    "columns": [
+      "music_id",
+      "sort",
+      "music_type",
+      "title_color_top",
+      "title_color_bottom",
+      "condition_type",
+      "song_chara_type",
+      "live_member_number",
+      "default_main_dress",
+      "default_main_dress_color",
+      "default_mob_dress",
+      "default_mob_dress_color",
+      "backdancer_order",
+      "backdancer_dress",
+      "backdancer_dress_color",
+      "has_live",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "live_dress_restrict_data",
+    "rows": 2,
+    "columns": [
+      "id",
+      "music_id",
+      "dress_id"
+    ]
+  },
+  {
+    "name": "live_extra_data",
+    "rows": 1,
+    "columns": [
+      "id",
+      "music_id",
+      "group_id",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "next_music_id"
+    ]
+  },
+  {
+    "name": "live_fix_member_data",
+    "rows": 3,
+    "columns": [
+      "id",
+      "music_id",
+      "order",
+      "chara_id",
+      "dress_id1",
+      "dress_id2",
+      "dress_color1",
+      "dress_color2"
+    ]
+  },
+  {
+    "name": "live_permission_data",
+    "rows": 1527,
+    "columns": [
+      "music_id",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "live_recommend_formation",
+    "rows": 404,
+    "columns": [
+      "id",
+      "music_id",
+      "position_id",
+      "chara_type",
+      "chara_id",
+      "dress_id",
+      "dress_color",
+      "second_dress_id",
+      "second_dress_color"
+    ]
+  },
+  {
+    "name": "login_bonus_chara",
+    "rows": 13,
+    "columns": [
+      "id",
+      "login_bonus_detail_id",
+      "chara_num",
+      "chara_id",
+      "dress_id",
+      "pose_id",
+      "chara_id_2",
+      "dress_id_2",
+      "pose_id_2"
+    ]
+  },
+  {
+    "name": "login_bonus_data",
+    "rows": 244,
+    "columns": [
+      "id",
+      "type",
+      "count_num",
+      "disp_order",
+      "stamp_id",
+      "bg_id",
+      "group_id",
+      "step",
+      "gift_message_id",
+      "anime_file_id",
+      "anime_file_label",
+      "new_start_date",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "login_bonus_detail",
+    "rows": 578,
+    "columns": [
+      "id",
+      "login_bonus_id",
+      "count",
+      "item_category",
+      "item_id",
+      "item_num",
+      "item_category_2",
+      "item_id_2",
+      "item_num_2",
+      "item_category_3",
+      "item_id_3",
+      "item_num_3",
+      "item_category_4",
+      "item_id_4",
+      "item_num_4",
+      "item_category_5",
+      "item_id_5",
+      "item_num_5"
+    ]
+  },
+  {
+    "name": "love_rank",
+    "rows": 13,
+    "columns": [
+      "id",
+      "rank",
+      "total_point"
+    ]
+  },
+  {
+    "name": "main_story_custom_load",
+    "rows": 7,
+    "columns": [
+      "main_story_data_id",
+      "story_type_order",
+      "custom_load_type",
+      "keep_cue_name",
+      "custom_load_effect_pattern",
+      "image_effect_asset_name",
+      "use_action_cue",
+      "wait_time",
+      "target_story_id"
+    ]
+  },
+  {
+    "name": "main_story_data",
+    "rows": 169,
+    "columns": [
+      "id",
+      "part_id",
+      "episode_index",
+      "prev_episode_index",
+      "next_episode_index",
+      "lock_reference_episode_id",
+      "story_number",
+      "display_type",
+      "story_type_1",
+      "story_id_1",
+      "story_type_2",
+      "story_id_2",
+      "story_type_3",
+      "story_id_3",
+      "story_type_4",
+      "story_id_4",
+      "story_type_5",
+      "story_id_5",
+      "lock_type_1",
+      "lock_value_1_1",
+      "lock_value_1_2",
+      "lock_type_2",
+      "lock_value_2_1",
+      "lock_value_2_2",
+      "lock_type_3",
+      "lock_value_3_1",
+      "lock_value_3_2",
+      "add_reward_category_1",
+      "add_reward_id_1",
+      "add_reward_num_1",
+      "add_reward_category_2",
+      "add_reward_id_2",
+      "add_reward_num_2",
+      "is_custom_load"
+    ]
+  },
+  {
+    "name": "main_story_part",
+    "rows": 10,
+    "columns": [
+      "id",
+      "section_id",
+      "part_index",
+      "is_last_part",
+      "start_date",
+      "ui_color"
+    ]
+  },
+  {
+    "name": "main_story_race_bonus",
+    "rows": 29,
+    "columns": [
+      "id",
+      "group_id",
+      "bonus_type",
+      "bonus_value",
+      "condition_group"
+    ]
+  },
+  {
+    "name": "main_story_race_bonus_condition",
+    "rows": 19,
+    "columns": [
+      "id",
+      "group_id",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2"
+    ]
+  },
+  {
+    "name": "main_story_race_chara_data",
+    "rows": 460,
+    "columns": [
+      "id",
+      "group_id",
+      "bracket_number",
+      "chara_id",
+      "mob_id",
+      "is_player",
+      "dress_id",
+      "chara_color_type",
+      "motivation",
+      "running_style",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id",
+      "show_skill_type"
+    ]
+  },
+  {
+    "name": "main_story_race_data",
+    "rows": 40,
+    "columns": [
+      "id",
+      "race_instance_id",
+      "group_id",
+      "race_condition_id",
+      "clear_rank",
+      "bonus_group_id",
+      "gimmick_type",
+      "gimmick_trigger_skill",
+      "gimmick_match_race_asset",
+      "gimmick_unmatch_race_asset",
+      "bonus_chara_1",
+      "bonus_chara_2",
+      "bonus_chara_3"
+    ]
+  },
+  {
+    "name": "map_event_area_data",
+    "rows": 4,
+    "columns": [
+      "id",
+      "area_id",
+      "event_id",
+      "start_date"
+    ]
+  },
+  {
+    "name": "map_event_data",
+    "rows": 1,
+    "columns": [
+      "event_id",
+      "gauge_max",
+      "gauge_up_singlemode",
+      "gauge_up_teamstadium",
+      "gauge_up_login",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "map_event_flavor_text",
+    "rows": 18,
+    "columns": [
+      "id",
+      "event_id",
+      "image_type",
+      "story_id",
+      "story_condition_type"
+    ]
+  },
+  {
+    "name": "map_event_map_point",
+    "rows": 10,
+    "columns": [
+      "id",
+      "event_id",
+      "map_point_id",
+      "area_id",
+      "check_point_flag",
+      "disp_flag",
+      "next_episode_unlock_map_point_id",
+      "gauge_num",
+      "story_id_1",
+      "story_id_2",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1",
+      "chara_id",
+      "dress_id",
+      "motion_id",
+      "next_episode_id",
+      "start_date",
+      "movie_start_date"
+    ]
+  },
+  {
+    "name": "map_event_mini_motion",
+    "rows": 3,
+    "columns": [
+      "id",
+      "event_id",
+      "chara_id",
+      "dress_id",
+      "stand_motion",
+      "walk_motion",
+      "arrive_motion",
+      "checkpoint_motion",
+      "tap_motion",
+      "complete_motion"
+    ]
+  },
+  {
+    "name": "map_event_story_data",
+    "rows": 2,
+    "columns": [
+      "id",
+      "event_id",
+      "episode_index_id",
+      "story_condition_type",
+      "story_id",
+      "point_condition_type",
+      "start_date"
+    ]
+  },
+  {
+    "name": "memory_data",
+    "rows": 0,
+    "columns": [
+      "id",
+      "chara_id",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "mini_bg",
+    "rows": 36,
+    "columns": [
+      "id",
+      "scene_type",
+      "release_num",
+      "size_x",
+      "size_y",
+      "grid_offset_x",
+      "grid_offset_y",
+      "dress_id",
+      "position",
+      "env_id"
+    ]
+  },
+  {
+    "name": "mini_bg_chara_motion",
+    "rows": 832,
+    "columns": [
+      "id",
+      "bg_id",
+      "group_id",
+      "sub_group_id",
+      "is_mob",
+      "main_chara_num",
+      "pos_obj",
+      "second_pos_obj",
+      "position_file",
+      "grid_pos_x",
+      "grid_pos_y",
+      "priority",
+      "motion_name",
+      "timeline",
+      "timeline_actor",
+      "direction",
+      "chara_pos_y",
+      "chara_shadow",
+      "use_grid_pos_job_select",
+      "position_anim",
+      "fixed_render_order",
+      "se_cue_name01",
+      "se_cue_sheet01",
+      "se_start_frame01",
+      "se_cue_name02",
+      "se_cue_sheet02",
+      "se_start_frame02",
+      "effect_id",
+      "effect_start_sec"
+    ]
+  },
+  {
+    "name": "mini_face_type_data",
+    "rows": 36,
+    "columns": [
+      "label",
+      "eyebrow_l",
+      "eyebrow_r",
+      "eye_l",
+      "eye_r",
+      "mouth",
+      "cheek"
+    ]
+  },
+  {
+    "name": "mini_mob",
+    "rows": 12,
+    "columns": [
+      "id",
+      "type",
+      "body",
+      "hair",
+      "tail"
+    ]
+  },
+  {
+    "name": "mini_motion_set",
+    "rows": 443,
+    "columns": [
+      "id",
+      "label",
+      "body_motion",
+      "body_motion_type",
+      "body_motion_play_type",
+      "body_motion_scene_type",
+      "scene_sub_folder",
+      "chara_type_target",
+      "add_layer_index",
+      "is_mirror",
+      "facial_motion",
+      "chara_face_type",
+      "transition_time",
+      "ear_motion",
+      "is_enable_randome_ear",
+      "tail_motion",
+      "tail_motion_type",
+      "is_enable_randome_tail",
+      "use_tail_in_body_motion",
+      "prop_id",
+      "prop_motion",
+      "prop_motion_scene_type",
+      "prop_attach_node_name_type",
+      "prop_id_2",
+      "prop_motion_2",
+      "prop_motion_scene_type_2",
+      "prop_attach_node_name_type_2",
+      "is_prop_require_motion_end"
+    ]
+  },
+  {
+    "name": "mini_mouth_type",
+    "rows": 32,
+    "columns": [
+      "id",
+      "type",
+      "reverse_mouth_id"
+    ]
+  },
+  {
+    "name": "mission_data",
+    "rows": 8509,
+    "columns": [
+      "id",
+      "mission_type",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "condition_value_3",
+      "condition_value_4",
+      "condition_num",
+      "step_group_id",
+      "step_order",
+      "disp_order",
+      "item_category",
+      "item_id",
+      "item_num",
+      "event_id",
+      "date_check_flg",
+      "transition_type",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "mission_race_equate",
+    "rows": 53,
+    "columns": [
+      "id",
+      "input_id",
+      "equate_id"
+    ]
+  },
+  {
+    "name": "mission_race_scenario_group",
+    "rows": 5,
+    "columns": [
+      "id",
+      "scenario_id",
+      "race_instance_id"
+    ]
+  },
+  {
+    "name": "mob_data",
+    "rows": 1109,
+    "columns": [
+      "mob_id",
+      "chara_face_model",
+      "chara_skin_color",
+      "chara_hair_model",
+      "chara_hair_color",
+      "chara_height",
+      "chara_bust_size",
+      "socks",
+      "default_personality",
+      "race_personality",
+      "race_running_type",
+      "sex",
+      "dress_id",
+      "dress_color_id",
+      "use_live",
+      "hair_cutoff",
+      "attachment_model_id",
+      "capture_type",
+      "mayu_visible_type"
+    ]
+  },
+  {
+    "name": "mob_dress_color_set",
+    "rows": 1102,
+    "columns": [
+      "id",
+      "color_r1",
+      "color_r2",
+      "color_g1",
+      "color_g2",
+      "color_b1",
+      "color_b2",
+      "toon_color_r1",
+      "toon_color_r2",
+      "toon_color_g1",
+      "toon_color_g2",
+      "toon_color_b1",
+      "toon_color_b2"
+    ]
+  },
+  {
+    "name": "mob_hair_color_set",
+    "rows": 348,
+    "columns": [
+      "id",
+      "hair_color_r1",
+      "hair_color_r2",
+      "hair_color_g1",
+      "hair_color_g2",
+      "hair_color_b1",
+      "hair_color_b2",
+      "hair_toon_color_r1",
+      "hair_toon_color_r2",
+      "hair_toon_color_g1",
+      "hair_toon_color_g2",
+      "hair_toon_color_b1",
+      "hair_toon_color_b2",
+      "mayu_color_r1",
+      "mayu_color_r2",
+      "mayu_color_g1",
+      "mayu_color_g2",
+      "mayu_color_b1",
+      "mayu_color_b2",
+      "mayu_toon_color_r1",
+      "mayu_toon_color_r2",
+      "mayu_toon_color_g1",
+      "mayu_toon_color_g2",
+      "mayu_toon_color_b1",
+      "mayu_toon_color_b2",
+      "eye_color_r1",
+      "eye_color_r2",
+      "eye_color_g1",
+      "eye_color_g2",
+      "eye_color_b1",
+      "eye_color_b2",
+      "tail_color_r1",
+      "tail_color_r2",
+      "tail_color_g1",
+      "tail_color_g2",
+      "tail_color_b1",
+      "tail_color_b2",
+      "tail_toon_color_r1",
+      "tail_toon_color_r2",
+      "tail_toon_color_g1",
+      "tail_toon_color_g2",
+      "tail_toon_color_b1",
+      "tail_toon_color_b2"
+    ]
+  },
+  {
+    "name": "name_card_bg",
+    "rows": 150,
+    "columns": [
+      "id",
+      "other_group",
+      "bg_group",
+      "time_group",
+      "bg_id",
+      "bg_sub",
+      "order",
+      "pos_x",
+      "pos_y",
+      "width",
+      "height",
+      "start_date"
+    ]
+  },
+  {
+    "name": "need_piece_num_data",
+    "rows": 3,
+    "columns": [
+      "id",
+      "rarity",
+      "piece_num"
+    ]
+  },
+  {
+    "name": "nickname",
+    "rows": 391,
+    "columns": [
+      "id",
+      "type",
+      "scenario_id",
+      "disp_order",
+      "group_id",
+      "rank",
+      "chara_data_id",
+      "user_show",
+      "receive_condition_type",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "nickname_hide",
+    "rows": 1,
+    "columns": [
+      "id",
+      "nickname_id",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "note_profile",
+    "rows": 150,
+    "columns": [
+      "id",
+      "chara_id",
+      "text_type",
+      "lock_type",
+      "lock_value",
+      "secret_flg",
+      "sort"
+    ]
+  },
+  {
+    "name": "note_profile_text_type",
+    "rows": 25,
+    "columns": [
+      "id",
+      "text_type",
+      "text_category_id",
+      "sort"
+    ]
+  },
+  {
+    "name": "omakase_base_pt",
+    "rows": 600,
+    "columns": [
+      "id",
+      "command_id",
+      "condition_set_id",
+      "add_value"
+    ]
+  },
+  {
+    "name": "omakase_base_pt_onsen",
+    "rows": 8,
+    "columns": [
+      "id",
+      "command_id",
+      "condition_set_id",
+      "add_value"
+    ]
+  },
+  {
+    "name": "omakase_command",
+    "rows": 69,
+    "columns": [
+      "command_id",
+      "setting_id",
+      "base_weight"
+    ]
+  },
+  {
+    "name": "omakase_condition_set",
+    "rows": 91,
+    "columns": [
+      "id",
+      "condition_set_id",
+      "condition_type",
+      "condition_value1",
+      "condition_value2"
+    ]
+  },
+  {
+    "name": "omakase_condition_set_onsen",
+    "rows": 5,
+    "columns": [
+      "id",
+      "condition_type",
+      "condition_value1",
+      "condition_value2"
+    ]
+  },
+  {
+    "name": "omakase_continue_condition",
+    "rows": 13,
+    "columns": [
+      "continue_condition_id",
+      "condition_type",
+      "scenario_id"
+    ]
+  },
+  {
+    "name": "omakase_default_plan",
+    "rows": 18,
+    "columns": [
+      "plan_id",
+      "plan_chara_id",
+      "plan_set_id",
+      "scenario_id"
+    ]
+  },
+  {
+    "name": "omakase_default_plan_set",
+    "rows": 126,
+    "columns": [
+      "id",
+      "plan_set_id",
+      "plan_set_type",
+      "condition_value_1",
+      "condition_value_2"
+    ]
+  },
+  {
+    "name": "omakase_filter",
+    "rows": 73,
+    "columns": [
+      "filter_id",
+      "is_modifiable",
+      "command_id",
+      "scenario_id",
+      "condition_set_id",
+      "priority"
+    ]
+  },
+  {
+    "name": "omakase_filter_detail",
+    "rows": 73,
+    "columns": [
+      "id",
+      "filter_id",
+      "command_id",
+      "filter_type"
+    ]
+  },
+  {
+    "name": "omakase_hide_skill",
+    "rows": 75,
+    "columns": [
+      "skill_id"
+    ]
+  },
+  {
+    "name": "omakase_modify",
+    "rows": 21,
+    "columns": [
+      "modify_id",
+      "scenario_id"
+    ]
+  },
+  {
+    "name": "omakase_modify_legend",
+    "rows": 57,
+    "columns": [
+      "buff_id",
+      "base_pt",
+      "modify_id",
+      "add_value0",
+      "add_value1",
+      "add_value2"
+    ]
+  },
+  {
+    "name": "omakase_modify_pt",
+    "rows": 111,
+    "columns": [
+      "id",
+      "command_id",
+      "modify_id",
+      "condition_set_id",
+      "add_value0",
+      "add_value1",
+      "add_value2"
+    ]
+  },
+  {
+    "name": "omakase_outing_base_pt",
+    "rows": 15,
+    "columns": [
+      "id",
+      "chara_id",
+      "scenario_id",
+      "condition_set_id",
+      "add_value"
+    ]
+  },
+  {
+    "name": "omakase_scenario",
+    "rows": 6,
+    "columns": [
+      "scenario_id",
+      "start_date"
+    ]
+  },
+  {
+    "name": "omakase_state",
+    "rows": 36,
+    "columns": [
+      "id",
+      "scenario_id",
+      "state_id",
+      "setting_id"
+    ]
+  },
+  {
+    "name": "omakase_stop_condition",
+    "rows": 41,
+    "columns": [
+      "stop_condition_id",
+      "condition_type",
+      "stopper_type",
+      "scenario_id"
+    ]
+  },
+  {
+    "name": "omakase_stop_trigger",
+    "rows": 18,
+    "columns": [
+      "stop_trigger_id",
+      "trigger_type",
+      "scenario_id"
+    ]
+  },
+  {
+    "name": "omakase_stopper_event",
+    "rows": 20,
+    "columns": [
+      "stopper_id",
+      "is_modifiable",
+      "condition_type",
+      "stop_type",
+      "scenario_id",
+      "story_id"
+    ]
+  },
+  {
+    "name": "paid_gacha_button_type",
+    "rows": 2,
+    "columns": [
+      "id",
+      "gacha_count",
+      "paid_num",
+      "draw_guarantee_rarity",
+      "draw_guarantee_type",
+      "draw_guarantee_num",
+      "draw_count"
+    ]
+  },
+  {
+    "name": "piece_data",
+    "rows": 259,
+    "columns": [
+      "id",
+      "item_place_id",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "price_change",
+    "rows": 104,
+    "columns": [
+      "id",
+      "group_id",
+      "min_num",
+      "max_num",
+      "pay_item_num"
+    ]
+  },
+  {
+    "name": "race",
+    "rows": 2905,
+    "columns": [
+      "id",
+      "group",
+      "grade",
+      "course_set",
+      "thumbnail_id",
+      "ff_cue_name",
+      "ff_cuesheet_name",
+      "real_ff_cue_name",
+      "real_ff_cuesheet_name",
+      "ff_anim",
+      "ff_camera",
+      "ff_camera_sub",
+      "ff_sub",
+      "start_gate",
+      "start_gate_panel",
+      "goal_gate",
+      "goal_flower",
+      "result_podium",
+      "audience_group_id",
+      "paddock_bg_id",
+      "audience",
+      "entry_num",
+      "change_full_gate",
+      "is_dirtgrade",
+      "start_date"
+    ]
+  },
+  {
+    "name": "race_bgm",
+    "rows": 622,
+    "columns": [
+      "id",
+      "race_type",
+      "race_instance_id",
+      "grade",
+      "single_mode_route_race_id",
+      "single_mode_program_id",
+      "difficulty",
+      "condition_type",
+      "paddock_bgm_cue_name",
+      "paddock_bgm_cuesheet_name",
+      "entrytable_bgm_cue_name",
+      "entrytable_bgm_cuesheet_name",
+      "first_bgm_pattern",
+      "second_bgm_pattern",
+      "result_cutin_bgm_cue_name_1",
+      "result_cutin_bgm_cuesheet_name_1",
+      "result_cutin_bgm_cue_name_2",
+      "result_cutin_bgm_cuesheet_name_2",
+      "result_cutin_bgm_cue_name_3",
+      "result_cutin_bgm_cuesheet_name_3",
+      "result_list_bgm_cue_name_1",
+      "result_list_bgm_cuesheet_name_1",
+      "result_list_bgm_cue_name_2",
+      "result_list_bgm_cuesheet_name_2",
+      "result_list_bgm_cue_name_3",
+      "result_list_bgm_cuesheet_name_3"
+    ]
+  },
+  {
+    "name": "race_bgm_cutin",
+    "rows": 8,
+    "columns": [
+      "id",
+      "card_id",
+      "bgm_group_id",
+      "fadeout_time",
+      "exclusive_control",
+      "is_jingle",
+      "short_cutin_bgm_cue_name",
+      "short_cutin_bgm_cuesheet_name",
+      "long_cutin_bgm_cue_name",
+      "long_cutin_bgm_cuesheet_name"
+    ]
+  },
+  {
+    "name": "race_bgm_pattern",
+    "rows": 74,
+    "columns": [
+      "id",
+      "bgm_time_1",
+      "bgm_cue_name_1",
+      "bgm_cuesheet_name_1",
+      "bgm_time_2",
+      "bgm_cue_name_2",
+      "bgm_cuesheet_name_2",
+      "bgm_time_3",
+      "bgm_cue_name_3",
+      "bgm_cuesheet_name_3",
+      "bgm_time_4",
+      "bgm_cue_name_4",
+      "bgm_cuesheet_name_4",
+      "bgm_time_5",
+      "bgm_cue_name_5",
+      "bgm_cuesheet_name_5",
+      "bgm_time_6",
+      "bgm_cue_name_6",
+      "bgm_cuesheet_name_6",
+      "bgm_time_7",
+      "bgm_cue_name_7",
+      "bgm_cuesheet_name_7",
+      "bgm_time_8",
+      "bgm_cue_name_8",
+      "bgm_cuesheet_name_8",
+      "bgm_time_9",
+      "bgm_cue_name_9",
+      "bgm_cuesheet_name_9",
+      "bgm_time_10",
+      "bgm_cue_name_10",
+      "bgm_cuesheet_name_10",
+      "bgm_time_11",
+      "bgm_cue_name_11",
+      "bgm_cuesheet_name_11",
+      "bgm_time_12",
+      "bgm_cue_name_12",
+      "bgm_cuesheet_name_12",
+      "bgm_time_13",
+      "bgm_cue_name_13",
+      "bgm_cuesheet_name_13",
+      "bgm_time_14",
+      "bgm_cue_name_14",
+      "bgm_cuesheet_name_14",
+      "bgm_time_15",
+      "bgm_cue_name_15",
+      "bgm_cuesheet_name_15",
+      "bgm_time_16",
+      "bgm_cue_name_16",
+      "bgm_cuesheet_name_16",
+      "bgm_time_17",
+      "bgm_cue_name_17",
+      "bgm_cuesheet_name_17",
+      "bgm_time_18",
+      "bgm_cue_name_18",
+      "bgm_cuesheet_name_18",
+      "bgm_time_19",
+      "bgm_cue_name_19",
+      "bgm_cuesheet_name_19",
+      "bgm_time_20",
+      "bgm_cue_name_20",
+      "bgm_cuesheet_name_20",
+      "bgm_time_21",
+      "bgm_cue_name_21",
+      "bgm_cuesheet_name_21",
+      "bgm_time_22",
+      "bgm_cue_name_22",
+      "bgm_cuesheet_name_22",
+      "bgm_time_23",
+      "bgm_cue_name_23",
+      "bgm_cuesheet_name_23",
+      "bgm_time_24",
+      "bgm_cue_name_24",
+      "bgm_cuesheet_name_24",
+      "bgm_time_25",
+      "bgm_cue_name_25",
+      "bgm_cuesheet_name_25",
+      "bgm_time_26",
+      "bgm_cue_name_26",
+      "bgm_cuesheet_name_26",
+      "bgm_time_27",
+      "bgm_cue_name_27",
+      "bgm_cuesheet_name_27",
+      "bgm_time_28",
+      "bgm_cue_name_28",
+      "bgm_cuesheet_name_28",
+      "bgm_time_29",
+      "bgm_cue_name_29",
+      "bgm_cuesheet_name_29",
+      "bgm_time_30",
+      "bgm_cue_name_30",
+      "bgm_cuesheet_name_30",
+      "bgm_trigger_time_ago",
+      "bgm_trigger_cue_name",
+      "bgm_trigger_cuesheet_name",
+      "bgm_skip_trigger_cue_name",
+      "bgm_skip_trigger_cuesheet_name"
+    ]
+  },
+  {
+    "name": "race_bib_color",
+    "rows": 92,
+    "columns": [
+      "grade",
+      "race_id",
+      "bib_color",
+      "font_color"
+    ]
+  },
+  {
+    "name": "race_condition",
+    "rows": 113,
+    "columns": [
+      "id",
+      "area",
+      "season",
+      "weather",
+      "sub_weather",
+      "ground_type",
+      "ground",
+      "rate"
+    ]
+  },
+  {
+    "name": "race_course_set",
+    "rows": 140,
+    "columns": [
+      "id",
+      "race_track_id",
+      "distance",
+      "ground",
+      "inout",
+      "turn",
+      "tight_track",
+      "run_outside",
+      "ex_camera",
+      "run_up",
+      "fence_set",
+      "float_lane_max",
+      "course_set_status_id",
+      "finish_time_min",
+      "finish_time_min_random_range",
+      "finish_time_max",
+      "finish_time_max_random_range"
+    ]
+  },
+  {
+    "name": "race_course_set_status",
+    "rows": 12,
+    "columns": [
+      "course_set_status_id",
+      "target_status_1",
+      "target_status_2"
+    ]
+  },
+  {
+    "name": "race_env_define",
+    "rows": 1361,
+    "columns": [
+      "id",
+      "race_track_id",
+      "season",
+      "weather",
+      "timezone",
+      "resource"
+    ]
+  },
+  {
+    "name": "race_fence_set",
+    "rows": 120,
+    "columns": [
+      "id",
+      "fence_1",
+      "fence_2",
+      "fence_3",
+      "fence_4",
+      "fence_5",
+      "fence_6",
+      "fence_7",
+      "fence_8"
+    ]
+  },
+  {
+    "name": "race_instance",
+    "rows": 3380,
+    "columns": [
+      "id",
+      "race_id",
+      "npc_group_id",
+      "date",
+      "time",
+      "clock_time",
+      "race_number"
+    ]
+  },
+  {
+    "name": "race_jikkyo_base",
+    "rows": 7919,
+    "columns": [
+      "id",
+      "mode",
+      "sub_mode",
+      "sub_mode_jump",
+      "situation",
+      "sub_situation",
+      "situation_end",
+      "disable_reentry_situation",
+      "trigger0",
+      "trigger1",
+      "trigger2",
+      "trigger3",
+      "trigger4",
+      "trigger5",
+      "trigger6",
+      "trigger7",
+      "trigger8",
+      "trigger9",
+      "message_group",
+      "comment_group",
+      "priority",
+      "per",
+      "immediate",
+      "discard",
+      "tension",
+      "camera_id",
+      "camera_horse1",
+      "camera_horse2",
+      "is_force_play_event_camera",
+      "disable_reuse"
+    ]
+  },
+  {
+    "name": "race_jikkyo_base_venus",
+    "rows": 1431,
+    "columns": [
+      "id",
+      "mode",
+      "sub_mode",
+      "sub_mode_jump",
+      "situation",
+      "sub_situation",
+      "situation_end",
+      "disable_reentry_situation",
+      "trigger0",
+      "trigger1",
+      "trigger2",
+      "trigger3",
+      "trigger4",
+      "trigger5",
+      "trigger6",
+      "trigger7",
+      "trigger8",
+      "trigger9",
+      "message_group",
+      "comment_group",
+      "priority",
+      "per",
+      "immediate",
+      "discard",
+      "tension",
+      "camera_id",
+      "camera_horse1",
+      "camera_horse2",
+      "disable_reuse"
+    ]
+  },
+  {
+    "name": "race_jikkyo_comment",
+    "rows": 384,
+    "columns": [
+      "id",
+      "group_id",
+      "message",
+      "voice",
+      "per",
+      "message_group",
+      "omit_tag"
+    ]
+  },
+  {
+    "name": "race_jikkyo_cue",
+    "rows": 2303,
+    "columns": [
+      "id",
+      "condition_type_1",
+      "condition_value_1",
+      "condition_type_2",
+      "condition_value_2",
+      "condition_type_3",
+      "condition_value_3",
+      "cuesheet_name",
+      "cuesheet_id",
+      "cuesheet_type"
+    ]
+  },
+  {
+    "name": "race_jikkyo_message",
+    "rows": 3249,
+    "columns": [
+      "id",
+      "group_id",
+      "message",
+      "voice",
+      "per",
+      "comment_group",
+      "reuse",
+      "omit_tag"
+    ]
+  },
+  {
+    "name": "race_jikkyo_race",
+    "rows": 880,
+    "columns": [
+      "id",
+      "cue_id"
+    ]
+  },
+  {
+    "name": "race_jikkyo_trigger",
+    "rows": 2432,
+    "columns": [
+      "id",
+      "command",
+      "inequality",
+      "horse1",
+      "horse2",
+      "param1",
+      "param2"
+    ]
+  },
+  {
+    "name": "race_motivation_rate",
+    "rows": 5,
+    "columns": [
+      "id",
+      "motivation_rate"
+    ]
+  },
+  {
+    "name": "race_overrun_pattern",
+    "rows": 5,
+    "columns": [
+      "id",
+      "finish_order_0_type",
+      "finish_order_1_type",
+      "finish_order_2_type",
+      "finish_order_3_type",
+      "finish_order_4_type",
+      "finish_order_lose_type"
+    ]
+  },
+  {
+    "name": "race_player_camera",
+    "rows": 122,
+    "columns": [
+      "id",
+      "priority",
+      "prefab_name",
+      "category"
+    ]
+  },
+  {
+    "name": "race_proper_distance_rate",
+    "rows": 9,
+    "columns": [
+      "id",
+      "proper_rate_speed",
+      "proper_rate_power"
+    ]
+  },
+  {
+    "name": "race_proper_ground_rate",
+    "rows": 9,
+    "columns": [
+      "id",
+      "proper_rate"
+    ]
+  },
+  {
+    "name": "race_proper_runningstyle_rate",
+    "rows": 9,
+    "columns": [
+      "id",
+      "proper_rate"
+    ]
+  },
+  {
+    "name": "race_single_mode_team_status",
+    "rows": 6,
+    "columns": [
+      "id",
+      "team_rank_threshold",
+      "add_status"
+    ]
+  },
+  {
+    "name": "race_sp_rule_data",
+    "rows": 2,
+    "columns": [
+      "id",
+      "race_sp_rule_type"
+    ]
+  },
+  {
+    "name": "race_sp_rule_schedule",
+    "rows": 4,
+    "columns": [
+      "id",
+      "race_sp_rule_data_id",
+      "event_category",
+      "event_id",
+      "event_month",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "race_sp_rule_skillset",
+    "rows": 55,
+    "columns": [
+      "id",
+      "race_sp_rule_data_id",
+      "skill_id"
+    ]
+  },
+  {
+    "name": "race_track",
+    "rows": 17,
+    "columns": [
+      "id",
+      "initial_lane_type",
+      "enable_half_gate",
+      "horse_num_gate_variation",
+      "turf_vision_type",
+      "footsmoke_color_type",
+      "area",
+      "overrun_result_type",
+      "flag_type",
+      "gate_panel_type",
+      "gate_lamp_type",
+      "board_condition_type",
+      "result_board_type"
+    ]
+  },
+  {
+    "name": "race_trophy",
+    "rows": 639,
+    "columns": [
+      "id",
+      "trophy_id",
+      "race_instance_id",
+      "original_flag",
+      "disp_order",
+      "size",
+      "event_type",
+      "start_date",
+      "display_end_date"
+    ]
+  },
+  {
+    "name": "random_ear_tail_motion",
+    "rows": 27,
+    "columns": [
+      "id",
+      "parts_type",
+      "motion_name",
+      "ear_type",
+      "use_story",
+      "use_theater"
+    ]
+  },
+  {
+    "name": "rating_race_condition",
+    "rows": 25,
+    "columns": [
+      "id",
+      "race_instance_id",
+      "season",
+      "weather",
+      "ground",
+      "bg_id",
+      "bg_sub_id"
+    ]
+  },
+  {
+    "name": "rating_race_data",
+    "rows": 1,
+    "columns": [
+      "id",
+      "notice_date",
+      "start_date",
+      "end_date",
+      "weekday_free_play_num",
+      "weekend_free_play_num",
+      "rating_rank_initial_limit",
+      "rating_rank_reset_limit"
+    ]
+  },
+  {
+    "name": "rating_race_finale_reward",
+    "rows": 108,
+    "columns": [
+      "id",
+      "rating_race_data_id",
+      "rating_rank",
+      "finish_order",
+      "reward_group_id"
+    ]
+  },
+  {
+    "name": "rating_race_phase_schedule",
+    "rows": 8,
+    "columns": [
+      "id",
+      "rating_race_data_id",
+      "week",
+      "phase",
+      "rating_race_condition_id_short",
+      "rating_race_condition_id_mile",
+      "rating_race_condition_id_middle",
+      "rating_race_condition_id_long",
+      "rating_race_condition_id_dirt",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "rating_race_rating_rank",
+    "rows": 10,
+    "columns": [
+      "id",
+      "rating_race_data_id",
+      "rating_rank",
+      "rating_score_min",
+      "rating_score_max",
+      "downgrade_permitted",
+      "npc_count",
+      "reward_group_id"
+    ]
+  },
+  {
+    "name": "rating_race_reward_group",
+    "rows": 173,
+    "columns": [
+      "id",
+      "reward_group_id",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "rating_race_weekend_reward",
+    "rows": 9,
+    "columns": [
+      "id",
+      "rating_race_data_id",
+      "rating_rank",
+      "weekend_reward_point",
+      "reward_group_id"
+    ]
+  },
+  {
+    "name": "rental_deck",
+    "rows": 10,
+    "columns": [
+      "id",
+      "distance_type",
+      "ground_type",
+      "disp_order",
+      "deck_name_id",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "rental_deck_alt",
+    "rows": 34,
+    "columns": [
+      "id",
+      "support_card_id",
+      "support_card_alt_id"
+    ]
+  },
+  {
+    "name": "rental_deck_card",
+    "rows": 50,
+    "columns": [
+      "id",
+      "rental_deck_id",
+      "support_card_id",
+      "limit_break_count",
+      "position"
+    ]
+  },
+  {
+    "name": "room_match_training_rank",
+    "rows": 148,
+    "columns": [
+      "id",
+      "rank",
+      "rule_line",
+      "start_date"
+    ]
+  },
+  {
+    "name": "season_data",
+    "rows": 28,
+    "columns": [
+      "id",
+      "type",
+      "season",
+      "priority",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "select_pickup",
+    "rows": 1729,
+    "columns": [
+      "id",
+      "gacha_id",
+      "card_id",
+      "card_type",
+      "recommend_order",
+      "recommend_type"
+    ]
+  },
+  {
+    "name": "shop_banner",
+    "rows": 10,
+    "columns": [
+      "id",
+      "shop_banner_name",
+      "product_id"
+    ]
+  },
+  {
+    "name": "short_episode",
+    "rows": 11,
+    "columns": [
+      "id",
+      "scene",
+      "sort",
+      "condition_type",
+      "condition_value_1",
+      "story_id"
+    ]
+  },
+  {
+    "name": "single_mode_09_board",
+    "rows": 3,
+    "columns": [
+      "id"
+    ]
+  },
+  {
+    "name": "single_mode_09_chip",
+    "rows": 13,
+    "columns": [
+      "id",
+      "schedule_id",
+      "type",
+      "board_id"
+    ]
+  },
+  {
+    "name": "single_mode_09_chip_effect",
+    "rows": 70,
+    "columns": [
+      "id",
+      "chip_id",
+      "point",
+      "group_id",
+      "effect_category",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_09_learning_bonus",
+    "rows": 2,
+    "columns": [
+      "id",
+      "point_min",
+      "point_max",
+      "base_value",
+      "bonus_value"
+    ]
+  },
+  {
+    "name": "single_mode_09_link_effect",
+    "rows": 13,
+    "columns": [
+      "id",
+      "chara_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_09_progress_rate",
+    "rows": 3,
+    "columns": [
+      "id",
+      "progress_min",
+      "progress_max",
+      "result_type"
+    ]
+  },
+  {
+    "name": "single_mode_09_schedule",
+    "rows": 5,
+    "columns": [
+      "id",
+      "turn_num",
+      "target_pt",
+      "stock_num",
+      "dress_id"
+    ]
+  },
+  {
+    "name": "single_mode_09_training_boost",
+    "rows": 54,
+    "columns": [
+      "id",
+      "boost_set_id",
+      "level_min",
+      "level_max",
+      "add_value"
+    ]
+  },
+  {
+    "name": "single_mode_10_9047_reward",
+    "rows": 12,
+    "columns": [
+      "id",
+      "min_turn",
+      "max_turn",
+      "end_type",
+      "gain_type",
+      "gain_value"
+    ]
+  },
+  {
+    "name": "single_mode_10_9048_bonus",
+    "rows": 8,
+    "columns": [
+      "id",
+      "min_level",
+      "max_level",
+      "level_bonus"
+    ]
+  },
+  {
+    "name": "single_mode_10_9048_guest",
+    "rows": 9,
+    "columns": [
+      "id",
+      "min_level",
+      "max_level",
+      "level_bonus_1",
+      "level_bonus_2"
+    ]
+  },
+  {
+    "name": "single_mode_10_audience_effect",
+    "rows": 3,
+    "columns": [
+      "id",
+      "min_turn",
+      "max_turn",
+      "audience_effect"
+    ]
+  },
+  {
+    "name": "single_mode_10_buff",
+    "rows": 57,
+    "columns": [
+      "id",
+      "buff_id",
+      "legend_id",
+      "buff_rank",
+      "buff_trigger",
+      "condition_group_id",
+      "effect_group_id",
+      "buff_turn_type",
+      "buff_turn_value",
+      "buff_ct",
+      "icon",
+      "is_enable_inactivation"
+    ]
+  },
+  {
+    "name": "single_mode_10_buff_condition",
+    "rows": 13,
+    "columns": [
+      "id",
+      "condition_group_id",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "condition_value_3",
+      "condition_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_10_buff_effect",
+    "rows": 56,
+    "columns": [
+      "id",
+      "effect_group_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "legend_id",
+      "bonus_value"
+    ]
+  },
+  {
+    "name": "single_mode_10_buff_num",
+    "rows": 12,
+    "columns": [
+      "id",
+      "legend_id",
+      "gauge_min",
+      "gauge_max",
+      "num",
+      "highest_num",
+      "link_num"
+    ]
+  },
+  {
+    "name": "single_mode_10_cm_detail",
+    "rows": 36,
+    "columns": [
+      "id",
+      "route_id",
+      "condition_type",
+      "condition_value",
+      "priority",
+      "voice_id",
+      "target_type",
+      "target_value"
+    ]
+  },
+  {
+    "name": "single_mode_10_group_outing_eff",
+    "rows": 5,
+    "columns": [
+      "id",
+      "chara_id",
+      "step",
+      "effect_type",
+      "effect_value"
+    ]
+  },
+  {
+    "name": "single_mode_10_lottery_turn",
+    "rows": 11,
+    "columns": [
+      "id",
+      "turn"
+    ]
+  },
+  {
+    "name": "single_mode_10_masterly",
+    "rows": 3,
+    "columns": [
+      "id",
+      "legend_id",
+      "buff_num",
+      "condition_group_id",
+      "effect_group_id"
+    ]
+  },
+  {
+    "name": "single_mode_10_sprace",
+    "rows": 3,
+    "columns": [
+      "id",
+      "race_group_id",
+      "turn_num"
+    ]
+  },
+  {
+    "name": "single_mode_10_staging_sound",
+    "rows": 19,
+    "columns": [
+      "id",
+      "staging_type",
+      "cut_number",
+      "motion_type",
+      "se_cue_name",
+      "se_cuesheet_name"
+    ]
+  },
+  {
+    "name": "single_mode_11_check_point_eff",
+    "rows": 38,
+    "columns": [
+      "id",
+      "check_point_type",
+      "result_state",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_11_facility_effect",
+    "rows": 403,
+    "columns": [
+      "id",
+      "facility_id",
+      "state_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_11_facility_kind",
+    "rows": 6,
+    "columns": [
+      "facility_id",
+      "command_id"
+    ]
+  },
+  {
+    "name": "single_mode_11_facility_lv_up",
+    "rows": 43,
+    "columns": [
+      "id",
+      "facility_id",
+      "current_state_id",
+      "target_state_id",
+      "cost"
+    ]
+  },
+  {
+    "name": "single_mode_11_facility_state",
+    "rows": 49,
+    "columns": [
+      "id",
+      "facility_id",
+      "facility_lv",
+      "icon_id",
+      "state_id"
+    ]
+  },
+  {
+    "name": "single_mode_11_gain_training_pt",
+    "rows": 40,
+    "columns": [
+      "id",
+      "deck_id",
+      "turn_min",
+      "turn_max",
+      "gain_shima_training_pt"
+    ]
+  },
+  {
+    "name": "single_mode_11_outing_effect",
+    "rows": 4,
+    "columns": [
+      "id",
+      "chara_id",
+      "min_lv",
+      "value"
+    ]
+  },
+  {
+    "name": "single_mode_11_pioneer_pt_bonus",
+    "rows": 5,
+    "columns": [
+      "id",
+      "check_point_type",
+      "group_id",
+      "pt_rate",
+      "add_value_max"
+    ]
+  },
+  {
+    "name": "single_mode_11_planning",
+    "rows": 20,
+    "columns": [
+      "id",
+      "deck_id",
+      "check_point_type",
+      "planning_turn",
+      "check_point_turn",
+      "target_pt"
+    ]
+  },
+  {
+    "name": "single_mode_11_shima_effect",
+    "rows": 64,
+    "columns": [
+      "id",
+      "command_id",
+      "result_state",
+      "target_type",
+      "effect_value",
+      "required_facility_id"
+    ]
+  },
+  {
+    "name": "single_mode_11_training_mini",
+    "rows": 6,
+    "columns": [
+      "id",
+      "min_lv",
+      "max_lv",
+      "member_num"
+    ]
+  },
+  {
+    "name": "single_mode_12_assistant_effect",
+    "rows": 7,
+    "columns": [
+      "id",
+      "command_type",
+      "target_type",
+      "effect_value"
+    ]
+  },
+  {
+    "name": "single_mode_12_check_dug_result",
+    "rows": 7,
+    "columns": [
+      "id",
+      "schedule_id",
+      "ryokan_rank_min",
+      "ryokan_rank_max",
+      "result_type"
+    ]
+  },
+  {
+    "name": "single_mode_12_dig_bonus",
+    "rows": 504,
+    "columns": [
+      "id",
+      "stratum_id",
+      "dug_value",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_12_dig_item",
+    "rows": 18,
+    "columns": [
+      "id",
+      "item_id",
+      "item_level",
+      "stratum_type",
+      "dig_value"
+    ]
+  },
+  {
+    "name": "single_mode_12_dig_power",
+    "rows": 72,
+    "columns": [
+      "id",
+      "stratum_type",
+      "param_type",
+      "param_rank_min",
+      "param_rank_max",
+      "bonus_value"
+    ]
+  },
+  {
+    "name": "single_mode_12_dig_power_rank",
+    "rows": 24,
+    "columns": [
+      "id",
+      "dig_power_rank",
+      "dig_power_min",
+      "dig_power_max"
+    ]
+  },
+  {
+    "name": "single_mode_12_effect_category",
+    "rows": 21,
+    "columns": [
+      "effect_id",
+      "sort_id"
+    ]
+  },
+  {
+    "name": "single_mode_12_factor_bonus",
+    "rows": 9,
+    "columns": [
+      "id",
+      "factor_group_id",
+      "stratum_type",
+      "bonus_value"
+    ]
+  },
+  {
+    "name": "single_mode_12_onsen",
+    "rows": 10,
+    "columns": [
+      "id",
+      "open_turn",
+      "group_id"
+    ]
+  },
+  {
+    "name": "single_mode_12_onsen_effect",
+    "rows": 48,
+    "columns": [
+      "id",
+      "group_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_12_outing_effect",
+    "rows": 15,
+    "columns": [
+      "id",
+      "chara_id",
+      "rarity",
+      "story_step",
+      "ticket_num"
+    ]
+  },
+  {
+    "name": "single_mode_12_ryokan_rank",
+    "rows": 5,
+    "columns": [
+      "id",
+      "group_id",
+      "dug_onsen_num",
+      "dug_onsen_id"
+    ]
+  },
+  {
+    "name": "single_mode_12_schedule",
+    "rows": 3,
+    "columns": [
+      "id",
+      "turn_num"
+    ]
+  },
+  {
+    "name": "single_mode_12_spa_ticket",
+    "rows": 12,
+    "columns": [
+      "id",
+      "type_id",
+      "chara_id",
+      "rarity",
+      "ticket_num"
+    ]
+  },
+  {
+    "name": "single_mode_12_stratum",
+    "rows": 20,
+    "columns": [
+      "id",
+      "onsen_id",
+      "stratum_order",
+      "stratum_type",
+      "stratum_volume"
+    ]
+  },
+  {
+    "name": "single_mode_13_add_dream_point",
+    "rows": 18,
+    "columns": [
+      "id",
+      "deck_id",
+      "condition_type",
+      "condition_value",
+      "value"
+    ]
+  },
+  {
+    "name": "single_mode_13_bc_program_flag",
+    "rows": 18,
+    "columns": [
+      "id",
+      "bc_group_id",
+      "program_id",
+      "determine_race_flag",
+      "skill_id"
+    ]
+  },
+  {
+    "name": "single_mode_13_member",
+    "rows": 5,
+    "columns": [
+      "id",
+      "chara_id",
+      "bc_group_id",
+      "bc_npc_id"
+    ]
+  },
+  {
+    "name": "single_mode_13_rank",
+    "rows": 17,
+    "columns": [
+      "id",
+      "rank_id",
+      "rank_exp",
+      "rank_bonus_effect_group_id"
+    ]
+  },
+  {
+    "name": "single_mode_13_rank_bonus_effect_group",
+    "rows": 33,
+    "columns": [
+      "id",
+      "group_id",
+      "condition_type",
+      "effect_type",
+      "effect_value"
+    ]
+  },
+  {
+    "name": "single_mode_13_schedule",
+    "rows": 6,
+    "columns": [
+      "id",
+      "meeting_turn",
+      "start_turn",
+      "end_turn",
+      "need_team_rank",
+      "team_sp_lv"
+    ]
+  },
+  {
+    "name": "single_mode_13_team_rank",
+    "rows": 51,
+    "columns": [
+      "id",
+      "rank_group",
+      "effect_type",
+      "effect_value"
+    ]
+  },
+  {
+    "name": "single_mode_13_team_sp_effect",
+    "rows": 85,
+    "columns": [
+      "id",
+      "group_type",
+      "effect_group",
+      "effect_type",
+      "num_support_type",
+      "effect_value"
+    ]
+  },
+  {
+    "name": "single_mode_13_team_sp_level",
+    "rows": 25,
+    "columns": [
+      "id",
+      "group_type",
+      "level",
+      "need_point",
+      "effect_group"
+    ]
+  },
+  {
+    "name": "single_mode_13_top_bg_chara",
+    "rows": 7,
+    "columns": [
+      "id",
+      "cut_id",
+      "required_team_progress",
+      "member_id",
+      "rate"
+    ]
+  },
+  {
+    "name": "single_mode_14_basic_effect",
+    "rows": 15,
+    "columns": [
+      "id",
+      "check_point_type",
+      "effect_type",
+      "effect_value",
+      "condition_type_1",
+      "condition_value_1",
+      "condition_type_2",
+      "condition_value_2",
+      "condition_type_3",
+      "condition_value_3"
+    ]
+  },
+  {
+    "name": "single_mode_14_check_point",
+    "rows": 3,
+    "columns": [
+      "id",
+      "check_point_type",
+      "turn",
+      "success_pt",
+      "great_success_pt"
+    ]
+  },
+  {
+    "name": "single_mode_14_check_point_effect",
+    "rows": 21,
+    "columns": [
+      "id",
+      "check_point_type",
+      "result_state",
+      "effect_type",
+      "effect_value",
+      "condition_type_1",
+      "condition_value_1",
+      "condition_type_2",
+      "condition_value_2",
+      "condition_type_3",
+      "condition_value_3"
+    ]
+  },
+  {
+    "name": "single_mode_14_check_point_pt",
+    "rows": 3,
+    "columns": [
+      "id",
+      "check_point_type",
+      "gain_pt"
+    ]
+  },
+  {
+    "name": "single_mode_14_check_point_pt_effect",
+    "rows": 33,
+    "columns": [
+      "id",
+      "pt_min",
+      "pt_max",
+      "effect_type",
+      "effect_value",
+      "condition_type_1",
+      "condition_value_1",
+      "condition_type_2",
+      "condition_value_2",
+      "condition_type_3",
+      "condition_value_3"
+    ]
+  },
+  {
+    "name": "single_mode_14_deck_info",
+    "rows": 5,
+    "columns": [
+      "id",
+      "deck_type",
+      "support_card_id"
+    ]
+  },
+  {
+    "name": "single_mode_14_feeling_bonus",
+    "rows": 4,
+    "columns": [
+      "id",
+      "feeling_num_min",
+      "feeling_num_max",
+      "add_value"
+    ]
+  },
+  {
+    "name": "single_mode_14_finals_effect",
+    "rows": 19,
+    "columns": [
+      "id",
+      "text_group_id",
+      "select_type",
+      "effect_type",
+      "effect_value",
+      "condition_type_1",
+      "condition_value_1",
+      "condition_type_2",
+      "condition_value_2",
+      "condition_type_3",
+      "condition_value_3"
+    ]
+  },
+  {
+    "name": "single_mode_14_finals_gain_skill",
+    "rows": 3,
+    "columns": [
+      "id",
+      "select_type",
+      "skill_id",
+      "skill_level_normal",
+      "skill_level_success",
+      "skill_level_great_success"
+    ]
+  },
+  {
+    "name": "single_mode_14_outing_effect",
+    "rows": 25,
+    "columns": [
+      "id",
+      "support_card_id",
+      "story_step",
+      "special_feeling_num"
+    ]
+  },
+  {
+    "name": "single_mode_14_region_effect",
+    "rows": 98,
+    "columns": [
+      "id",
+      "region_id",
+      "text_group_id",
+      "effect_type",
+      "effect_value",
+      "condition_type_1",
+      "condition_value_1",
+      "condition_type_2",
+      "condition_value_2",
+      "condition_type_3",
+      "condition_value_3"
+    ]
+  },
+  {
+    "name": "single_mode_14_region_effect_bonus",
+    "rows": 180,
+    "columns": [
+      "id",
+      "region_id",
+      "effect_type",
+      "min_pt",
+      "max_pt",
+      "add_value"
+    ]
+  },
+  {
+    "name": "single_mode_14_region_feeling",
+    "rows": 60,
+    "columns": [
+      "id",
+      "region_id",
+      "region_select_type",
+      "feeling_id",
+      "feeling_num"
+    ]
+  },
+  {
+    "name": "single_mode_14_region_select",
+    "rows": 3,
+    "columns": [
+      "id",
+      "region_select_type",
+      "turn"
+    ]
+  },
+  {
+    "name": "single_mode_14_special_gain_turn",
+    "rows": 11,
+    "columns": [
+      "id",
+      "turn",
+      "count"
+    ]
+  },
+  {
+    "name": "single_mode_14_twinkle_ramen",
+    "rows": 347,
+    "columns": [
+      "id",
+      "text_group",
+      "text_number",
+      "check_point_type",
+      "result_state",
+      "text_type",
+      "text_type_value"
+    ]
+  },
+  {
+    "name": "single_mode_analyze_condition",
+    "rows": 5,
+    "columns": [
+      "id",
+      "scenario_id",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "condition_value_3"
+    ]
+  },
+  {
+    "name": "single_mode_analyze_message",
+    "rows": 58,
+    "columns": [
+      "id",
+      "condition_set",
+      "proper_ground",
+      "proper_distance",
+      "popularity",
+      "year",
+      "priority",
+      "rate",
+      "motion_type",
+      "character_type"
+    ]
+  },
+  {
+    "name": "single_mode_analyze_ticket",
+    "rows": 7,
+    "columns": [
+      "id",
+      "grade",
+      "cost_ticket"
+    ]
+  },
+  {
+    "name": "single_mode_ao_offset",
+    "rows": 5,
+    "columns": [
+      "id",
+      "offset_1",
+      "offset_2",
+      "offset_3",
+      "offset_4",
+      "offset_5"
+    ]
+  },
+  {
+    "name": "single_mode_aoharu_cutt_type",
+    "rows": 24,
+    "columns": [
+      "id",
+      "cutt_type",
+      "cutt_id",
+      "chara_type"
+    ]
+  },
+  {
+    "name": "single_mode_aoharu_result_cutt",
+    "rows": 6,
+    "columns": [
+      "id",
+      "chara_id",
+      "cutt_id"
+    ]
+  },
+  {
+    "name": "single_mode_aoharu_schedule",
+    "rows": 5,
+    "columns": [
+      "id",
+      "turn_num",
+      "notice_turn_1",
+      "notice_turn_2",
+      "notice_turn_3",
+      "notice_turn_4",
+      "notice_turn_5"
+    ]
+  },
+  {
+    "name": "single_mode_arc_debuff",
+    "rows": 9,
+    "columns": [
+      "id",
+      "potential_id",
+      "potential_lv",
+      "speed",
+      "stamina",
+      "power",
+      "guts",
+      "wiz",
+      "turf",
+      "middle"
+    ]
+  },
+  {
+    "name": "single_mode_arc_potential",
+    "rows": 10,
+    "columns": [
+      "id",
+      "row",
+      "queue"
+    ]
+  },
+  {
+    "name": "single_mode_arc_potential_bonus",
+    "rows": 19,
+    "columns": [
+      "id",
+      "potential_id",
+      "potential_lv",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_arc_potential_buff",
+    "rows": 8,
+    "columns": [
+      "id",
+      "potential_id",
+      "potential_lv",
+      "speed",
+      "stamina",
+      "power",
+      "guts",
+      "wiz",
+      "turf",
+      "middle"
+    ]
+  },
+  {
+    "name": "single_mode_arc_potential_cond",
+    "rows": 13,
+    "columns": [
+      "id",
+      "potential_id",
+      "num",
+      "count_type",
+      "display_total_count",
+      "condition_type_1",
+      "condition_value_1",
+      "condition_value_2",
+      "condition_value_3",
+      "condition_value_4",
+      "condition_value_5"
+    ]
+  },
+  {
+    "name": "single_mode_arc_potential_level",
+    "rows": 18,
+    "columns": [
+      "id",
+      "potential_id",
+      "potential_lv",
+      "global_exp"
+    ]
+  },
+  {
+    "name": "single_mode_arc_race_debuff",
+    "rows": 48,
+    "columns": [
+      "id",
+      "race_instance_id",
+      "debuff_id"
+    ]
+  },
+  {
+    "name": "single_mode_arc_schedule",
+    "rows": 4,
+    "columns": [
+      "id",
+      "race_program_id",
+      "turn_num"
+    ]
+  },
+  {
+    "name": "single_mode_arc_taiman_peff_grp",
+    "rows": 12,
+    "columns": [
+      "id",
+      "icon_id",
+      "sub_id",
+      "effect_id_1",
+      "effect_id_2"
+    ]
+  },
+  {
+    "name": "single_mode_arc_training_eff",
+    "rows": 31,
+    "columns": [
+      "id",
+      "require_pt_min",
+      "require_pt_max",
+      "training_eff"
+    ]
+  },
+  {
+    "name": "single_mode_arc_win_pt",
+    "rows": 122,
+    "columns": [
+      "id",
+      "race_instance_id",
+      "grade",
+      "order_min",
+      "order_max",
+      "point_num"
+    ]
+  },
+  {
+    "name": "single_mode_audience_overwrite",
+    "rows": 11,
+    "columns": [
+      "id",
+      "chara_id",
+      "race_grade",
+      "audience_type",
+      "crowd_sound_type",
+      "live_type",
+      "start_turn",
+      "end_turn",
+      "group_id"
+    ]
+  },
+  {
+    "name": "single_mode_change_chara_route",
+    "rows": 131,
+    "columns": [
+      "id",
+      "route_race_group_id",
+      "chara_id",
+      "route_race_id"
+    ]
+  },
+  {
+    "name": "single_mode_chara_effect",
+    "rows": 43,
+    "columns": [
+      "id",
+      "effect_type",
+      "effect_category",
+      "effect_group_id",
+      "priority"
+    ]
+  },
+  {
+    "name": "single_mode_chara_effect_buff",
+    "rows": 6,
+    "columns": [
+      "id",
+      "chara_id",
+      "effect_id",
+      "turn",
+      "start_turn",
+      "end_turn",
+      "program_id",
+      "speed_add",
+      "stamina_add",
+      "power_add",
+      "guts_add",
+      "wiz_add",
+      "turf_add",
+      "dirt_add",
+      "short_add",
+      "mile_add",
+      "middle_add",
+      "long_add",
+      "nige_add",
+      "senko_add",
+      "sashi_add",
+      "oikomi_add"
+    ]
+  },
+  {
+    "name": "single_mode_chara_grade",
+    "rows": 10,
+    "columns": [
+      "id",
+      "win_num",
+      "run_num",
+      "need_fan_count"
+    ]
+  },
+  {
+    "name": "single_mode_chara_program",
+    "rows": 225,
+    "columns": [
+      "id",
+      "chara_id",
+      "program_group",
+      "program_group_2",
+      "base_id"
+    ]
+  },
+  {
+    "name": "single_mode_conclusion_set",
+    "rows": 1734,
+    "columns": [
+      "story_id",
+      "root_id",
+      "conclusion_id"
+    ]
+  },
+  {
+    "name": "single_mode_cook_coin_rate",
+    "rows": 9,
+    "columns": [
+      "id",
+      "period",
+      "material_count",
+      "coin_quantity_rate"
+    ]
+  },
+  {
+    "name": "single_mode_cook_cooking_cutt",
+    "rows": 59,
+    "columns": [
+      "id",
+      "cooking_num",
+      "cooking_motion_id_1",
+      "cooking_motion_id_2",
+      "cooking_motion_id_3",
+      "cooking_motion_id_4",
+      "success_motion_id",
+      "camera"
+    ]
+  },
+  {
+    "name": "single_mode_cook_cooking_rate",
+    "rows": 112,
+    "columns": [
+      "id",
+      "dish_type",
+      "cooking_cutt_id",
+      "cooking_num",
+      "success_rate",
+      "great_success_rate",
+      "confirmed_great_success_rate"
+    ]
+  },
+  {
+    "name": "single_mode_cook_cooking_type",
+    "rows": 42,
+    "columns": [
+      "id",
+      "cooking_motion_id",
+      "swap_type",
+      "cooking_motion_swap_id",
+      "cooking_effect_name_1",
+      "cooking_effect_position_1",
+      "cooking_effect_name_2",
+      "cooking_effect_position_2",
+      "cooking_effect_swap_name_1",
+      "cooking_effect_swap_position_1",
+      "cooking_effect_swap_name_2",
+      "cooking_effect_swap_position_2"
+    ]
+  },
+  {
+    "name": "single_mode_cook_dish",
+    "rows": 35,
+    "columns": [
+      "id",
+      "dish_set_id",
+      "dish_group_id",
+      "priority",
+      "material_group_id",
+      "effect_group_id",
+      "success_effect_group_id",
+      "gain_coin",
+      "gain_power",
+      "sort_order",
+      "dish_type"
+    ]
+  },
+  {
+    "name": "single_mode_cook_dish_cutt",
+    "rows": 55,
+    "columns": [
+      "id",
+      "command_group_id",
+      "material_group_id",
+      "is_success",
+      "cutt_id",
+      "prop_id"
+    ]
+  },
+  {
+    "name": "single_mode_cook_dish_cutt_se",
+    "rows": 66,
+    "columns": [
+      "id",
+      "command_group_id",
+      "chara_type",
+      "se_cue_name",
+      "se_cuesheet_name"
+    ]
+  },
+  {
+    "name": "single_mode_cook_dish_effect",
+    "rows": 69,
+    "columns": [
+      "id",
+      "effect_group_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_cook_dish_icon",
+    "rows": 13,
+    "columns": [
+      "dish_group_id",
+      "icon_id"
+    ]
+  },
+  {
+    "name": "single_mode_cook_dish_material",
+    "rows": 38,
+    "columns": [
+      "id",
+      "material_group_id",
+      "material_id",
+      "material_num"
+    ]
+  },
+  {
+    "name": "single_mode_cook_dish_name",
+    "rows": 31,
+    "columns": [
+      "id",
+      "dish_group_id",
+      "effect_group_id",
+      "great_success_flag",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "single_mode_cook_garden",
+    "rows": 5,
+    "columns": [
+      "facility_id"
+    ]
+  },
+  {
+    "name": "single_mode_cook_garden_bg",
+    "rows": 40,
+    "columns": [
+      "id",
+      "month",
+      "half_type",
+      "progress",
+      "bg_id",
+      "sub_bg_id",
+      "mini_motion_group_id_min",
+      "mini_motion_group_id_max"
+    ]
+  },
+  {
+    "name": "single_mode_cook_garden_effect",
+    "rows": 105,
+    "columns": [
+      "id",
+      "effect_group_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_cook_garden_level",
+    "rows": 25,
+    "columns": [
+      "id",
+      "facility_id",
+      "garden_lv",
+      "facility_lv",
+      "effect_group_id",
+      "coin_num"
+    ]
+  },
+  {
+    "name": "single_mode_cook_listener",
+    "rows": 6,
+    "columns": [
+      "id",
+      "camera",
+      "pos_x",
+      "pos_y",
+      "pos_z"
+    ]
+  },
+  {
+    "name": "single_mode_cook_material_rate",
+    "rows": 8,
+    "columns": [
+      "id",
+      "boost_type",
+      "material_count",
+      "effect_type",
+      "material_quantity_rate"
+    ]
+  },
+  {
+    "name": "single_mode_cook_message",
+    "rows": 4,
+    "columns": [
+      "id",
+      "view_type",
+      "condition_flag"
+    ]
+  },
+  {
+    "name": "single_mode_cook_motion_group",
+    "rows": 36,
+    "columns": [
+      "id",
+      "bg_motion_id_1",
+      "bg_swap_motion_id_1_1",
+      "bg_swap_motion_speed_1_1",
+      "bg_swap_motion_blend_1_1",
+      "bg_swap_motion_id_1_2",
+      "bg_swap_motion_speed_1_2",
+      "bg_swap_motion_blend_1_2",
+      "bg_motion_id_2",
+      "bg_swap_motion_id_2_1",
+      "bg_swap_motion_blend_2_1",
+      "bg_swap_motion_id_2_2",
+      "bg_swap_motion_blend_2_2",
+      "bg_motion_id_3",
+      "bg_swap_motion_id_3_1",
+      "bg_swap_motion_blend_3_1",
+      "bg_swap_motion_id_3_2",
+      "bg_swap_motion_blend_3_2"
+    ]
+  },
+  {
+    "name": "single_mode_cook_motion_status",
+    "rows": 14,
+    "columns": [
+      "id",
+      "turn_progress",
+      "garden_progress",
+      "motion_id_1",
+      "motion_id_2"
+    ]
+  },
+  {
+    "name": "single_mode_cook_power_data",
+    "rows": 5,
+    "columns": [
+      "id",
+      "cook_type",
+      "turn_num",
+      "success_num",
+      "great_success_num",
+      "garden_lv"
+    ]
+  },
+  {
+    "name": "single_mode_cook_stand_motion",
+    "rows": 30,
+    "columns": [
+      "id",
+      "chara_id",
+      "type",
+      "condition_type",
+      "mini_chara_motion_id"
+    ]
+  },
+  {
+    "name": "single_mode_cook_success_effect",
+    "rows": 20,
+    "columns": [
+      "id",
+      "effect_group_id",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4",
+      "priority",
+      "rate",
+      "odds"
+    ]
+  },
+  {
+    "name": "single_mode_cook_success_odds",
+    "rows": 8,
+    "columns": [
+      "id",
+      "power_min",
+      "power_max",
+      "success_rate"
+    ]
+  },
+  {
+    "name": "single_mode_cook_success_type",
+    "rows": 4,
+    "columns": [
+      "id",
+      "success_motion_id",
+      "success_motion_swap1_id",
+      "success_motion_swap2_id",
+      "success_effect_name",
+      "success_effect_position",
+      "success_effect_swap1_name",
+      "success_effect_swap2_name"
+    ]
+  },
+  {
+    "name": "single_mode_difficulty_box",
+    "rows": 5,
+    "columns": [
+      "reward_set_id",
+      "box_step",
+      "box_open_condition",
+      "box_type",
+      "box_id",
+      "cue_name_icon",
+      "cue_name_popout",
+      "cuesheet_name_icon",
+      "cuesheet_name_popout"
+    ]
+  },
+  {
+    "name": "single_mode_difficulty_box_gauge",
+    "rows": 16,
+    "columns": [
+      "id",
+      "scenario_id",
+      "difficulty_id",
+      "result_min",
+      "result_max",
+      "gauge_rate",
+      "add_condition_type",
+      "add_condition_min",
+      "add_condition_max"
+    ]
+  },
+  {
+    "name": "single_mode_difficulty_box_reward",
+    "rows": 65,
+    "columns": [
+      "id",
+      "box_id",
+      "box_num",
+      "item_category",
+      "item_id",
+      "item_num",
+      "rate",
+      "prize_type"
+    ]
+  },
+  {
+    "name": "single_mode_difficulty_data",
+    "rows": 13,
+    "columns": [
+      "difficulty_id",
+      "difficulty",
+      "description_id",
+      "difficulty_index",
+      "condition_type",
+      "condition_value",
+      "condition_type_2",
+      "condition_value_2",
+      "result_type",
+      "difficulty_rate",
+      "difficulty_motivation",
+      "continue_flag",
+      "addition_skill",
+      "special_flag",
+      "gauge_rate",
+      "item_category",
+      "item_id",
+      "max_num",
+      "firstclear_item_category",
+      "firstclear_item_id",
+      "firstclear_num"
+    ]
+  },
+  {
+    "name": "single_mode_difficulty_mode",
+    "rows": 4,
+    "columns": [
+      "difficulty_id",
+      "guide_id",
+      "consume_tp_ratio",
+      "consume_tp_bonus_ratio",
+      "chara_id",
+      "dress_id",
+      "in_motion",
+      "stand_motion",
+      "play_motion",
+      "gauge_motion",
+      "gauge_motion2",
+      "gauge_motion3",
+      "popout_motion",
+      "firstclear_motion",
+      "prize_motion1",
+      "prize_motion2",
+      "prize_motion3",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "reward_type",
+      "reward_set_id",
+      "gauge_max",
+      "gauge_up",
+      "item_category",
+      "item_id",
+      "max_num"
+    ]
+  },
+  {
+    "name": "single_mode_evaluation",
+    "rows": 40,
+    "columns": [
+      "id",
+      "evaluation",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "single_mode_event_choice_reward",
+    "rows": 58,
+    "columns": [
+      "id",
+      "disp_type",
+      "effect_value_type_0",
+      "effect_value_type_1",
+      "effect_value_type_2"
+    ]
+  },
+  {
+    "name": "single_mode_event_conclusion",
+    "rows": 524,
+    "columns": [
+      "id",
+      "chara_id",
+      "chara_motion_set_id"
+    ]
+  },
+  {
+    "name": "single_mode_event_cr_priority",
+    "rows": 81,
+    "columns": [
+      "id",
+      "display_id",
+      "effect_value_condition_0",
+      "effect_value_condition_1",
+      "effect_value_condition_2",
+      "priority"
+    ]
+  },
+  {
+    "name": "single_mode_event_item_detail",
+    "rows": 20,
+    "columns": [
+      "id",
+      "event_category_id",
+      "item_id",
+      "name_index",
+      "is_special"
+    ]
+  },
+  {
+    "name": "single_mode_event_production",
+    "rows": 143,
+    "columns": [
+      "story_id",
+      "event_category_id",
+      "max_item_id",
+      "item_dir",
+      "item_name"
+    ]
+  },
+  {
+    "name": "single_mode_fan_count",
+    "rows": 1084,
+    "columns": [
+      "id",
+      "fan_set_id",
+      "order",
+      "fan_count"
+    ]
+  },
+  {
+    "name": "single_mode_free_coin_race",
+    "rows": 36,
+    "columns": [
+      "id",
+      "grade",
+      "order_min",
+      "order_max",
+      "coin_num"
+    ]
+  },
+  {
+    "name": "single_mode_free_shop",
+    "rows": 11,
+    "columns": [
+      "id",
+      "start_turn",
+      "end_turn",
+      "lineup_group_id",
+      "max_lineup_num"
+    ]
+  },
+  {
+    "name": "single_mode_free_shop_bg",
+    "rows": 5,
+    "columns": [
+      "id",
+      "start_turn",
+      "end_turn",
+      "bg_id",
+      "bg_sub_id"
+    ]
+  },
+  {
+    "name": "single_mode_free_shop_effect",
+    "rows": 64,
+    "columns": [
+      "id",
+      "effect_group_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4",
+      "turn"
+    ]
+  },
+  {
+    "name": "single_mode_free_shop_item",
+    "rows": 53,
+    "columns": [
+      "id",
+      "item_id",
+      "effect_group_id",
+      "coin_num",
+      "limit_num",
+      "effect_group",
+      "effect_priority",
+      "motion_id",
+      "use_flag"
+    ]
+  },
+  {
+    "name": "single_mode_free_training_plate",
+    "rows": 3,
+    "columns": [
+      "id",
+      "condition_type",
+      "value_min",
+      "value_max"
+    ]
+  },
+  {
+    "name": "single_mode_free_win_point",
+    "rows": 66,
+    "columns": [
+      "id",
+      "race_group_id",
+      "grade",
+      "order_min",
+      "order_max",
+      "point_num"
+    ]
+  },
+  {
+    "name": "single_mode_hide_story_control",
+    "rows": 12,
+    "columns": [
+      "id",
+      "support_card_id",
+      "story_id"
+    ]
+  },
+  {
+    "name": "single_mode_hint_gain",
+    "rows": 4919,
+    "columns": [
+      "id",
+      "hint_id",
+      "support_card_id",
+      "hint_group",
+      "hint_gain_type",
+      "hint_value_1",
+      "hint_value_2",
+      "group_id",
+      "condition_set_id",
+      "priority"
+    ]
+  },
+  {
+    "name": "single_mode_live_live_data",
+    "rows": 5,
+    "columns": [
+      "id",
+      "live_type",
+      "turn_num",
+      "great_success_num",
+      "song_num",
+      "normal_music_id",
+      "special_music_id"
+    ]
+  },
+  {
+    "name": "single_mode_live_master_bonus",
+    "rows": 133,
+    "columns": [
+      "id",
+      "master_bonus_type",
+      "master_bonus_type_value",
+      "master_bonus_gain_type_1",
+      "master_bonus_gain_value_1_1",
+      "master_bonus_gain_value_1_2",
+      "master_bonus_gain_value_1_3",
+      "master_bonus_gain_value_1_4",
+      "master_bonus_gain_type_2",
+      "master_bonus_gain_value_2_1",
+      "master_bonus_gain_value_2_2",
+      "master_bonus_gain_value_2_3",
+      "master_bonus_gain_value_2_4",
+      "master_bonus_gain_type_3",
+      "master_bonus_gain_value_3_1",
+      "master_bonus_gain_value_3_2",
+      "master_bonus_gain_value_3_3",
+      "master_bonus_gain_value_3_4"
+    ]
+  },
+  {
+    "name": "single_mode_live_song_list",
+    "rows": 24,
+    "columns": [
+      "id",
+      "command_id",
+      "live_id",
+      "level",
+      "master_bonus_content_text_id",
+      "live_bonus_type",
+      "live_bonus_value"
+    ]
+  },
+  {
+    "name": "single_mode_live_square",
+    "rows": 269,
+    "columns": [
+      "id",
+      "square_title_text_id",
+      "square_content_text_id",
+      "master_bonus_id",
+      "square_type",
+      "perf_type_1",
+      "perf_value_1",
+      "perf_type_2",
+      "perf_value_2",
+      "perf_type_3",
+      "perf_value_3",
+      "perf_type_4",
+      "perf_value_4",
+      "perf_type_5",
+      "perf_value_5"
+    ]
+  },
+  {
+    "name": "single_mode_member_rank",
+    "rows": 8,
+    "columns": [
+      "id",
+      "value_min",
+      "value_max",
+      "member_rank_id"
+    ]
+  },
+  {
+    "name": "single_mode_member_rank_points",
+    "rows": 12,
+    "columns": [
+      "id",
+      "rank_id",
+      "points"
+    ]
+  },
+  {
+    "name": "single_mode_message",
+    "rows": 34,
+    "columns": [
+      "id",
+      "priority",
+      "emergent",
+      "status_type_1",
+      "status_value_1_1",
+      "status_value_1_2",
+      "status_type_2",
+      "status_value_2_1",
+      "status_value_2_2",
+      "character_type"
+    ]
+  },
+  {
+    "name": "single_mode_npc",
+    "rows": 3810,
+    "columns": [
+      "id",
+      "npc_group_id",
+      "chara_id",
+      "mob_id",
+      "race_dress_id",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id",
+      "motivation_min",
+      "motivation_max"
+    ]
+  },
+  {
+    "name": "single_mode_outing",
+    "rows": 5,
+    "columns": [
+      "id",
+      "command_group_id",
+      "condition",
+      "is_play_cutt"
+    ]
+  },
+  {
+    "name": "single_mode_outing_set",
+    "rows": 4,
+    "columns": [
+      "id",
+      "command_group_id_1",
+      "command_group_id_2",
+      "command_group_id_3",
+      "command_group_id_4",
+      "command_group_id_5"
+    ]
+  },
+  {
+    "name": "single_mode_preview_bgm",
+    "rows": 29,
+    "columns": [
+      "id",
+      "scenario_id",
+      "preview_order",
+      "cue_name",
+      "cuesheet_name"
+    ]
+  },
+  {
+    "name": "single_mode_program",
+    "rows": 1118,
+    "columns": [
+      "id",
+      "base_program_id",
+      "program_group",
+      "race_instance_id",
+      "race_permission",
+      "month",
+      "half",
+      "reserve_program_id",
+      "random_group_id",
+      "grade_rate_id",
+      "entry_decrease",
+      "entry_decrease_flag",
+      "recommend_class_id",
+      "filly_only_flag",
+      "need_fan_count",
+      "fan_set_id",
+      "reward_set_id"
+    ]
+  },
+  {
+    "name": "single_mode_race_group",
+    "rows": 1112,
+    "columns": [
+      "id",
+      "race_group_id",
+      "race_program_id"
+    ]
+  },
+  {
+    "name": "single_mode_race_limit_reward",
+    "rows": 1,
+    "columns": [
+      "id",
+      "item_category",
+      "item_id",
+      "reward_num",
+      "reward_limit",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "single_mode_race_live",
+    "rows": 247,
+    "columns": [
+      "id",
+      "grade",
+      "race_instance_id",
+      "music_id"
+    ]
+  },
+  {
+    "name": "single_mode_race_restrict_turn",
+    "rows": 26,
+    "columns": [
+      "chara_id",
+      "turn",
+      "gain_id"
+    ]
+  },
+  {
+    "name": "single_mode_race_unique_condition",
+    "rows": 186,
+    "columns": [
+      "id",
+      "chara_id",
+      "year",
+      "race_program_id",
+      "race_condition_id",
+      "frame_order",
+      "finish_order_0"
+    ]
+  },
+  {
+    "name": "single_mode_rank",
+    "rows": 298,
+    "columns": [
+      "id",
+      "min_value",
+      "max_value"
+    ]
+  },
+  {
+    "name": "single_mode_recommend",
+    "rows": 14,
+    "columns": [
+      "id",
+      "grade_upper_limit",
+      "grade_lower_limit"
+    ]
+  },
+  {
+    "name": "single_mode_recommend_setting",
+    "rows": 3,
+    "columns": [
+      "id",
+      "recommend_course_id",
+      "header_font_color"
+    ]
+  },
+  {
+    "name": "single_mode_restrict_support",
+    "rows": 11,
+    "columns": [
+      "id",
+      "scenario_id",
+      "support_card_id"
+    ]
+  },
+  {
+    "name": "single_mode_reward_set",
+    "rows": 637,
+    "columns": [
+      "id",
+      "reward_set_id",
+      "order_min",
+      "order_max",
+      "reward_type",
+      "bonus",
+      "odds",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "single_mode_rival",
+    "rows": 6879,
+    "columns": [
+      "id",
+      "chara_id",
+      "turn",
+      "race_program_id",
+      "rival_flag_id",
+      "condition_type",
+      "rival_chara_id",
+      "single_mode_npc_id",
+      "frame_order"
+    ]
+  },
+  {
+    "name": "single_mode_route",
+    "rows": 140,
+    "columns": [
+      "id",
+      "scenario_id",
+      "chara_id",
+      "race_set_id",
+      "condition_set_id",
+      "priority"
+    ]
+  },
+  {
+    "name": "single_mode_route_announce",
+    "rows": 20,
+    "columns": [
+      "id",
+      "route_race_type",
+      "route_race_id",
+      "turn",
+      "target_type",
+      "target_value"
+    ]
+  },
+  {
+    "name": "single_mode_route_condition",
+    "rows": 16,
+    "columns": [
+      "id",
+      "condition_set_id",
+      "condition_type_1",
+      "condition_value_1",
+      "condition_value_2"
+    ]
+  },
+  {
+    "name": "single_mode_route_race",
+    "rows": 1792,
+    "columns": [
+      "id",
+      "race_set_id",
+      "scenario_group_id",
+      "target_type",
+      "sort_id",
+      "turn",
+      "race_type",
+      "condition_type",
+      "condition_id",
+      "condition_value_1",
+      "condition_value_2",
+      "determine_race",
+      "determine_race_flag",
+      "alt_determine_race",
+      "alt_determine_race_flag",
+      "determine_race_for_generate"
+    ]
+  },
+  {
+    "name": "single_mode_scenario",
+    "rows": 14,
+    "columns": [
+      "id",
+      "sort_id",
+      "scenario_image_id",
+      "prologue_id",
+      "turn_set_id",
+      "hint_rate",
+      "start_date",
+      "end_date",
+      "additional_icon_set_id",
+      "bg_id",
+      "bg_sub_id",
+      "bg_offset_x",
+      "sec_bg_id",
+      "sec_bg_sub_id",
+      "label_font_color",
+      "label_bg_color",
+      "chara_program_change_flag",
+      "max_speed",
+      "max_stamina",
+      "max_pow",
+      "max_guts",
+      "max_wiz",
+      "gimmick_discount_rate",
+      "skill_upgrade_num",
+      "upper_limit_speed",
+      "upper_limit_stamina",
+      "upper_limit_pow",
+      "upper_limit_guts",
+      "upper_limit_wiz",
+      "max_skill_point"
+    ]
+  },
+  {
+    "name": "single_mode_scenario_group",
+    "rows": 84,
+    "columns": [
+      "id",
+      "group_id",
+      "scenario_id"
+    ]
+  },
+  {
+    "name": "single_mode_scenario_record",
+    "rows": 180,
+    "columns": [
+      "id",
+      "scenario_id",
+      "need_record_min",
+      "reward_item_category",
+      "reward_item_id",
+      "reward_num"
+    ]
+  },
+  {
+    "name": "single_mode_scenario_update",
+    "rows": 2,
+    "columns": [
+      "id",
+      "scenario_id",
+      "tips_group_id",
+      "page_index_from",
+      "page_index_to",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "single_mode_scout_chara",
+    "rows": 513,
+    "columns": [
+      "id",
+      "support_card_id",
+      "chara_id",
+      "race_dress_id",
+      "live_dress_id",
+      "tag_support_card_id",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "speed_limit",
+      "stamina_limit",
+      "pow_limit",
+      "guts_limit",
+      "wiz_limit"
+    ]
+  },
+  {
+    "name": "single_mode_select_skip",
+    "rows": 9,
+    "columns": [
+      "story_id",
+      "auto_selected_index"
+    ]
+  },
+  {
+    "name": "single_mode_skill_need_point",
+    "rows": 1129,
+    "columns": [
+      "id",
+      "need_skill_point",
+      "status_type",
+      "status_value",
+      "solvable_type"
+    ]
+  },
+  {
+    "name": "single_mode_special_chara",
+    "rows": 73,
+    "columns": [
+      "id",
+      "scenario_id",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "single_mode_sport_compe_effect",
+    "rows": 15,
+    "columns": [
+      "id",
+      "sport_type",
+      "min_num",
+      "max_num",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_sport_compe_se",
+    "rows": 15,
+    "columns": [
+      "id",
+      "sheet_id",
+      "se_cue_name",
+      "se_cuesheet_name"
+    ]
+  },
+  {
+    "name": "single_mode_sport_competition",
+    "rows": 5,
+    "columns": [
+      "id",
+      "compe_type",
+      "turn",
+      "win_num",
+      "win_sport_rank"
+    ]
+  },
+  {
+    "name": "single_mode_sport_item_effect",
+    "rows": 7,
+    "columns": [
+      "id",
+      "item_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4",
+      "motion_id"
+    ]
+  },
+  {
+    "name": "single_mode_sport_link",
+    "rows": 150,
+    "columns": [
+      "id",
+      "command_id",
+      "training_level",
+      "target_type",
+      "effect_value"
+    ]
+  },
+  {
+    "name": "single_mode_sport_mob",
+    "rows": 600,
+    "columns": [
+      "id",
+      "mob_id"
+    ]
+  },
+  {
+    "name": "single_mode_sport_sport_type",
+    "rows": 15,
+    "columns": [
+      "id",
+      "command_id",
+      "training_set_id",
+      "target_type",
+      "sport_type"
+    ]
+  },
+  {
+    "name": "single_mode_sport_stance",
+    "rows": 30,
+    "columns": [
+      "id",
+      "sport_type",
+      "total_sport_rank",
+      "stance_effect_id_1",
+      "stance_effect_id_2",
+      "stance_effect_id_3",
+      "stance_effect_id_4",
+      "stance_effect_id_5",
+      "effect_turn"
+    ]
+  },
+  {
+    "name": "single_mode_sport_stance_effect",
+    "rows": 8,
+    "columns": [
+      "id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_sport_training_cut",
+    "rows": 75,
+    "columns": [
+      "id",
+      "command_id",
+      "training_level",
+      "success_cutin_name",
+      "failure_cutin_name"
+    ]
+  },
+  {
+    "name": "single_mode_story_condition_set",
+    "rows": 478,
+    "columns": [
+      "id",
+      "group_id",
+      "story_id",
+      "condition_type",
+      "condition_story_id_1",
+      "gain_select_1",
+      "select_index_1",
+      "condition_story_id_2",
+      "gain_select_2",
+      "select_index_2",
+      "condition_story_id_3",
+      "gain_select_3",
+      "select_index_3"
+    ]
+  },
+  {
+    "name": "single_mode_story_data",
+    "rows": 19943,
+    "columns": [
+      "id",
+      "story_id",
+      "short_story_id",
+      "card_id",
+      "card_chara_id",
+      "support_card_id",
+      "support_chara_id",
+      "show_progress_1",
+      "show_progress_2",
+      "show_progress_3",
+      "show_clear",
+      "show_succession",
+      "event_title_style",
+      "event_title_dress_icon",
+      "event_title_chara_icon",
+      "se_change",
+      "ending_type",
+      "race_event_flag",
+      "mini_game_result",
+      "gallery_main_scenario",
+      "gallery_flag",
+      "gallery_list_id",
+      "gallery_gruop_id",
+      "gallery_sort",
+      "gallery_condition",
+      "gallery_suggest_event",
+      "available_gallery_key",
+      "past_race_id",
+      "past_race_id_2",
+      "past_race_id_3",
+      "past_race_id_4",
+      "force_use_race_dress",
+      "event_category"
+    ]
+  },
+  {
+    "name": "single_mode_story_guide",
+    "rows": 13,
+    "columns": [
+      "story_id",
+      "guide_id"
+    ]
+  },
+  {
+    "name": "single_mode_story_root",
+    "rows": 36,
+    "columns": [
+      "id",
+      "story_id",
+      "suggest_select",
+      "suggest_index",
+      "condition_type",
+      "condition_story_id_1",
+      "gain_select_1",
+      "select_index_1",
+      "condition_story_id_2",
+      "gain_select_2",
+      "select_index_2",
+      "condition_story_id_3",
+      "gain_select_3",
+      "select_index_3"
+    ]
+  },
+  {
+    "name": "single_mode_tag_card_pos",
+    "rows": 7890,
+    "columns": [
+      "id",
+      "support_card_id",
+      "pattern",
+      "pos_index",
+      "pos_x",
+      "pos_y",
+      "scale_x",
+      "scale_y",
+      "rot_z"
+    ]
+  },
+  {
+    "name": "single_mode_team_name",
+    "rows": 4,
+    "columns": [
+      "id",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "single_mode_team_race_set",
+    "rows": 68,
+    "columns": [
+      "id",
+      "rank",
+      "race_instance_id_1",
+      "race_instance_id_2",
+      "race_instance_id_3",
+      "race_instance_id_4",
+      "race_instance_id_5",
+      "status_correction",
+      "super_team_chara_id",
+      "motion_id"
+    ]
+  },
+  {
+    "name": "single_mode_top_bg",
+    "rows": 222,
+    "columns": [
+      "id",
+      "month",
+      "half_type",
+      "bg_id",
+      "bg_sub_id",
+      "scenario_id",
+      "bg_progress",
+      "bg_effect",
+      "bgm_cue_name",
+      "bgm_cuesheet",
+      "max_placement"
+    ]
+  },
+  {
+    "name": "single_mode_top_bg_chara",
+    "rows": 21,
+    "columns": [
+      "id",
+      "scenario_id",
+      "bg_id",
+      "group_id",
+      "pos_x",
+      "pos_z",
+      "rotation_y",
+      "motion_set_id"
+    ]
+  },
+  {
+    "name": "single_mode_training",
+    "rows": 189,
+    "columns": [
+      "id",
+      "command_id",
+      "base_command_id",
+      "command_level",
+      "command_type",
+      "cutin_file_id",
+      "max_chara_num",
+      "voice_trigger_type",
+      "failure_rate",
+      "menu_bg_id",
+      "menu_bg_sub_id",
+      "motion_set",
+      "sabori_type",
+      "dress_type",
+      "dress_id",
+      "group_id"
+    ]
+  },
+  {
+    "name": "single_mode_training_bg_chara",
+    "rows": 30,
+    "columns": [
+      "id",
+      "scenario_id",
+      "command_id",
+      "command_level",
+      "cut_id"
+    ]
+  },
+  {
+    "name": "single_mode_training_effect",
+    "rows": 830,
+    "columns": [
+      "id",
+      "command_id",
+      "sub_id",
+      "result_state",
+      "target_type",
+      "effect_value",
+      "scenario_id"
+    ]
+  },
+  {
+    "name": "single_mode_training_plate",
+    "rows": 4,
+    "columns": [
+      "id",
+      "scenario_id",
+      "value_min",
+      "value_max"
+    ]
+  },
+  {
+    "name": "single_mode_training_se",
+    "rows": 398,
+    "columns": [
+      "id",
+      "sheet_id",
+      "se_cue_name",
+      "se_cuesheet_name",
+      "chara_index",
+      "voice_trigger_id"
+    ]
+  },
+  {
+    "name": "single_mode_turn",
+    "rows": 1066,
+    "columns": [
+      "id",
+      "turn_set_id",
+      "turn",
+      "year",
+      "month",
+      "half",
+      "period",
+      "unique_command",
+      "training_set_id",
+      "outing_set_id",
+      "top_cloth_id",
+      "top_bg_id",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "bgm_unique_cue_name",
+      "bgm_unique_cuesheet_name",
+      "rest_type",
+      "health_room_type",
+      "race_entry_type",
+      "story_cloth_id",
+      "story_bg_id",
+      "story_bg_sub_id"
+    ]
+  },
+  {
+    "name": "single_mode_unique_chara",
+    "rows": 181,
+    "columns": [
+      "id",
+      "partner_id",
+      "scenario_id",
+      "chara_id",
+      "period",
+      "training_placement",
+      "gain_flag_id",
+      "is_support_featured_stock",
+      "gain_role_id"
+    ]
+  },
+  {
+    "name": "single_mode_venus_crystal_group",
+    "rows": 15,
+    "columns": [
+      "id",
+      "chara_id",
+      "venus_level",
+      "passive_effect_group_id",
+      "active_effect_group_id",
+      "active_effect_turn"
+    ]
+  },
+  {
+    "name": "single_mode_venus_spirit_effect",
+    "rows": 83,
+    "columns": [
+      "id",
+      "spirit_effect_group_id",
+      "effect_type",
+      "effect_value_1",
+      "effect_value_2",
+      "effect_value_3",
+      "effect_value_4"
+    ]
+  },
+  {
+    "name": "single_mode_venus_spirit_group",
+    "rows": 18,
+    "columns": [
+      "spirit_id",
+      "chara_id",
+      "bonus_group",
+      "spirit_effect_group_id_1",
+      "spirit_effect_group_id_2",
+      "spirit_effect_group_id_3",
+      "spirit_effect_group_id_4",
+      "spirit_effect_group_id_5"
+    ]
+  },
+  {
+    "name": "single_mode_venus_sprace_data",
+    "rows": 3,
+    "columns": [
+      "id",
+      "race_group_id",
+      "turn_num"
+    ]
+  },
+  {
+    "name": "single_mode_wins_saddle",
+    "rows": 214,
+    "columns": [
+      "id",
+      "priority",
+      "group_id",
+      "relation_group_id",
+      "condition",
+      "win_saddle_type",
+      "race_instance_id_1",
+      "race_instance_id_2",
+      "race_instance_id_3",
+      "race_instance_id_4",
+      "race_instance_id_5",
+      "race_instance_id_6",
+      "race_instance_id_7",
+      "race_instance_id_8"
+    ]
+  },
+  {
+    "name": "skill_data",
+    "rows": 2099,
+    "columns": [
+      "id",
+      "rarity",
+      "group_id",
+      "group_rate",
+      "filter_switch",
+      "grade_value",
+      "skill_category",
+      "tag_id",
+      "unique_skill_id_1",
+      "unique_skill_id_2",
+      "exp_type",
+      "potential_per_default",
+      "activate_lot",
+      "priority",
+      "precondition_1",
+      "condition_1",
+      "float_ability_time_1",
+      "ability_time_usage_1",
+      "float_cooldown_time_1",
+      "ability_type_1_1",
+      "ability_value_usage_1_1",
+      "additional_activate_type_1_1",
+      "ability_value_level_usage_1_1",
+      "float_ability_value_1_1",
+      "target_type_1_1",
+      "target_value_1_1",
+      "ability_type_1_2",
+      "ability_value_usage_1_2",
+      "additional_activate_type_1_2",
+      "ability_value_level_usage_1_2",
+      "float_ability_value_1_2",
+      "target_type_1_2",
+      "target_value_1_2",
+      "ability_type_1_3",
+      "ability_value_usage_1_3",
+      "additional_activate_type_1_3",
+      "ability_value_level_usage_1_3",
+      "float_ability_value_1_3",
+      "target_type_1_3",
+      "target_value_1_3",
+      "precondition_2",
+      "condition_2",
+      "float_ability_time_2",
+      "ability_time_usage_2",
+      "float_cooldown_time_2",
+      "ability_type_2_1",
+      "ability_value_usage_2_1",
+      "additional_activate_type_2_1",
+      "ability_value_level_usage_2_1",
+      "float_ability_value_2_1",
+      "target_type_2_1",
+      "target_value_2_1",
+      "ability_type_2_2",
+      "ability_value_usage_2_2",
+      "additional_activate_type_2_2",
+      "ability_value_level_usage_2_2",
+      "float_ability_value_2_2",
+      "target_type_2_2",
+      "target_value_2_2",
+      "ability_type_2_3",
+      "ability_value_usage_2_3",
+      "additional_activate_type_2_3",
+      "ability_value_level_usage_2_3",
+      "float_ability_value_2_3",
+      "target_type_2_3",
+      "target_value_2_3",
+      "popularity_add_param_1",
+      "popularity_add_value_1",
+      "popularity_add_param_2",
+      "popularity_add_value_2",
+      "disp_order",
+      "icon_id",
+      "plate_type",
+      "disable_singlemode",
+      "disable_count_condition",
+      "is_general_skill",
+      "greater_value_skill_detail",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "skill_exp",
+    "rows": 10,
+    "columns": [
+      "id",
+      "type",
+      "level",
+      "scale"
+    ]
+  },
+  {
+    "name": "skill_level_value",
+    "rows": 311,
+    "columns": [
+      "id",
+      "ability_type",
+      "level",
+      "float_ability_value_coef"
+    ]
+  },
+  {
+    "name": "skill_set",
+    "rows": 5577,
+    "columns": [
+      "id",
+      "skill_id1",
+      "skill_level1",
+      "skill_id2",
+      "skill_level2",
+      "skill_id3",
+      "skill_level3",
+      "skill_id4",
+      "skill_level4",
+      "skill_id5",
+      "skill_level5",
+      "skill_id6",
+      "skill_level6",
+      "skill_id7",
+      "skill_level7",
+      "skill_id8",
+      "skill_level8",
+      "skill_id9",
+      "skill_level9",
+      "skill_id10",
+      "skill_level10",
+      "skill_id11",
+      "skill_level11",
+      "skill_id12",
+      "skill_level12",
+      "skill_id13",
+      "skill_level13",
+      "skill_id14",
+      "skill_level14",
+      "skill_id15",
+      "skill_level15",
+      "skill_id16",
+      "skill_level16",
+      "skill_id17",
+      "skill_level17",
+      "skill_id18",
+      "skill_level18",
+      "skill_id19",
+      "skill_level19",
+      "skill_id20",
+      "skill_level20"
+    ]
+  },
+  {
+    "name": "skill_up_scenario_condition",
+    "rows": 12,
+    "columns": [
+      "id",
+      "scenario_id",
+      "rank",
+      "condition_id",
+      "num",
+      "sub_num",
+      "timing_type",
+      "count_type"
+    ]
+  },
+  {
+    "name": "skill_upgrade_condition",
+    "rows": 1786,
+    "columns": [
+      "id",
+      "upgrade_type",
+      "description_id",
+      "num",
+      "sub_num",
+      "timing_type",
+      "count_type"
+    ]
+  },
+  {
+    "name": "skill_upgrade_description",
+    "rows": 599,
+    "columns": [
+      "id",
+      "card_id",
+      "rank",
+      "skill_id",
+      "start_date"
+    ]
+  },
+  {
+    "name": "skill_upgrade_speciality",
+    "rows": 47,
+    "columns": [
+      "id",
+      "scenario_id",
+      "base_skill_id",
+      "skill_id",
+      "start_date"
+    ]
+  },
+  {
+    "name": "skill_upgrade_succession_skill",
+    "rows": 2,
+    "columns": [
+      "id",
+      "card_id",
+      "base_skill_id",
+      "skill_id",
+      "start_date"
+    ]
+  },
+  {
+    "name": "sqlite_stat1",
+    "rows": 815,
+    "columns": [
+      "tbl",
+      "idx",
+      "stat"
+    ]
+  },
+  {
+    "name": "story_event_bingo_reward",
+    "rows": 856,
+    "columns": [
+      "id",
+      "reward_set_id",
+      "line_num",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "story_event_bonus_card",
+    "rows": 400,
+    "columns": [
+      "id",
+      "story_event_id",
+      "chara_id",
+      "card_id",
+      "rarity_1",
+      "rarity_2",
+      "rarity_3",
+      "rarity_4",
+      "rarity_5",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "story_event_bonus_group_support_card",
+    "rows": 20,
+    "columns": [
+      "id",
+      "story_event_id",
+      "chara_id",
+      "support_card_id",
+      "limit_0",
+      "limit_1",
+      "limit_2",
+      "limit_3",
+      "limit_4",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "story_event_bonus_support_card",
+    "rows": 945,
+    "columns": [
+      "id",
+      "story_event_id",
+      "chara_id",
+      "rarity",
+      "support_card_id",
+      "limit_0",
+      "limit_1",
+      "limit_2",
+      "limit_3",
+      "limit_4",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "story_event_data",
+    "rows": 54,
+    "columns": [
+      "story_event_id",
+      "announce_id",
+      "consume_tp_ratio",
+      "bonus_reward_ratio",
+      "notice_date",
+      "start_date",
+      "middle_date_01",
+      "middle_date_02",
+      "ending_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "story_event_mission",
+    "rows": 2338,
+    "columns": [
+      "id",
+      "story_event_id",
+      "mission_type",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "condition_value_3",
+      "condition_value_4",
+      "condition_num",
+      "step_group_id",
+      "step_order",
+      "disp_order",
+      "item_category",
+      "item_id",
+      "item_num",
+      "transition_type",
+      "date_check_flg",
+      "start_date"
+    ]
+  },
+  {
+    "name": "story_event_mission_top_chara",
+    "rows": 108,
+    "columns": [
+      "id",
+      "story_event_id",
+      "ending_flag",
+      "character_id",
+      "dress_id",
+      "dress_color",
+      "chara_dress_color_set_id",
+      "menu_bg_id",
+      "menu_bg_sub_id",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "env_cue_name",
+      "env_cuesheet_name"
+    ]
+  },
+  {
+    "name": "story_event_nickname_bonus",
+    "rows": 162,
+    "columns": [
+      "id",
+      "story_event_id",
+      "nickname_rank",
+      "bonus_point"
+    ]
+  },
+  {
+    "name": "story_event_point_reward",
+    "rows": 5885,
+    "columns": [
+      "id",
+      "story_event_id",
+      "item_category",
+      "item_id",
+      "item_num",
+      "point"
+    ]
+  },
+  {
+    "name": "story_event_roulette_bingo",
+    "rows": 225,
+    "columns": [
+      "id",
+      "roulette_id",
+      "story_event_id",
+      "sheet_num",
+      "can_loop",
+      "use_item_category",
+      "use_item_id",
+      "use_item_num",
+      "character_id",
+      "dress_id",
+      "reset_line",
+      "reward_set_id",
+      "roulette_max_num",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "story_event_story_data",
+    "rows": 436,
+    "columns": [
+      "id",
+      "story_event_id",
+      "episode_index_id",
+      "story_condition_type",
+      "story_type_1",
+      "story_id_1",
+      "story_type_2",
+      "story_id_2",
+      "story_type_3",
+      "story_id_3",
+      "story_type_4",
+      "story_id_4",
+      "story_type_5",
+      "story_id_5",
+      "need_point",
+      "add_reward_category_1",
+      "add_reward_id_1",
+      "add_reward_num_1",
+      "add_reward_category_2",
+      "add_reward_id_2",
+      "add_reward_num_2",
+      "start_date"
+    ]
+  },
+  {
+    "name": "story_event_top_chara",
+    "rows": 682,
+    "columns": [
+      "id",
+      "story_event_id",
+      "min_episode_index",
+      "max_episode_index",
+      "ending_flag",
+      "character_id",
+      "dress_id",
+      "dress_color",
+      "chara_dress_color_set_id",
+      "menu_bg_id",
+      "menu_bg_sub_id",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "env_cue_name",
+      "env_cuesheet_name"
+    ]
+  },
+  {
+    "name": "story_extra_data",
+    "rows": 13,
+    "columns": [
+      "story_extra_id",
+      "story_extra_type",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "story_extra_event_movie",
+    "rows": 7,
+    "columns": [
+      "id",
+      "story_data_id"
+    ]
+  },
+  {
+    "name": "story_extra_movie_data",
+    "rows": 4,
+    "columns": [
+      "id",
+      "movie_path",
+      "movie_type",
+      "sort",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "story_extra_story_data",
+    "rows": 45,
+    "columns": [
+      "id",
+      "story_extra_id",
+      "episode_index_id",
+      "story_type_1",
+      "story_id_1",
+      "story_type_2",
+      "story_id_2",
+      "story_type_3",
+      "story_id_3",
+      "story_type_4",
+      "story_id_4",
+      "story_type_5",
+      "story_id_5",
+      "add_reward_category_1",
+      "add_reward_id_1",
+      "add_reward_num_1",
+      "add_reward_category_2",
+      "add_reward_id_2",
+      "add_reward_num_2",
+      "start_date",
+      "notice_end_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "story_hip_offset",
+    "rows": 133,
+    "columns": [
+      "category_id",
+      "chara_id",
+      "offset"
+    ]
+  },
+  {
+    "name": "story_live_position",
+    "rows": 346,
+    "columns": [
+      "id",
+      "set_id",
+      "music_id",
+      "position_id",
+      "chara_type",
+      "chara_id",
+      "dress_id",
+      "dress_color",
+      "second_dress_id",
+      "second_dress_color",
+      "vocal_chara_id"
+    ]
+  },
+  {
+    "name": "story_race_track_bg_replace",
+    "rows": 8,
+    "columns": [
+      "id",
+      "story_id",
+      "bg_group_id",
+      "race_track_id",
+      "bg_id",
+      "bg_sub_id"
+    ]
+  },
+  {
+    "name": "story_still",
+    "rows": 170,
+    "columns": [
+      "id",
+      "still_id",
+      "page_id",
+      "order_id"
+    ]
+  },
+  {
+    "name": "story_wipe_dictionary",
+    "rows": 86,
+    "columns": [
+      "id",
+      "motion_root",
+      "wipe_id",
+      "sub_id",
+      "type",
+      "default_length",
+      "offset_length",
+      "vertical_extend_length",
+      "ignore_tap_length",
+      "se_name",
+      "sheet_name",
+      "use_mini",
+      "mini_motion_name",
+      "mini_motion_start",
+      "mini_motion_end",
+      "emotion_label",
+      "emotion_label_start",
+      "emotion_label_end",
+      "emotion_icon",
+      "emotion_icon_start",
+      "emotion_icon_end"
+    ]
+  },
+  {
+    "name": "subscription_effect",
+    "rows": 9,
+    "columns": [
+      "id",
+      "subscription_type",
+      "target_type",
+      "effect_type_1",
+      "effect_value_1",
+      "user_show",
+      "image_icon_id",
+      "transition_type",
+      "start_time",
+      "end_time"
+    ]
+  },
+  {
+    "name": "succession_factor",
+    "rows": 2517,
+    "columns": [
+      "factor_id",
+      "factor_group_id",
+      "rarity",
+      "grade",
+      "factor_type",
+      "effect_group_id",
+      "succession_search_hidden",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "succession_factor_addon_effect",
+    "rows": 2,
+    "columns": [
+      "id",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "condition_value_3",
+      "condition_value_4",
+      "condition_value_5",
+      "condition_value_6",
+      "factor_id"
+    ]
+  },
+  {
+    "name": "succession_factor_effect",
+    "rows": 6508,
+    "columns": [
+      "id",
+      "factor_group_id",
+      "effect_id",
+      "target_type",
+      "value_1",
+      "value_2"
+    ]
+  },
+  {
+    "name": "succession_initial_factor",
+    "rows": 13,
+    "columns": [
+      "id",
+      "factor_type",
+      "value_1",
+      "value_2",
+      "add_point"
+    ]
+  },
+  {
+    "name": "succession_relation",
+    "rows": 3037,
+    "columns": [
+      "relation_type",
+      "relation_point"
+    ]
+  },
+  {
+    "name": "succession_relation_member",
+    "rows": 7249,
+    "columns": [
+      "id",
+      "relation_type",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "succession_relation_rank",
+    "rows": 3,
+    "columns": [
+      "relation_rank",
+      "rank_value_min",
+      "rank_value_max"
+    ]
+  },
+  {
+    "name": "succession_rental",
+    "rows": 7450,
+    "columns": [
+      "id",
+      "rental_rank",
+      "rental_num",
+      "use_value1",
+      "use_value2"
+    ]
+  },
+  {
+    "name": "support_card_data",
+    "rows": 541,
+    "columns": [
+      "id",
+      "chara_id",
+      "rarity",
+      "exchange_item_id",
+      "exchange_item_num",
+      "effect_table_id",
+      "unique_effect_id",
+      "command_type",
+      "command_id",
+      "support_card_type",
+      "skill_set_id",
+      "detail_pos_x",
+      "detail_pos_y",
+      "detail_scale",
+      "detail_rot_z",
+      "start_date",
+      "disp_order",
+      "outing_max",
+      "effect_id"
+    ]
+  },
+  {
+    "name": "support_card_effect_filter",
+    "rows": 26,
+    "columns": [
+      "type",
+      "group_id",
+      "sort_id",
+      "start_date"
+    ]
+  },
+  {
+    "name": "support_card_effect_filter_group",
+    "rows": 4,
+    "columns": [
+      "group_id",
+      "sort_id",
+      "start_date"
+    ]
+  },
+  {
+    "name": "support_card_effect_table",
+    "rows": 4931,
+    "columns": [
+      "id",
+      "type",
+      "init",
+      "limit_lv5",
+      "limit_lv10",
+      "limit_lv15",
+      "limit_lv20",
+      "limit_lv25",
+      "limit_lv30",
+      "limit_lv35",
+      "limit_lv40",
+      "limit_lv45",
+      "limit_lv50"
+    ]
+  },
+  {
+    "name": "support_card_group",
+    "rows": 18,
+    "columns": [
+      "id",
+      "support_card_id",
+      "chara_id",
+      "outing_max"
+    ]
+  },
+  {
+    "name": "support_card_level",
+    "rows": 135,
+    "columns": [
+      "id",
+      "rarity",
+      "level",
+      "total_exp"
+    ]
+  },
+  {
+    "name": "support_card_limit",
+    "rows": 3,
+    "columns": [
+      "rarity",
+      "limit_0",
+      "limit_1",
+      "limit_2",
+      "limit_3",
+      "limit_4"
+    ]
+  },
+  {
+    "name": "support_card_limit_break",
+    "rows": 2,
+    "columns": [
+      "id",
+      "rarity",
+      "item_id",
+      "item_num",
+      "disp_order"
+    ]
+  },
+  {
+    "name": "support_card_team_score_bonus",
+    "rows": 15,
+    "columns": [
+      "id",
+      "level",
+      "score_rate",
+      "bonus_group",
+      "rarity",
+      "limit_break_count",
+      "score_rate_per_card",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "support_card_unique_effect",
+    "rows": 399,
+    "columns": [
+      "id",
+      "lv",
+      "type_0",
+      "value_0",
+      "value_0_1",
+      "value_0_2",
+      "value_0_3",
+      "value_0_4",
+      "type_1",
+      "value_1",
+      "value_1_1",
+      "value_1_2",
+      "value_1_3",
+      "value_1_4",
+      "idle_mode_sub_rate"
+    ]
+  },
+  {
+    "name": "system_voice_standby_motion",
+    "rows": 1,
+    "columns": [
+      "chara_id",
+      "standby_motion_id_1",
+      "standby_motion_id_2"
+    ]
+  },
+  {
+    "name": "team_building_chara_count",
+    "rows": 10,
+    "columns": [
+      "id",
+      "collection_chara_min",
+      "collection_chara_max",
+      "bonus_value"
+    ]
+  },
+  {
+    "name": "team_building_chara_group",
+    "rows": 76,
+    "columns": [
+      "id",
+      "chara_group_id",
+      "chara_id"
+    ]
+  },
+  {
+    "name": "team_building_collection_chara",
+    "rows": 711,
+    "columns": [
+      "id",
+      "team_building_event_id",
+      "chara_id",
+      "condition_type_1",
+      "bonus_type_1",
+      "bonus_value_1",
+      "condition_type_2",
+      "bonus_type_2",
+      "bonus_value_2"
+    ]
+  },
+  {
+    "name": "team_building_collection_set",
+    "rows": 38,
+    "columns": [
+      "id",
+      "team_building_event_id",
+      "chara_group_id",
+      "skill_id"
+    ]
+  },
+  {
+    "name": "team_building_consecutive_wins",
+    "rows": 10,
+    "columns": [
+      "id",
+      "consecutive_wins_num",
+      "bonus_value"
+    ]
+  },
+  {
+    "name": "team_building_data",
+    "rows": 8,
+    "columns": [
+      "team_building_event_id",
+      "bg_id",
+      "bg_sub_id",
+      "stamina_default",
+      "stamina_max",
+      "stamina_add",
+      "stamina_add_time",
+      "start_add_scout_point",
+      "ticket_item_id",
+      "scout_pt_item_id",
+      "special_race_count",
+      "required_race_count",
+      "notice_date",
+      "start_date",
+      "middle_date",
+      "ending_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "team_building_discount_point",
+    "rows": 30,
+    "columns": [
+      "id",
+      "team_rank",
+      "discount_value"
+    ]
+  },
+  {
+    "name": "team_building_race_npc",
+    "rows": 608,
+    "columns": [
+      "id",
+      "npc_group_id",
+      "chara_id",
+      "mob_id",
+      "race_dress_id",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id"
+    ]
+  },
+  {
+    "name": "team_building_rank",
+    "rows": 30,
+    "columns": [
+      "id",
+      "team_rank",
+      "team_min_value",
+      "team_max_value",
+      "reward_group_id"
+    ]
+  },
+  {
+    "name": "team_building_rank_reward_group",
+    "rows": 41,
+    "columns": [
+      "id",
+      "reward_group_id",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "team_building_retry_bonus",
+    "rows": 5,
+    "columns": [
+      "id",
+      "retry_min",
+      "retry_max",
+      "bonus_rate",
+      "down_rate",
+      "resimulate_num"
+    ]
+  },
+  {
+    "name": "team_building_scout_point",
+    "rows": 298,
+    "columns": [
+      "id",
+      "chara_rank",
+      "scout_value"
+    ]
+  },
+  {
+    "name": "team_building_sp_race_schedule",
+    "rows": 40,
+    "columns": [
+      "id",
+      "event_id",
+      "special_race_instance_id",
+      "race_condition_id",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "team_building_team_race_set",
+    "rows": 46,
+    "columns": [
+      "id",
+      "npc_group_id",
+      "motion_id"
+    ]
+  },
+  {
+    "name": "team_building_win_reward",
+    "rows": 2,
+    "columns": [
+      "id",
+      "win_loop_num",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "team_stadium",
+    "rows": 1,
+    "columns": [
+      "id",
+      "race_start_date",
+      "race_start_time",
+      "race_end_date",
+      "race_end_time",
+      "interval_start_date",
+      "interval_start_time",
+      "interval_end_date",
+      "interval_end_time",
+      "calc_start_date",
+      "calc_start_time",
+      "calc_end_date",
+      "calc_end_time",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "team_stadium_bgm",
+    "rows": 11,
+    "columns": [
+      "id",
+      "scene_type",
+      "priority",
+      "cue_name",
+      "cuesheet_name"
+    ]
+  },
+  {
+    "name": "team_stadium_class",
+    "rows": 6,
+    "columns": [
+      "id",
+      "team_stadium_id",
+      "team_class",
+      "unit_max_num",
+      "class_up_range",
+      "class_down_range"
+    ]
+  },
+  {
+    "name": "team_stadium_class_reward",
+    "rows": 34,
+    "columns": [
+      "id",
+      "team_stadium_id",
+      "team_class",
+      "class_reward_type",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1",
+      "item_category_2",
+      "item_id_2",
+      "item_num_2",
+      "item_category_3",
+      "item_id_3",
+      "item_num_3",
+      "item_category_4",
+      "item_id_4",
+      "item_num_4",
+      "item_category_5",
+      "item_id_5",
+      "item_num_5",
+      "disp_start_date",
+      "disp_end_date",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "team_stadium_evaluation_rate",
+    "rows": 24,
+    "columns": [
+      "id",
+      "proper_type",
+      "proper_rank",
+      "rate"
+    ]
+  },
+  {
+    "name": "team_stadium_race_result_motion",
+    "rows": 136,
+    "columns": [
+      "character_id",
+      "win_1",
+      "win_2",
+      "win_2_position_y",
+      "win_3",
+      "win_3_position_y",
+      "win_4",
+      "win_4_position_y",
+      "win_5",
+      "lose_1",
+      "lose_2",
+      "lose_3",
+      "lose_4",
+      "lose_5",
+      "draw_1",
+      "draw_2",
+      "draw_3",
+      "draw_4",
+      "draw_5",
+      "position_y"
+    ]
+  },
+  {
+    "name": "team_stadium_rank",
+    "rows": 165,
+    "columns": [
+      "id",
+      "team_rank",
+      "team_rank_group",
+      "team_min_value",
+      "team_max_value",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "team_stadium_raw_score",
+    "rows": 96,
+    "columns": [
+      "id",
+      "priority",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "score",
+      "race_score_name_id",
+      "sort_order"
+    ]
+  },
+  {
+    "name": "team_stadium_score_bonus",
+    "rows": 7,
+    "columns": [
+      "id",
+      "priority",
+      "condition_type",
+      "condition_value_1",
+      "condition_value_2",
+      "score_rate"
+    ]
+  },
+  {
+    "name": "team_stadium_stand_motion",
+    "rows": 14,
+    "columns": [
+      "character_id",
+      "type",
+      "race_dress_id",
+      "position",
+      "motion_set",
+      "rotation",
+      "position_x"
+    ]
+  },
+  {
+    "name": "text_data",
+    "rows": 95128,
+    "columns": [
+      "id",
+      "category",
+      "index",
+      "text"
+    ]
+  },
+  {
+    "name": "timezone_data",
+    "rows": 4,
+    "columns": [
+      "timezone",
+      "priority",
+      "start_hour",
+      "end_hour"
+    ]
+  },
+  {
+    "name": "topics",
+    "rows": 596,
+    "columns": [
+      "id",
+      "type",
+      "value",
+      "index",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "trained_chara_trade_item",
+    "rows": 298,
+    "columns": [
+      "id",
+      "trained_chara_rank",
+      "trade_item_category",
+      "trade_item_id",
+      "trade_item_num"
+    ]
+  },
+  {
+    "name": "training_challenge_exam",
+    "rows": 81,
+    "columns": [
+      "id",
+      "feature_type",
+      "good_score",
+      "good_score_reward_coin",
+      "great_score",
+      "great_score_reward_coin",
+      "exellent_score",
+      "exellent_score_reward_coin",
+      "score_group_id",
+      "item_category_1",
+      "item_id_1",
+      "item_num_1",
+      "item_category_2",
+      "item_id_2",
+      "item_num_2",
+      "item_category_3",
+      "item_id_3",
+      "item_num_3",
+      "item_category_4",
+      "item_id_4",
+      "item_num_4",
+      "item_category_5",
+      "item_id_5",
+      "item_num_5"
+    ]
+  },
+  {
+    "name": "training_challenge_master",
+    "rows": 13,
+    "columns": [
+      "id",
+      "target_main_scenario",
+      "exam_id_1",
+      "exam_id_2",
+      "exam_id_3",
+      "exam_id_4",
+      "exam_id_5",
+      "ex_exam_id",
+      "free_exam_id",
+      "shop_id",
+      "rental_value",
+      "consume_tp_ratio",
+      "bonus_reward_ratio",
+      "ranking_entry_love_point_reward",
+      "ranking_entry_change_num",
+      "notice_date",
+      "start_date",
+      "ranking_entry_end_date",
+      "end_date",
+      "start_result_date",
+      "end_result_date"
+    ]
+  },
+  {
+    "name": "training_challenge_ranking_border",
+    "rows": 8,
+    "columns": [
+      "id",
+      "training_challenge_master_id",
+      "rank_start",
+      "rank_end"
+    ]
+  },
+  {
+    "name": "training_challenge_ranking_reward",
+    "rows": 8,
+    "columns": [
+      "id",
+      "training_challenge_ranking_border_id",
+      "item_category",
+      "item_id",
+      "item_num"
+    ]
+  },
+  {
+    "name": "training_challenge_score",
+    "rows": 2532,
+    "columns": [
+      "id",
+      "score_group_id",
+      "score_type",
+      "data",
+      "disp_order",
+      "bonus_score",
+      "reward_coin"
+    ]
+  },
+  {
+    "name": "training_cutt_chara_data",
+    "rows": 528,
+    "columns": [
+      "id",
+      "command_id",
+      "sub_id",
+      "chara_num",
+      "chara_id",
+      "dress_id",
+      "target_timeline",
+      "target_list_index",
+      "prop_target",
+      "selector_label"
+    ]
+  },
+  {
+    "name": "training_cutt_data",
+    "rows": 145,
+    "columns": [
+      "command_id",
+      "sub_id",
+      "chara_num",
+      "target_chara_index",
+      "target_value",
+      "cutt_index",
+      "success_flg"
+    ]
+  },
+  {
+    "name": "training_cutt_flash",
+    "rows": 1,
+    "columns": [
+      "command_id",
+      "sub_folder",
+      "file_format",
+      "control_type"
+    ]
+  },
+  {
+    "name": "training_cutt_group_data",
+    "rows": 7,
+    "columns": [
+      "group_id",
+      "order",
+      "command_id",
+      "sub_id"
+    ]
+  },
+  {
+    "name": "training_report_inflation",
+    "rows": 61,
+    "columns": [
+      "id",
+      "point_threshold",
+      "value"
+    ]
+  },
+  {
+    "name": "training_report_normal_reward",
+    "rows": 901,
+    "columns": [
+      "id",
+      "reward_set",
+      "is_pickup",
+      "base_point",
+      "reward_item_id",
+      "reward_item_category",
+      "reward_item_num"
+    ]
+  },
+  {
+    "name": "training_report_pass",
+    "rows": 30,
+    "columns": [
+      "id",
+      "season_id",
+      "product_master_id",
+      "inflation_coef",
+      "normal_reward_set",
+      "special_reward_set",
+      "jobs_training_report_point_limit",
+      "remind_date",
+      "start_date",
+      "end_date",
+      "bg_image"
+    ]
+  },
+  {
+    "name": "training_report_ratio",
+    "rows": 3,
+    "columns": [
+      "id",
+      "type",
+      "value"
+    ]
+  },
+  {
+    "name": "training_report_special_reward",
+    "rows": 901,
+    "columns": [
+      "id",
+      "reward_set",
+      "is_pickup",
+      "base_point",
+      "reward_item_id",
+      "reward_item_category",
+      "reward_item_num"
+    ]
+  },
+  {
+    "name": "transfer_event_data",
+    "rows": 26,
+    "columns": [
+      "transfer_event_id",
+      "logo_id",
+      "bg_id",
+      "bg_sub_id",
+      "tutorial_guide_id",
+      "bgm_cue_name",
+      "bgm_cuesheet_name",
+      "top_trigger",
+      "finish_trigger",
+      "clear_trigger",
+      "pre_start_date",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "transfer_event_detail",
+    "rows": 186,
+    "columns": [
+      "transfer_detail_id",
+      "transfer_event_id",
+      "trainer_type",
+      "difficulty",
+      "limited_type",
+      "start_date",
+      "end_date",
+      "cool_time",
+      "condition1_type",
+      "condition1_value1",
+      "condition1_value2",
+      "condition2_type",
+      "condition2_value1",
+      "condition2_value2",
+      "condition3_type",
+      "condition3_value1",
+      "condition3_value2",
+      "condition4_type",
+      "condition4_value1",
+      "condition4_value2",
+      "condition5_type",
+      "condition5_value1",
+      "condition5_value2"
+    ]
+  },
+  {
+    "name": "transfer_event_reward",
+    "rows": 478,
+    "columns": [
+      "transfer_reward_id",
+      "transfer_detail_id",
+      "reward_rank",
+      "item_category",
+      "item_id",
+      "item_num",
+      "odds"
+    ]
+  },
+  {
+    "name": "transfer_rotation_data",
+    "rows": 40,
+    "columns": [
+      "id",
+      "schedule_id"
+    ]
+  },
+  {
+    "name": "transfer_rotation_detail",
+    "rows": 120,
+    "columns": [
+      "id",
+      "rotation_id",
+      "trainer_type",
+      "difficulty",
+      "limited_type",
+      "condition1_type",
+      "condition1_value1",
+      "condition1_value2",
+      "condition2_type",
+      "condition2_value1",
+      "condition2_value2",
+      "condition3_type",
+      "condition3_value1",
+      "condition3_value2",
+      "condition4_type",
+      "condition4_value1",
+      "condition4_value2",
+      "condition5_type",
+      "condition5_value1",
+      "condition5_value2"
+    ]
+  },
+  {
+    "name": "transfer_rotation_reward",
+    "rows": 520,
+    "columns": [
+      "id",
+      "rotation_id",
+      "item_category",
+      "item_id",
+      "item_num",
+      "odds"
+    ]
+  },
+  {
+    "name": "transfer_rotation_schedule",
+    "rows": 2,
+    "columns": [
+      "id",
+      "rotation_start_day",
+      "rotation_start_time",
+      "base_date",
+      "start_date",
+      "end_date"
+    ]
+  },
+  {
+    "name": "tutorial_guide_data",
+    "rows": 368,
+    "columns": [
+      "id",
+      "group_id",
+      "page_index",
+      "image_index"
+    ]
+  },
+  {
+    "name": "ultimate_race_contents",
+    "rows": 119,
+    "columns": [
+      "id",
+      "event_id",
+      "group_id",
+      "difficulty",
+      "race_instance_id",
+      "is_hidden_race",
+      "unlock_condition_id",
+      "season",
+      "weather",
+      "ground",
+      "first_clear_item_category_1",
+      "first_clear_item_id_1",
+      "first_clear_item_num_1",
+      "first_clear_item_category_2",
+      "first_clear_item_id_2",
+      "first_clear_item_num_2",
+      "first_clear_item_category_3",
+      "first_clear_item_id_3",
+      "first_clear_item_num_3",
+      "first_clear_item_category_4",
+      "first_clear_item_id_4",
+      "first_clear_item_num_4",
+      "first_clear_item_category_5",
+      "first_clear_item_id_5",
+      "first_clear_item_num_5",
+      "start_date"
+    ]
+  },
+  {
+    "name": "ultimate_race_contents_change",
+    "rows": 63,
+    "columns": [
+      "id",
+      "race_instance_id",
+      "npc_id",
+      "change_race_instance_id",
+      "add_clear_item_category_1",
+      "add_clear_item_id_1",
+      "add_clear_item_num_1",
+      "add_clear_item_category_2",
+      "add_clear_item_id_2",
+      "add_clear_item_num_2",
+      "add_clear_item_category_3",
+      "add_clear_item_id_3",
+      "add_clear_item_num_3"
+    ]
+  },
+  {
+    "name": "ultimate_race_data",
+    "rows": 8,
+    "columns": [
+      "id",
+      "bg_id",
+      "bg_sub_id",
+      "notice_date",
+      "start_date",
+      "end_date",
+      "archive_start_date",
+      "bgm_cue_name",
+      "bgm_cuesheet_name"
+    ]
+  },
+  {
+    "name": "ultimate_race_npc",
+    "rows": 1961,
+    "columns": [
+      "id",
+      "npc_group_id",
+      "chara_id",
+      "mob_id",
+      "race_dress_id",
+      "cutin_flag",
+      "use_replacing",
+      "replace_npc_id",
+      "replace_midboss_id",
+      "replace_boss_id",
+      "speed",
+      "stamina",
+      "pow",
+      "guts",
+      "wiz",
+      "proper_distance_short",
+      "proper_distance_mile",
+      "proper_distance_middle",
+      "proper_distance_long",
+      "proper_running_style_nige",
+      "proper_running_style_senko",
+      "proper_running_style_sashi",
+      "proper_running_style_oikomi",
+      "proper_ground_turf",
+      "proper_ground_dirt",
+      "skill_set_id_1",
+      "skill_set_id_2",
+      "skill_set_id_3"
+    ]
+  },
+  {
+    "name": "ultimate_race_select_top",
+    "rows": 43,
+    "columns": [
+      "id",
+      "group_id",
+      "chara_id",
+      "dress_id",
+      "clear_history_racetitle",
+      "clear_history_racetitle_sub"
+    ]
+  },
+  {
+    "name": "ultimate_race_unlock_condition",
+    "rows": 2,
+    "columns": [
+      "id",
+      "event_id",
+      "condition_race_contents_id_1",
+      "condition_race_contents_id_2",
+      "condition_race_contents_id_3",
+      "condition_race_contents_id_4",
+      "condition_race_contents_id_5",
+      "cutt_id",
+      "cutt_chara_id_1",
+      "cutt_dress_id_1",
+      "cutt_chara_id_2",
+      "cutt_dress_id_2",
+      "cutt_chara_id_3",
+      "cutt_dress_id_3",
+      "txt_position_x",
+      "txt_position_y"
+    ]
+  }
+]
