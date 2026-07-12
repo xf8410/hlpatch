@@ -6130,7 +6130,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         .unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6694,6 +6694,20 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // v3.22.89: 执行只读SQL
         let sql = parse_query(&full_uri, "sql");
         mdb_raw_query(&sql)
+    } else if path.starts_with("/mdb/dl_batch") {
+        // ★ 按首字母批量下载 MDB 表数据为 JSON 文件
+        // /mdb/dl_batch?prefix=a  → 下载所有 a 开头的表
+        // /mdb/dl_batch?prefix=all → 下载全部表（可能很大）
+        let prefix = parse_query(&full_uri, "prefix");
+        let body = mdb_dl_batch(&prefix);
+        let safe_prefix: String = prefix.chars().filter(|c| c.is_alphanumeric()).collect();
+        let fname = format!("mdb_{}.json", if safe_prefix.is_empty() { "ALL" } else { &safe_prefix });
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            fname, body.len(), body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        return;
     } else if path.starts_with("/il2cpp/dump_all_methods_dl") {
         // v3.22.91: 暴力dump全部类方法目录（下载JSON，修复：内联下载包装）
         let letter = parse_query(&full_uri, "letter");
@@ -6908,7 +6922,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else {
         format!(
-            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
+            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
             path
         )
     };
@@ -10732,6 +10746,130 @@ fn debug_mdb_all_tables() -> String {
         tables_json.join(","),
         cond_tables.len(),
         cond_details.join(",")
+    )
+}
+
+/// /mdb/dl_batch?prefix=X — 按首字母批量导出 MDB 表数据为 JSON
+/// prefix=a → 所有 a 开头的表; prefix=all → 全部表
+/// 每张表最多 500 行（防止 OOM），大表只取前 500 行
+fn mdb_dl_batch(prefix: &str) -> String {
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
+    };
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
+    };
+
+    // 1. 获取所有表名
+    let all_tables: Vec<String> = match conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ) {
+        Ok(mut stmt) => stmt
+            .query_map([], |row| Ok(row.get::<_, String>(0).unwrap_or_default()))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect(),
+        Err(e) => return format!(r#"{{"error":"table_list_failed","detail":"{}"}}"#, e),
+    };
+
+    // 2. 按前缀筛选
+    let prefix_lower = prefix.to_lowercase();
+    let is_all = prefix_lower == "all" || prefix.is_empty();
+    let filtered: Vec<&String> = if is_all {
+        all_tables.iter().collect()
+    } else {
+        all_tables
+            .iter()
+            .filter(|t| t.to_lowercase().starts_with(&prefix_lower))
+            .collect()
+    };
+
+    if filtered.is_empty() {
+        return format!(
+            r#"{{"error":"no_tables","prefix":"{}"}}"#,
+            json_escape(prefix)
+        );
+    }
+
+    // 3. 逐表查询（最多 500 行/表）
+    let max_rows_per_table = 500;
+    let mut tables_json: Vec<String> = Vec::new();
+    let mut total_rows: usize = 0;
+
+    for table_name in &filtered {
+        let safe_name = table_name.replace("]", "]]");
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM [{}]", safe_name), [], |r| r.get(0))
+            .unwrap_or(0);
+
+        // 获取列名
+        let col_names: Vec<String> = match conn.prepare(&format!("SELECT * FROM [{}] LIMIT 1", safe_name)) {
+            Ok(mut stmt) => stmt.column_names().iter().map(|s| s.to_string()).collect(),
+            Err(_) => Vec::new(),
+        };
+
+        // 查询数据
+        let limit = (count as usize).min(max_rows_per_table);
+        let rows_json: Vec<String> = if limit > 0 {
+            match conn.prepare(&format!("SELECT * FROM [{}] LIMIT {}", safe_name, limit)) {
+                Ok(mut stmt) => {
+                    let col_count = col_names.len();
+                    stmt.query_map([], |row| {
+                        let mut pairs: Vec<String> = Vec::new();
+                        for ci in 0..col_count {
+                            let cn = col_names.get(ci).unwrap_or(&String::new()).clone();
+                            let int_val: Option<i64> = row.get::<_, Option<i64>>(ci).unwrap_or(None);
+                            let val = if let Some(v) = int_val {
+                                v.to_string()
+                            } else {
+                                let str_val: Option<String> = row.get::<_, Option<String>>(ci).unwrap_or(None);
+                                match str_val {
+                                    Some(s) => format!(r#""{}""#, json_escape(&s)),
+                                    None => {
+                                        let float_val: Option<f64> = row.get::<_, Option<f64>>(ci).unwrap_or(None);
+                                        match float_val {
+                                            Some(f) => format!("{}", f),
+                                            None => "null".to_string(),
+                                        }
+                                    }
+                                }
+                            };
+                            pairs.push(format!(r#""{}":{}"#, json_escape(&cn), val));
+                        }
+                        Ok(format!(r#"{{{}}}"#, pairs.join(",")))
+                    })
+                    .unwrap()
+                    .filter_map(|r| r.ok())
+                    .collect()
+                }
+                Err(e) => {
+                    vec![format!(r#"{{"error":"query_failed","detail":"{}"}}"#, json_escape(&e.to_string()))]
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
+        total_rows += rows_json.len();
+        tables_json.push(format!(
+            r#""{}":{{"rows":{},"queried":{},"columns":[{}],"data":[{}]}}"#,
+            json_escape(table_name),
+            count,
+            rows_json.len(),
+            col_names.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect::<Vec<_>>().join(","),
+            rows_json.join(",")
+        ));
+    }
+
+    format!(
+        r#"{{"ok":true,"prefix":"{}","table_count":{},"total_rows_queried":{},"max_rows_per_table":{},"tables":{{{}}}}}"#,
+        json_escape(prefix),
+        filtered.len(),
+        total_rows,
+        max_rows_per_table,
+        tables_json.join(",")
     )
 }
 
