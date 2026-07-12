@@ -4041,6 +4041,32 @@ unsafe fn read_summary_inner() -> String {
     read_summary_inner_impl()
 }
 
+/// ★ INVOKE INVENTORY — read_summary_inner_impl 热路径所有 il2cpp_runtime_invoke 调用点
+///
+/// 每次 call_getter_* 都是一次 il2cpp_runtime_invoke（非主线程）。
+/// 安全阈值 ~130 次/次调用。加新功能前先数总数，不要重复调同一个 getter。
+///
+/// ┌────────┬──────────────────────────────────────┬───────────────────────────────┐
+/// │ 行号   │ 调用                                 │ 备注                          │
+/// ├────────┼──────────────────────────────────────┼───────────────────────────────┤
+/// │ 4108   │ get_SingleMode (wdm) [INVOKE-01]     │ 唯一调用                      │
+/// │ 4119   │ get_Character (sm) [INVOKE-02]       │ 唯一调用                      │
+/// │ 4146   │ get_Month (sm) [INVOKE-03]           │ 唯一调用                      │
+/// │ 4151   │ get_Half (sm) [INVOKE-04]            │ 唯一调用                      │
+/// │ 4274   │ get_DataSet (scenario) [INVOKE-05]   │ ★ 与 INVOKE-09 重复，待去重   │
+/// │ 4695   │ get_EquipSupportCardArray [INVOKE-06]│ ★ 结果复用到 support cards 段 │
+/// │ 4763   │ get_HomeInfoData (sm) [INVOKE-07]    │ 唯一调用                      │
+/// │ 5194   │ get_TrainingLevelInfoArray [INV-08]  │ 唯一调用                      │
+/// │ 5282   │ get_DataSet (scenario) [INVOKE-09]   │ ★ 与 INVOKE-05 重复，待去重   │
+/// │ 5294   │ get_EnhanceGroupArray [INVOKE-10]    │ 唯一调用                      │
+/// │ 5316   │ get_GainTotal (obscured) [INVOKE-11] │ 循环内，按 enhance 数量倍增   │
+/// │ 5321   │ get_Level (obscured) [INVOKE-12]     │ 循环内，按 enhance 数量倍增   │
+/// └────────┴──────────────────────────────────────┴───────────────────────────────┘
+///
+/// 历史：v3.24.3 因 invoke 过多 SIGSEGV；v3.24.5 削减后稳定；
+///       v3.24.12 加 shining 检测新增一次 get_EquipSupportCardArray → 回归；
+///       v3.24.13 复用 shining 结果消除重复调用 → 修复。
+/// 维护规则：新增 call_getter_* 前，先在本表登记行号和是否重复。
 unsafe fn read_summary_inner_impl() -> String {
     if API.is_null() {
         return r#"{"error":"api_null"}"#.to_string();
@@ -4078,7 +4104,7 @@ unsafe fn read_summary_inner_impl() -> String {
     }
 
     log_predict_step("S:before_get_single_mode");
-    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode"); // [INVOKE-01]
     log_predict_step("S:after_get_single_mode");
     if sm_obj.is_null() {
         return r#"{"error":"no_sm"}"#.to_string();
@@ -4089,7 +4115,7 @@ unsafe fn read_summary_inner_impl() -> String {
         to_cstr("Gallop").as_ptr(),
         to_cstr("WorkSingleModeCharaData").as_ptr(),
     );
-    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character"); // [INVOKE-02] get_Character — 唯一调用
     if chara_obj.is_null() {
         return r#"{"error":"no_chara"}"#.to_string();
     }
@@ -4116,12 +4142,12 @@ unsafe fn read_summary_inner_impl() -> String {
         call_getter_int(sm_class, sm_obj, "get_Month")
     } else {
         1
-    };
+    }; // [INVOKE-03] get_Month — 唯一调用
     let half = if !sm_class.is_null() {
         call_getter_int(sm_class, sm_obj, "get_Half")
     } else {
         1
-    };
+    }; // [INVOKE-04] get_Half — 唯一调用
     let sid = read_obscured_int_at(chara_obj, 568); // _scenarioId
     let chara_id = read_obscured_int_at(chara_obj, 36); // _cardId
 
@@ -4244,7 +4270,7 @@ unsafe fn read_summary_inner_impl() -> String {
                 std::ptr::read_unaligned::<*mut c_void>(scenario_obj as *const *mut c_void);
             log_predict_step("S:ramen sc_obj");
             log_predict_step("S:ramen dataset before getter");
-            let dataset_obj = call_getter_ref(sc_class, scenario_obj, "get_DataSet");
+            let dataset_obj = call_getter_ref(sc_class, scenario_obj, "get_DataSet"); // [INVOKE-05] get_DataSet (Ramen) — ★ 与 INVOKE-09 重复，待去重
             log_predict_step("S:ramen dataset after getter");
             if !dataset_obj.is_null() {
                 let ds_class =
@@ -4665,7 +4691,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:support equip before getter");
     let support_array_for_shining =
-        call_getter_on_instance(chara_class, chara_obj, "get_EquipSupportCardArray");
+        call_getter_on_instance(chara_class, chara_obj, "get_EquipSupportCardArray"); // [INVOKE-06] get_EquipSupportCardArray — ★ 结果复用到 support cards 段
     log_predict_step("S:support equip after getter");
 
     if !support_array_for_shining.is_null() {
@@ -4733,7 +4759,7 @@ unsafe fn read_summary_inner_impl() -> String {
     // ★ v3.15.1: collect eval_trainings in same pass (eliminate dangerous double-read)
     let mut eval_trainings: Vec<(i32, [i32; 5], i32, i32, i32, i32, i32, i32)> = Vec::new();
     log_predict_step("S:homeinfo before getter");
-    let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
+    let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData"); // [INVOKE-07] get_HomeInfoData — 唯一调用
     log_predict_step("S:homeinfo after getter");
     if !home_info_obj.is_null() {
         let hi_class = find_class(
@@ -5164,7 +5190,7 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut tl_json = "[]".to_string();
     let tl_arr = read_field_value(chara_class, chara_obj, "training_level_info_array");
     if tl_arr.is_null() {
-        let arr = call_getter_on_instance(chara_class, chara_obj, "get_TrainingLevelInfoArray");
+        let arr = call_getter_on_instance(chara_class, chara_obj, "get_TrainingLevelInfoArray"); // [INVOKE-08] get_TrainingLevelInfoArray — 唯一调用
         if !arr.is_null() {
             let ab = arr as *const u8;
             let al =
@@ -5252,7 +5278,7 @@ unsafe fn read_summary_inner_impl() -> String {
         if !sc_name.is_empty() {
             let sc_class = find_class_by_short_name(image, sc_name);
             if !sc_class.is_null() {
-                let ds_obj = call_getter_on_instance(sc_class, scenario_obj, "get_DataSet");
+                let ds_obj = call_getter_on_instance(sc_class, scenario_obj, "get_DataSet"); // [INVOKE-09] get_DataSet — ★ 与 INVOKE-05 重复，待去重
                 if !ds_obj.is_null() {
                     let ds_name = format!("{}DataSet", sc_name);
                     let ds_class = find_class_by_short_name(image, &ds_name);
@@ -5264,7 +5290,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                 "ObscuredSingleModeBreedersEnhanceGroup",
                             );
                             if !enhance_cls.is_null() {
-                                let enhance_arr = call_getter_on_instance(
+                                let enhance_arr = call_getter_on_instance( // [INVOKE-10] get_EnhanceGroupArray — 循环外
                                     ds_class,
                                     ds_obj,
                                     "get_EnhanceGroupArray",
@@ -5286,12 +5312,12 @@ unsafe fn read_summary_inner_impl() -> String {
                                             if ep.is_null() {
                                                 continue;
                                             }
-                                            let gt = call_getter_obscured_int(
+                                            let gt = call_getter_obscured_int( // [INVOKE-11] get_GainTotal (obscured) — 循环内倍增
                                                 enhance_cls,
                                                 ep,
                                                 "get_GroupType",
                                             );
-                                            let lv = call_getter_obscured_int(
+                                            let lv = call_getter_obscured_int( // [INVOKE-12] get_Level (obscured) — 循环内倍增
                                                 enhance_cls,
                                                 ep,
                                                 "get_Level",
