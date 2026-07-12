@@ -1,4 +1,4 @@
-//! URA Plugin v3.24.12
+//! URA Plugin v3.24.13
 //! ★ v3.15.2: AI evaluation — score, training recommendation, rest/outgoing evaluation
 //! ★ v3.15.2: Fix read_field_value argument swap bug (field_info,obj was swapped → obj,field_info)
 //! ★ v3.10.0: Add /summary endpoint — clean player-friendly JSON for floating window app
@@ -5065,11 +5065,11 @@ unsafe fn read_summary_inner_impl() -> String {
     // Root cause: field name is "EquipSupportCardArray" not "SupportCardArray"
     // v3.22.89's cached_find_field_offset("SupportCardArray") hit wrong field via substring match
     // Also: position/supportCardId/limitBreakCount are ObscuredInt, not plain int
-    let mut sc_arr: *mut c_void = ptr::null_mut();
-    // Method 1: getter on chara_class (most reliable)
-    sc_arr = call_getter_on_instance(chara_class, chara_obj, "get_EquipSupportCardArray");
-    ura_log(3, &format!("sc: getter chara_class={}", !sc_arr.is_null()));
-    // Method 2: direct field offset on chara_class
+    // ★ v3.24.13: Reuse the array already fetched for shining detection —
+    // eliminates a duplicate il2cpp_runtime_invoke that caused SIGSEGV.
+    let mut sc_arr: *mut c_void = support_array_for_shining;
+    ura_log(3, &format!("sc: reused shining array ptr={}", !sc_arr.is_null()));
+    // Method 2: direct field offset on chara_class (fallback)
     if sc_arr.is_null() {
         let sc_off = cached_find_field_offset(chara_class, "EquipSupportCardArray");
         if sc_off >= 0 {
