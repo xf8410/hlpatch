@@ -1,0 +1,500 @@
+赛马娘 AI 助手一周开发复盘与故障追问清单
+时间范围：2026-07-07 ～ 2026-07-14
+涉及仓库：
+- https://github.com/xf8410/hlpatch
+- https://github.com/xf8410/uma-juece
+- https://github.com/xf8410/uma-data/tree/main/training_sessions
+
+请基于你实际操作过的代码和运行记录回答。不要只给概括或说“已经修复/已经推送”。每个关键结论必须尽量提供：
+- commit SHA
+- 修改文件和函数
+- GitHub Actions Run 链接
+- Release 标签及资产哈希
+- 手机运行时原始 JSON、laststep 或 logcat 证据
+
+请明确区分：
+1. 已由代码和运行时证据确认的事实；
+2. 根据代码作出的推断；
+3. 已被后续证据推翻的旧结论；
+4. 尚未验证的假设。
+
+CI 绿勾只能证明编译成功，不等于手机运行时已经修复。
+
+============================================================
+一、本周提交、推送、CI 和 Release 完整时间线
+============================================================
+
+1. 这一周分别修改了哪些仓库？
+2. 每个仓库新增了多少提交？请按时间列出：
+   - 日期和时间；
+   - commit SHA；
+   - commit 标题；
+   - 修改目的；
+   - 修改文件和函数；
+   - 是否直接推送 main；
+   - 是否通过分支或 PR 合并；
+   - 是否发生 force-push、rebase 或历史重写。
+3. 每次 push 对应哪一次 GitHub Actions？
+4. 每次 Actions 的结果是什么：success、failure、cancelled、skipped？
+5. 如果出现红叉，请逐次写清楚：
+   - 失败 Run 链接；
+   - 失败步骤；
+   - 原始编译/链接错误；
+   - 为什么第一次修复失败；
+   - 后来改了什么；
+   - 对应修复 commit；
+   - 最终成功 Run 链接。
+6. 哪些推送创建、更新或覆盖了 Release？
+7. 每个 Release 请列出：
+   - tag；
+   - 对应 commit；
+   - 发布时间；
+   - 附件名；
+   - 文件大小；
+   - SHA-256。
+8. 为什么部分版本号曾长期硬编码，导致源码版本、接口显示版本、Cargo.toml 和 Release 标签无法可靠对应？
+9. 本周 hlpatch Actions 数量很多。请区分实际代码 push、workflow_dispatch、rerun、失败重试和历史重写造成的记录，不要把所有 Run 都称为“推送次数”。
+
+目前公开 API 可见的参考信息：
+- 2026-07-07～07-14，hlpatch 约有 121 次 Actions Run；
+- 同期 uma-juece 约有 10 次 Actions Run；
+- uma-data 同期没有 Actions Run。
+这些数字不是直接等于 commit 数或 push 次数，需要你进一步准确分类。
+
+============================================================
+二、hlpatch /summary 崩溃完整复盘
+============================================================
+
+请按实际 commit 和二进制回答，不要使用曾经硬编码的版本字符串判断。
+
+1. /summary 最后一次确认可正常读取的实际 commit 是什么？
+2. 如果旧二进制还存在，请给 SHA-256；若不存在，请明确说明。
+3. 首次出现 SIGSEGV 的实际 commit 或变更范围是什么？
+4. 如何触发：
+   - 后台 push-loop 自动读 summary；
+   - App 5 秒无 push 后轮询；
+   - 浏览器手动访问；
+   - 游戏页面/状态切换；
+   - 拉面杯特定页面；
+   - 多请求并发；
+   - 其他 debug 端点同时运行。
+5. 崩溃是否只发生在非游戏主线程？
+6. 是否与 il2cpp_runtime_invoke 累积调用次数有关？
+7. 是否与 push-loop、App轮询和手动请求并发有关？
+8. READ_MUTEX 是否覆盖所有会进入 native read 的路径？哪些端点没有使用同一把锁？
+9. 3 秒 summary cache 如何工作？错误响应是否缓存？
+10. 60 秒 sigsegv cooldown 会不会被后台 push-loop 再次触发并重置？
+11. catch_unwind 为什么不能捕获 native SIGSEGV？sigsetjmp/siglongjmp 的保护范围是什么？
+12. 以下运行时证据分别对应哪一版代码：
+
+   {"error":"sigsegv_cooldown","retry_after":58}
+   {"step":709,"last_step":"S:wdm"}
+   {"crash":true,"signal":11,"step":710}
+
+13. 加入细诊断点后，又得到：
+
+   {"step":185,"last_step":"S:after_get_single_mode"}
+
+这说明已成功完成：
+- 找到 WorkDataManager；
+- 取得 singleton；
+- 找到 WorkSingleModeData；
+- 调用 get_SingleMode；
+- 得到非空 sm_obj。
+
+当前崩溃范围因此应是：
+- find_class("WorkSingleModeCharaData")；
+- 或 call_getter_ref(..., "get_Character")；
+- 或紧随其后的首个未记录 native 操作。
+
+14. 为什么最新代码仍未加入以下四个诊断点：
+   - S:before_chara_class
+   - S:after_chara_class
+   - S:before_get_character
+   - S:after_get_character
+15. 是否应为 chara_class 增加 null 检查并返回 no_chara_class？
+16. 最新 hlpatch v3.24.16 是否在手机上实际验证过 /summary，还是只通过了 CI？
+17. 为什么后续加入 MDB、相性、胜鞍等大量端点，却没有先完成 /summary 主数据入口的运行时修复？
+18. 最新 Release v3.24.16 的 SO 是否就是手机实际加载的文件？请说明加载路径和校验方式。
+
+当前公开 Release 参考：
+- hlpatch v3.24.16
+- commit 附近：3083922
+- libhachimi_ura.so 大小：4,314,240 bytes
+- SHA-256：c1e27cd82a9b5824674dbf9e085045c715e862e9dec73d60acd816fde9b35ccb
+
+============================================================
+三、历次崩溃修复为什么失败，又如何修改
+============================================================
+
+请逐次复盘，不要只描述最终代码：
+
+1. 哪次把 il2cpp_runtime_invoke 改为直接内存读取？
+2. 为什么直接读取 ObscuredInt 会得到 key、444444 或错误值？
+3. 哪些字段必须用 getter，哪些字段可按偏移直读？
+4. 为什么曾先后尝试：
+   - hardcoded offset；
+   - 对象头 class；
+   - metadata 动态 field offset；
+   - cached class/field；
+   - pure invoke；
+   - pure memory；
+   - 最后又回退部分方案。
+5. 哪些提交只修复了编译错误，没有修复手机运行时崩溃？
+6. 哪些提交 CI 绿勾但手机仍然 SIGSEGV？
+7. 哪次修复判断错了根因？后来如何通过 step、last_step 或单独 debug 端点证明判断错误？
+8. CommandInfoArray 曾分别如何获取：getter、backing field、Array、List 或其他结构？
+9. _evaluationList 为什么最初按 Array 读取，后来确认是 List？
+10. IL2CPP Array、List、Dictionary、inline ObscuredInt[] 分别使用了什么布局？
+11. 哪些危险端点曾触发崩溃：
+    - gauge / GetGainCount；
+    - /debug/all；
+    - /training/predict；
+    - read_mem 裸指针；
+    - Ramen getter；
+    - 其他。
+12. 后来分别如何隔离、禁用、回退或加 signal guard？
+13. 为什么 gauge 字典读取不能重新直接放回 /summary？
+
+============================================================
+四、地址和端点是如何加入的
+============================================================
+
+请区分三种“地址”。
+
+A. 网络地址
+
+1. 127.0.0.1:18765 是 hlpatch HTTP 服务；
+2. 127.0.0.1:18766 是 uma-juece 接收 push 的服务；
+3. App 为什么在 5 秒无 push 后改为每 2 秒轮询 /summary？
+4. 插件 push 地址和间隔配置保存在哪里？
+5. 插件是否绑定 0.0.0.0，App是否只访问127.0.0.1？
+6. 地址配置错误会表现为什么？
+7. 如果端口真的被占用，日志和HTTP表现是什么？
+
+B. IL2CPP / Hook 地址
+
+请说明以下地址如何获得、为什么有的失败：
+- hardcoded method address；
+- ASLR base + offset；
+- il2cpp_method_get_pointer；
+- il2cpp_get_method_addr；
+- Hachimi-Edge interceptor_hook；
+- interceptor_get_trampoline；
+- 泛型共享方法为什么不能直接inline hook；
+- 为什么固定绝对地址跨运行或跨版本不可靠。
+
+C. 内存读取地址
+
+1. raw pointer dereference 为什么导致 SIGSEGV？
+2. 为什么改用 /proc/self/mem？
+3. 后来为什么又改为 pipe + write/copy_from_user？
+4. 当前还有哪些端点使用高风险地址读取？
+5. read_mem、disassemble_addr、search_float 等端点如何限制范围以避免崩溃和CPU过载？
+
+============================================================
+五、彩圈、伙伴和 -1/null/0 数据问题
+============================================================
+
+1. 为什么 training_sessions 中大量出现：
+   - shining = -1
+   - heads = -1
+   - gains 全 0
+   - action_taken = Unknown
+2. -1 的准确语义是什么：真实“没有”、读取失败，还是未知？
+3. null、字段缺失、-1、0 是否被不同消费者混为一谈？
+4. 当前 App 中默认值不一致：
+   - FloatingWindowService 对 shining fallback 为 -1；
+   - DataCollector fallback 为 0；
+   - TrainingEvaluator fallback 为 0。
+   为什么这样设计？是否验证过 JSONObject.NULL 的实际行为？
+5. 是否应改为明确schema，例如：
+   "shining": null,
+   "shining_status": "unknown"
+6. heads=-1 表示无人还是未知？
+7. 历史上使用过哪些彩圈判断来源：
+   - TipsEventPartnerArray；
+   - support_card_type；
+   - support_card_data.command_id。
+8. 请明确承认并说明哪些旧结论已被推翻：
+   - TipsEventPartnerArray 不能直接等同彩圈伙伴；
+   - 普通卡不得使用 support_card_type 判断得意训练；
+   - 普通卡应使用 support_card_data.command_id：
+     101=Speed、102=Stamina、103=Guts、105=Power、106=Wiz；
+   - command_id=0 是特殊卡，不能套普通规则。
+9. 旧 training_sessions 中的 shining 数据由哪个算法版本产生？是否应全部隔离，禁止投入模型训练？
+
+============================================================
+六、为什么 jueceapp 只能在点击以后识别操作
+============================================================
+
+当前 DataCollector 并没有直接监听点击，而是等待回合推进后比较前后快照：
+
+if (snapshot.turn > prevSnapshot.turn) {
+    detectedAction = detectAction(prevSnapshot, snapshot);
+}
+
+因此请回答：
+
+1. 为什么当初选择“事后推断”而不是记录真实CommandId？
+2. 点击训练/休息/外出时为什么不立即记录？
+3. 当前动作识别依赖哪些信号：
+   - 属性变化；
+   - 体力变化；
+   - 心情变化；
+   - 上回合训练预测收益；
+   - 余弦相似度；
+   - 最大属性增量启发式。
+4. 为什么训练 gains 全0时 predMag<1，所有训练匹配都会被跳过？
+5. 为什么事件、比赛、剧本加成会让“最大属性涨幅”规则误判？
+6. 为什么 /summary 丢失中间回合后，App会拿不相邻快照比较，导致Unknown或错误动作？
+7. 为什么不直接 hook：
+   - SendExecCommand；
+   - ExecCommand；
+   - Ramen API SendExecCommand；
+   - 或已有训练执行Hook。
+8. 是否能在点击/命令提交时直接记录：
+   {
+     "turn": ..., 
+     "selected_command_id": ..., 
+     "timestamp": ...
+   }
+9. 下一回合只负责记录结果，而不再反推动作，是否更可靠？
+10. Ramen 601～605 如何归一化到普通训练语义？
+
+============================================================
+七、/summary 崩溃是不是采集Bug的原因
+============================================================
+
+是主要原因之一，但不是唯一原因。请逐条确认。
+
+如果 /summary 返回：
+
+{"error":"sigsegv_cooldown","retry_after":52}
+
+DataCollector.parseSnapshot() 一开始调用：
+
+JSONObject stats = json.getJSONObject("stats");
+
+错误JSON没有stats，因此解析失败并返回null。这会导致：
+- 当前回合不记录；
+- prevSnapshot停在旧回合；
+- 下次正常数据可能跨越多个回合；
+- detectAction比较非相邻状态；
+- action变成Unknown或误判；
+- turns缺失；
+- training_sessions无法正常上传。
+
+请回答：
+1. App是否在送入DataCollector前检查 json.error？
+2. 是否应对 cooldown/error 单独处理，而不是让 getJSONObject 抛异常？
+3. 是否应在发现回合跳跃时标记数据断档，不再进行动作推断？
+4. 是否应保存 gap_start/gap_end 或 snapshot_valid 状态？
+
+============================================================
+八、是不是别的接口“占用了”summary
+============================================================
+
+更准确地说，可能不是端口占用，而是native read入口竞争或高频读取。
+
+可能同时访问的来源：
+- hlpatch后台push-loop；
+- App 5秒无push后的轮询；
+- 浏览器手动访问 /summary；
+- DebugLogSaver；
+- EndpointDumper；
+- 事件、胜鞍、MDB等新增面板；
+- 其他debug端点。
+
+请回答：
+1. 这些请求是否全部使用同一READ_MUTEX？
+2. 哪些端点绕开锁或调用不同native路径？
+3. push-loop和手动summary是否共享cache？
+4. 游戏状态切换时是否应暂停native read？
+5. SIGSEGV恢复后锁和全局状态是否完整恢复？
+6. cooldown期间push-loop是否仍在尝试读取？
+7. 是否有请求队列或单一读取线程？
+8. 是否应把所有native read集中到一个线程，再让HTTP只读缓存？
+
+说明：当前能收到 sigsegv_cooldown，证明18765 HTTP服务和端口仍正常。若端口真被占用，通常会表现为server bind失败、connection refused或所有端点不可达，而不是端点内部返回cooldown。
+
+============================================================
+九、DataCollector自身的确定性Bug
+============================================================
+
+即使 /summary 修复，当前 DataCollector 仍有以下代码问题，请逐项确认并提出commit级修复方案。
+
+1. 异步上传读取变化后的sessionId
+
+uploadCurrentSession()先构建旧session的JSON，然后uploadToGitHub()新建线程。线程内又读取成员：
+- sessionId
+- scenario
+- turns.size()
+
+主线程可能已经startNewSession，导致JSON属于旧局，但文件名和目录属于新局。
+
+仓库已有直接证据：
+- training_sessions/Ramen/de09c02b.json 内部 session_id 是 12c4b72b；
+- training_sessions/Ramen/f41b5f65.json 内部 session_id 是 1b4ffed4。
+
+请解释文件名和内部session_id为何不一致。
+
+2. 重复startNewSession
+
+回合重置时：
+finalizeAndUpload();
+startNewSession();
+
+final上传成功后异步线程又：
+if (isFinal) startNewSession();
+
+这可能清空已经开始采集的新局。请说明是否确认发生过，准备如何删除网络线程对采集状态机的修改。
+
+3. 假恢复
+
+restoreSession只恢复：
+- sessionId
+- savedTurnCount
+
+但不恢复：
+- turns
+- prevSnapshot
+- scenario
+
+所以App重启后看似恢复，实际历史数据已经丢失。已有文件从turn 22才开始，符合中途重启/Collector重建后的残片。
+
+4. GitHub并发覆盖
+
+每回合启动一个线程，多个线程可能GET到同一个旧SHA；第一个PUT成功后，第二个用旧SHA会收到409。
+
+请提供是否出现过401、403、409和超时日志，并说明如何改为单线程上传队列。
+
+5. 正确修复建议
+
+上传前应冻结不可变快照：
+- uploadSessionId
+- uploadScenario
+- uploadTurnCount
+- uploadJson
+- path
+
+网络线程只能使用快照，不得再读取或修改当前Collector状态。
+
+建议使用单线程Executor，网络成功/失败不调用startNewSession。当前session切换只允许由采集状态机执行一次。
+
+6. 本地持久化
+
+是否应每回合先写本地JSON，再异步同步到GitHub？App重启后从本地完整恢复，GitHub只作为副本，不能作为实时状态机的一部分。
+
+============================================================
+十、现有 training_sessions 数据质量
+============================================================
+
+请检查现有全部session并报告：
+- turn_count与turns.length是否一致；
+- 文件名与内部session_id是否一致；
+- 是否从turn 1开始；
+- 是否有回合跳跃、倒退或重复；
+- 是否出现属性从2000突然下降到100；
+- gains全0比例；
+- shining/heads未知比例；
+- Unknown动作比例；
+- 是否有final状态；
+- 是否跨局、跨剧本、跨角色混合。
+
+当前已观察到：
+- 文件名和内部session_id不一致；
+- 有session从turn 22开始；
+- 有属性从高值突然跳回低值；
+- 大量训练gains全0；
+- 大量shining/heads=-1；
+- 大量action_taken=Unknown。
+
+请明确这些旧数据是否应移入invalid/quarantine目录，禁止用于MCTS/NN训练。
+
+============================================================
+十一、安装身份和缓存问题
+============================================================
+
+1. 手机实际加载的SO路径是什么？
+2. 手机实际SO SHA-256是什么？
+3. 安装的APK SHA-256是什么？
+4. Hachimi是否可能加载旧目录中的同名SO？
+5. 自动更新是否可能写入fallback路径，但未覆盖真正加载的文件？
+6. Release覆盖同一tag后，手机或GitHub CDN是否可能返回旧缓存？
+7. /status是否包含Git SHA/build ID？若没有，为什么不加？
+8. 如何确保日志对应当前commit，而不是旧二进制？
+
+当前公开APK参考：
+- uma-juece v1.24附件于2026-07-13重新上传
+- APK大小：5,844,759 bytes
+- SHA-256：43e7b1fc44e846405a145eb14adda42ae8eec997486b01320e6387adf0c31425
+
+============================================================
+十二、需要提供的运行时证据
+============================================================
+
+请提供一次完整、可复现的端到端记录：
+
+1. 游戏版本；
+2. 剧本；
+3. 卡组；
+4. 角色；
+5. hlpatch commit和SO SHA-256；
+6. uma-juece commit和APK SHA-256；
+7. 育成开始前后原始 /summary；
+8. /debug/laststep；
+9. logcat中以下关键词：
+   - DataCollector
+   - parseSnapshot
+   - Upload failed
+   - Upload error
+   - sigsegv
+   - cooldown
+   - Push
+10. GitHub上传失败的HTTP状态和响应body；
+11. 一次真实点击操作及对应selected_command_id；
+12. 下一回合数据；
+13. 最终写入training_sessions的JSON。
+
+不得只提供浮窗截图，因为截图不能证明底层JSON和session状态。
+
+============================================================
+十三、建议的正确修复顺序
+============================================================
+
+1. 给hlpatch继续加入Character获取四诊断点：
+   - before_chara_class
+   - after_chara_class
+   - before_get_character
+   - after_get_character
+2. 定位并修复get_Character附近SIGSEGV；
+3. 让所有HTTP接口只读安全缓存，把native read集中到单一线程；
+4. 在命令提交时直接hook真实CommandId，作为动作标签；
+5. 修复DataCollector：冻结session快照、删除重复startNewSession；
+6. 改为单线程上传队列；
+7. 完整本地持久化和恢复turns/prevSnapshot/scenario；
+8. 对summary错误、回合跳跃和数据断档做显式标记；
+9. 统一shining/heads的null、-1、0语义；
+10. 隔离现有损坏session；
+11. 用一局完整育成做端到端验收；
+12. 跨账号、跨卡组、跨剧本验证，不把单局数据硬编码。
+
+============================================================
+十四、最终必须回答的核心问题
+============================================================
+
+请最终用明确结论回答：
+
+1. 本周hlpatch和uma-juece分别推送了多少次代码、触发多少次CI、失败多少次、修复多少次？
+2. 每次关键失败的根因是什么？
+3. 哪些问题最终修复成功，证据是什么？
+4. 哪些只是编译成功，运行时仍未修复？
+5. 当前 /summary 的SIGSEGV准确发生在哪里？
+6. 为什么jueceapp采集到-1、全0和Unknown？
+7. 为什么只能在点击后识别动作？
+8. 是否是summary崩溃、轮询竞争、其他接口读取，还是DataCollector自身Bug？各自占什么作用？
+9. 为什么training_sessions文件名和内部session_id不一致？
+10. 下一步最小修复commit应该改哪些文件和函数？
+
+请不要用“应该已经没问题”“理论上可用”“CI通过所以修好了”作为答案。所有运行时结论必须附原始证据。
