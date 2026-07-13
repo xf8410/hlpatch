@@ -10831,7 +10831,7 @@ fn debug_mdb_schema_dump() -> String {
                 safe_name
             )) {
                 Ok(mut stmt) => {
-                    let col_count = stmt.column_count().unwrap_or(0);
+                    let col_count = stmt.column_count();
                     // Get column names
                     let col_names: Vec<String> = (0..col_count)
                         .map(|i| stmt.column_name(i).unwrap_or("").to_string())
@@ -13616,7 +13616,7 @@ unsafe fn read_win_saddle_analysis() -> String {
                     let inv: FnInvoke = std::mem::transmute(invoke_fn);
                     let m = f(saddle_class, to_cstr("IsRelationBonusWinSaddle").as_ptr(), 0);
                     if !m.is_null() {
-                        let ret = inv(m, elem_ptr as *mut c_void, std::ptr::null(), std::ptr::null_mut());
+                        let ret = inv(m, elem_ptr as *mut c_void, std::ptr::null_mut(), std::ptr::null_mut());
                         ret as i32 != 0
                     } else {
                         false
@@ -13639,7 +13639,7 @@ unsafe fn read_win_saddle_analysis() -> String {
                     let inv: FnInvoke = std::mem::transmute(invoke_fn);
                     let m = f(saddle_class, to_cstr("GetRelationPoint").as_ptr(), 0);
                     if !m.is_null() {
-                        let ret = inv(m, elem_ptr as *mut c_void, std::ptr::null(), std::ptr::null_mut());
+                        let ret = inv(m, elem_ptr as *mut c_void, std::ptr::null_mut(), std::ptr::null_mut());
                         if !ret.is_null() {
                             std::ptr::read_unaligned::<i32>(ret as *const i32)
                         } else {
