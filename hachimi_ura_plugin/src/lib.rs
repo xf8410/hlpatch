@@ -5081,8 +5081,26 @@ unsafe fn read_summary_inner_impl() -> String {
 
                                     let is_tips_event = tips_partner_ids.contains(&partner_id);
 
+                                    // ★ v2.3: partner_type 和 name（照 PC 版小黑板 personType 映射）
+                                    // personType: 0=未加载, 1=友人卡, 2=普通支援卡, 3=NPC, 4=理事长, 5=记者, 6=不带卡佐岳
+                                    let (partner_type, partner_name) = if is_support_card {
+                                        let sc_type_val = sc_type.unwrap_or(1);
+                                        let ptype = match sc_type_val {
+                                            2 => 1, // 友人卡
+                                            3 => 2, // 团体卡 → 当普通支援卡显示
+                                            _ => 2,  // 普通支援卡
+                                        };
+                                        // 名称从 MDB 查（后续优化），暂时用位置
+                                        let name = format!("卡{}", support_position.unwrap_or(0));
+                                        (ptype, name)
+                                    } else {
+                                        // NPC/理事长/记者 — 按常见 ID 范围判断
+                                        // 暂时全部标为 NPC
+                                        (3, "NPC".to_string())
+                                    };
+
                                     partners_json.push(format!(
-                                        r#"{{"partner_id":{},"support_position":{},"current_bond":{},"is_shining":{},"is_unique_active":{},"bond_threshold":{},"support_card_type":{},"is_tips_event":{},"bond_gain":null}}"#,
+                                        r#"{{"partner_id":{},"support_position":{},"current_bond":{},"is_shining":{},"is_unique_active":{},"bond_threshold":{},"support_card_type":{},"is_tips_event":{},"partner_type":{},"name":"{}","bond_gain":null}}"#,
                                         partner_id,
                                         support_position,
                                         bond_json,
@@ -5091,6 +5109,8 @@ unsafe fn read_summary_inner_impl() -> String {
                                         bond_threshold,
                                         sc_type_json,
                                         is_tips_event,
+                                        partner_type,
+                                        json_escape(&partner_name),
                                     ));
                                 }
                             }
