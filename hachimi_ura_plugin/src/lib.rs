@@ -5091,7 +5091,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                             _ => 2,  // 普通支援卡
                                         };
                                         // 名称从 MDB 查（后续优化），暂时用位置
-                                        let name = format!("卡{}", support_position.unwrap_or(0));
+                                        let name = format!("卡{}", partner_id);
                                         (ptype, name)
                                     } else {
                                         // NPC/理事长/记者 — 按常见 ID 范围判断
