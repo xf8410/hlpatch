@@ -4955,13 +4955,22 @@ unsafe fn read_summary_inner_impl() -> String {
 
                                     let current_bond = partner_evaluation.get(&partner_id).copied();
 
-                                    let is_support_card = (1..=6).contains(&partner_id);
+                                    // Classify support cards only through the actual equipped
+                                    // position map. A numeric partner_id range alone is not proof.
+                                    let support_card_id = equipped_support_cards
+                                        .iter()
+                                        .find(|&&(position, _)| position == partner_id)
+                                        .map(|&(_, card_id)| card_id);
+                                    let is_support_card = support_card_id.is_some();
 
                                     let support_position = if is_support_card {
                                         partner_id.to_string()
                                     } else {
                                         "null".to_string()
                                     };
+                                    let support_card_id_json = support_card_id
+                                        .map(|value| value.to_string())
+                                        .unwrap_or_else(|| "null".to_string());
 
                                     let bond_json = current_bond
                                         .map(|value| value.to_string())
@@ -5091,18 +5100,19 @@ unsafe fn read_summary_inner_impl() -> String {
                                             _ => 2,  // 普通支援卡
                                         };
                                         // 名称从 MDB 查（后续优化），暂时用位置
-                                        let name = format!("卡{}", partner_id);
+                                        let name = format!("支援位{}", partner_id);
                                         (ptype, name)
                                     } else {
                                         // NPC/理事长/记者 — 按常见 ID 范围判断
                                         // 暂时全部标为 NPC
-                                        (3, "NPC".to_string())
+                                        (0, format!("伙伴{}", partner_id))
                                     };
 
                                     partners_json.push(format!(
-                                        r#"{{"partner_id":{},"support_position":{},"current_bond":{},"is_shining":{},"is_unique_active":{},"bond_threshold":{},"support_card_type":{},"is_tips_event":{},"partner_type":{},"name":"{}","bond_gain":null}}"#,
+                                        r#"{{"partner_id":{},"support_position":{},"support_card_id":{},"current_bond":{},"is_shining":{},"is_unique_active":{},"bond_threshold":{},"support_card_type":{},"is_tips_event":{},"partner_type":{},"name":"{}","bond_gain":null}}"#,
                                         partner_id,
                                         support_position,
+                                        support_card_id_json,
                                         bond_json,
                                         is_shining_json,
                                         is_unique_json,
