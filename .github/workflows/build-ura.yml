@@ -3,6 +3,9 @@ name: Build Hachimi URA Plugin
 on:
   push:
     branches: [main]
+    paths:
+      - "hachimi_ura_plugin/**"
+      - ".github/workflows/build-ura.yml"
   workflow_dispatch:
 
 permissions:
@@ -48,7 +51,17 @@ jobs:
           VERSION=$(grep -oP '^version = "\K[^"]+' hachimi_ura_plugin/Cargo.toml)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create Release
+        if: steps.check_tag.outputs.exists != 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.version.outputs.version }}
@@ -56,5 +69,14 @@ jobs:
           files: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
           draft: false
           prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Release Asset
+        if: steps.check_tag.outputs.exists == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          files: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
