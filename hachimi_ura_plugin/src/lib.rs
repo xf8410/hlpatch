@@ -93,6 +93,10 @@ static AUTO_UPDATE_STATUS: std::sync::Mutex<Option<String>> = std::sync::Mutex::
 // ★ v3.22.94: Training result hook — intercept OnSuccessSendCommand to read resultType
 static mut LAST_TRAINING_RESULT: i32 = -1;
 static mut LAST_TRAINING_SUB_ID: i32 = -1;
+// ★ v2.2: 真实 CommandId 捕获 — 从 training_hook_handler 记录
+static mut LAST_ACTION_COMMAND_ID: i32 = -1;
+static mut LAST_ACTION_SEQUENCE: u64 = 0;
+static LAST_ACTION_MUTEX: Mutex<()> = Mutex::new(());
 static mut TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_ON_SUCCESS_PROLOGUE: [u8; 16] = [0; 16];
 static mut ON_SUCCESS_ADDR: usize = 0;
@@ -4111,24 +4115,27 @@ unsafe fn read_summary_inner_impl() -> String {
         return r#"{"error":"no_sm"}"#.to_string();
     }
 
+    log_predict_step("S:before_chara_class");
     let chara_class = find_class(
         image,
         to_cstr("Gallop").as_ptr(),
         to_cstr("WorkSingleModeCharaData").as_ptr(),
     );
+    log_predict_step("S:after_chara_class");
+    if chara_class.is_null() {
+        return r#"{"error":"no_chara_class"}"#.to_string();
+    }
+
+    log_predict_step("S:before_get_character");
     let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character"); // [INVOKE-02] get_Character — 唯一调用
+    log_predict_step("S:after_get_character");
     if chara_obj.is_null() {
         return r#"{"error":"no_chara"}"#.to_string();
     }
 
-    // ★ C# property types from dump.cs:
-    //   Int32 Speed/Stamina/Power/Guts/Wiz/Hp/MaxHp/FanCount/Motivation/Month/Half/ScenarioId
-    //   → getter returns boxed Int32, use call_getter_int
-    //   ObscuredInt SkillPoint/ScenarioProgress/CharaEffectIdArray
-    //   → getter returns boxed ObscuredInt struct, use call_getter_obscured_int
-    // ★ v3.24.9: All chara stats via direct memory read (zero il2cpp_runtime_invoke)
-    // Offsets confirmed by /debug/dumpclass on WorkSingleModeCharaData
+    log_predict_step("S:before_read_speed");
     let spd = read_obscured_int_at(chara_obj, 248); // _speed
+    log_predict_step("S:after_read_speed");
     let sta = read_obscured_int_at(chara_obj, 268); // _stamina
     let pow_ = read_obscured_int_at(chara_obj, 288); // _power
     let gut = read_obscured_int_at(chara_obj, 308); // _guts
@@ -4149,6 +4156,24 @@ unsafe fn read_summary_inner_impl() -> String {
     } else {
         1
     }; // [INVOKE-04] get_Half — 唯一调用
+    // ★ v2.2: Read year and compute cumulative turn
+    // WorkSingleModeData._totalTurnNum at offset 68 (confirmed by /debug/dumpclass)
+    let total_turn_num = read_int_at(sm_obj as *const c_void, 68); // _totalTurnNum
+    // Year from totalTurnNum: year 1 = turn 1-18 (month 4-12), year 2 = turn 19-42, year 3 = turn 43-66
+    let year = if total_turn_num > 0 {
+        if total_turn_num <= 18 { 1 }
+        else if total_turn_num <= 42 { 2 }
+        else if total_turn_num <= 66 { 3 }
+        else { 4 }
+    } else {
+        // Fallback: estimate from month (less reliable)
+        if mon >= 4 { 1 } else { 2 }
+    };
+    let cumulative_turn = if total_turn_num > 0 {
+        total_turn_num
+    } else {
+        (year - 1) * 24 + (mon - 1) * 2 + half
+    };
     let sid = read_obscured_int_at(chara_obj, 568); // _scenarioId
     let chara_id = read_obscured_int_at(chara_obj, 36); // _cardId
 
@@ -5626,10 +5651,41 @@ unsafe fn read_summary_inner_impl() -> String {
         String::new()
     };
 
+    // ★ v2.2: last_action 字段 — 从缓存读取，不调用 IL2CPP
+    let last_action_json = {
+        let _lock = LAST_ACTION_MUTEX.lock();
+        let cmd_id = unsafe { LAST_ACTION_COMMAND_ID };
+        let seq = unsafe { LAST_ACTION_SEQUENCE };
+        drop(_lock);
+        if cmd_id >= 0 {
+            let (action, normalized) = match cmd_id {
+                101 => ("Speed", 101),
+                102 => ("Stamina", 102),
+                103 => ("Guts", 103),
+                105 => ("Power", 105),
+                106 => ("Wiz", 106),
+                601 => ("Speed", 101),
+                602 => ("Stamina", 102),
+                603 => ("Guts", 103),
+                604 => ("Power", 105),
+                605 => ("Wiz", 106),
+                _ => ("Unknown", cmd_id),
+            };
+            format!(
+                r#","last_action":{{"sequence":{},"raw_command_id":{},"normalized_command_id":{},"action":"{}","source":"training_hook"}}"#,
+                seq, cmd_id, normalized, action
+            )
+        } else {
+            String::new()
+        }
+    };
+
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"{}","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}}}"#,
+        r#"{{"version":"{}","year":{},"turn":{},"month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{}}}"#,
         PLUGIN_VERSION,
+        year,
+        cumulative_turn,
         mon,
         half,
         scn_s,
@@ -5673,7 +5729,8 @@ unsafe fn read_summary_inner_impl() -> String {
         skills_json,
         ai_json,
         team_json,
-        ramen_json
+        ramen_json,
+        last_action_json
     )
 }
 
@@ -6130,7 +6187,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         .unwrap_or("/");
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6370,6 +6427,31 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
         drop(_lock);
         r#"{"ok":true}"#.to_string()
+    } else if path == "/action/latest" {
+        // ★ v2.2: 返回最新动作记录（只读缓存，不调用 IL2CPP）
+        let _lock = LAST_ACTION_MUTEX.lock();
+        let cmd_id = unsafe { LAST_ACTION_COMMAND_ID };
+        let seq = unsafe { LAST_ACTION_SEQUENCE };
+        let result_type = unsafe { LAST_TRAINING_RESULT };
+        drop(_lock);
+        let (action, normalized) = match cmd_id {
+            101 => ("Speed", 101),
+            102 => ("Stamina", 102),
+            103 => ("Guts", 103),
+            105 => ("Power", 105),
+            106 => ("Wiz", 106),
+            601 => ("Speed", 101),
+            602 => ("Stamina", 102),
+            603 => ("Guts", 103),
+            604 => ("Power", 105),
+            605 => ("Wiz", 106),
+            -1 => ("None", -1),
+            _ => ("Unknown", cmd_id),
+        };
+        format!(
+            r#"{{"sequence":{},"raw_command_id":{},"normalized_command_id":{},"action":"{}","result_type":{},"source":"training_hook"}}"#,
+            seq, cmd_id, normalized, action, result_type
+        )
     } else if path == "/debug/training_log" {
         // v3.22.98: Read ExecTraining prediction log (seed + result correlation)
         let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
@@ -7302,6 +7384,14 @@ extern "C" fn training_hook_handler(
         unsafe {
             LAST_TRAINING_RESULT = result_type;
             LAST_TRAINING_SUB_ID = sub_id;
+
+            // ★ v2.2: 记录真实 command_id 和 sequence
+            // sub_id 可能是训练子命令 ID，记录用于动作识别
+            {
+                let _lock = LAST_ACTION_MUTEX.lock();
+                LAST_ACTION_COMMAND_ID = sub_id;
+                LAST_ACTION_SEQUENCE += 1;
+            }
 
             // Use trampoline — no unhook/rehook needed
             let trampoline = interceptor_get_trampoline(training_hook_handler as usize);
