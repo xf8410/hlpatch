@@ -6216,6 +6216,24 @@ fn handle_http(mut stream: std::net::TcpStream) {
         .nth(1)
         .unwrap_or("/");
 
+    // ★ 白名单下载开关：名单内端点追加 ?dl=1 即以附件形式返回（解决手机复制长度上限）
+    //    ?dl=1&name=xxx 可自定义文件名（仅保留字母数字和下划线/连字符）
+    //    大文件仍走各专用流式 _dl 端点，避免此路径内存翻倍
+    const DL_ALLOWED: &[&str] = &[
+        "/summary", "/scenario", "/data",
+        "/api/sniff", "/api/sniff/diag", "/api/event/choices",
+        "/debug/all", "/debug/params", "/debug/cmdinfo", "/debug/breeders",
+        "/debug/training_partners", "/debug/rameninfo", "/debug/laststep",
+        "/debug/storydata", "/debug/ramenfields", "/debug/gauge", "/debug/gauge2",
+        "/debug/ramengains", "/debug/paramsincdec", "/debug/training_seed",
+        "/debug/unique_skills", "/debug/hint_gain", "/debug/sc_effect",
+        "/debug/unique_detail", "/classes",
+    ];
+    let dl_flag = parse_query(&full_uri, "dl");
+    let dl_name = parse_query(&full_uri, "name");
+    let dl_enabled = !dl_flag.is_empty() && dl_flag != "0"
+        && DL_ALLOWED.iter().any(|p| path == *p);
+
     let body = if path == "/" || path == "/health" {
         format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
@@ -7104,11 +7122,30 @@ fn handle_http(mut stream: std::net::TcpStream) {
         } else {
             "application/json"
         };
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            content_type, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
+        if dl_enabled {
+            // 下载模式：默认按路由生成文件名，?name= 可覆盖
+            let safe: String = dl_name
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .take(64)
+                .collect();
+            let fallback = path.trim_matches('/').replace('/', "_");
+            let base = if safe.is_empty() { fallback } else { safe };
+            let base = if base.is_empty() { "download".to_string() } else { base };
+            let ext = if content_type.starts_with("text/html") { "html" } else { "json" };
+            let fname = format!("{}.{}", base, ext);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                fname, body.len(), body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        } else {
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                content_type, body.len(), body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
     }
     let _ = stream.flush();
 }
