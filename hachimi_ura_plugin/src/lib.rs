@@ -6239,7 +6239,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6504,6 +6504,51 @@ fn handle_http(mut stream: std::net::TcpStream) {
             r#"{{"sequence":{},"raw_command_id":{},"normalized_command_id":{},"action":"{}","result_type":{},"source":"training_hook"}}"#,
             seq, cmd_id, normalized, action, result_type
         )
+    } else if path == "/seed/history" {
+        // ★ v3.24.17: 种子历史查询 — 最近50次训练的种子变化记录
+        let hist = unsafe {
+            if SEED_HISTORY.is_empty() {
+                "[]".to_string()
+            } else {
+                format!("[{}]", SEED_HISTORY.join(","))
+            }
+        };
+        let count = unsafe { SEED_HISTORY.len() };
+        format!(
+            r#"{{"ok":true,"count":{},"max":{},"history":{}}}"#,
+            count, MAX_SEED_HISTORY, hist
+        )
+    } else if path == "/seed/stats" {
+        // ★ v3.24.17: 种子消费统计 — 每次训练消耗的随机步数
+        let stats = unsafe {
+            if SEED_HISTORY.len() < 2 {
+                r#"{"ok":true,"count":0,"avg_delta":0,"min_delta":0,"max_delta":0}"#.to_string()
+            } else {
+                let mut deltas: Vec<i64> = Vec::new();
+                for entry in &SEED_HISTORY {
+                    // 从 entry JSON 中提取 s1_delta
+                    if let Some(start) = entry.find("\"s1_delta\":") {
+                        let rest = &entry[start + 11..];
+                        let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
+                        if let Ok(delta) = rest[..end].parse::<i64>() {
+                            deltas.push(delta);
+                        }
+                    }
+                }
+                if deltas.is_empty() {
+                    r#"{"ok":true,"count":0,"avg_delta":0,"min_delta":0,"max_delta":0}"#.to_string()
+                } else {
+                    let avg = deltas.iter().sum::<i64>() as f64 / deltas.len() as f64;
+                    let min = *deltas.iter().min().unwrap();
+                    let max = *deltas.iter().max().unwrap();
+                    format!(
+                        r#"{{"ok":true,"count":{},"avg_delta":{:.1},"min_delta":{},"max_delta":{}}}"#,
+                        deltas.len(), avg, min, max
+                    )
+                }
+            }
+        };
+        stats
     } else if path == "/debug/training_log" {
         // v3.22.98: Read ExecTraining prediction log (seed + result correlation)
         let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
@@ -15057,6 +15102,9 @@ static mut ORIG_EXEC_TRAINING_PROLOGUE: [u8; 16] = [0; 16];
 static mut EXEC_TRAINING_ADDR: usize = 0;
 static mut LAST_SEED_BEFORE: [u32; 4] = [0, 0, 0, 0];
 static mut LAST_SEED_AFTER: [u32; 4] = [0, 0, 0, 0];
+// ★ v3.24.17: 种子历史记录 — 最近 50 次训练的种子变化
+static mut SEED_HISTORY: Vec<String> = Vec::new();
+const MAX_SEED_HISTORY: usize = 50;
 static mut LAST_MOTIVATION: i32 = -1; // 干劲(1-5), captured in exec_training_hook
 static mut LAST_FAILURE_RATE: i32 = -1; // 失败率(0-10000), from FailureRateService hook
                                         // FailureRateService hook statics
@@ -15135,7 +15183,13 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
                 sys_close(fd);
             }
 
-            TRAINING_PREDICT_LOG.push(entry);
+            TRAINING_PREDICT_LOG.push(entry.clone());
+
+            // ★ v3.24.17: 记录到种子历史
+            if SEED_HISTORY.len() >= MAX_SEED_HISTORY {
+                SEED_HISTORY.remove(0);
+            }
+            SEED_HISTORY.push(entry);
         }
     }));
 }
