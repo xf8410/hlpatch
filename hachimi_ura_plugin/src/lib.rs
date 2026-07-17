@@ -15002,6 +15002,7 @@ static mut EXEC_TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_EXEC_TRAINING_PROLOGUE: [u8; 16] = [0; 16];
 static mut EXEC_TRAINING_ADDR: usize = 0;
 // ExecTraining hook is retained only to preserve existing hook behavior; no RNG observations are captured.
+static mut LAST_FAILURE_RATE: i32 = -1;
 static mut FAILURE_RATE_HOOK_INSTALLED: bool = false;
 static mut ORIG_FAILURE_RATE_PROLOGUE: [u8; 16] = [0; 16];
 static mut FAILURE_RATE_ADDR: usize = 0;
