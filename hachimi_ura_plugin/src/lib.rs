@@ -2587,6 +2587,15 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
     }
 
     let mut all_fields: Vec<String> = Vec::new();
+    let field_get_type_fn: Option<unsafe extern "C" fn(*const Il2CppFieldInfo) -> *const c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_field_get_type");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let type_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
+        let p = resolve_il2cpp_symbol("il2cpp_type_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+
     let mut current_class = class;
     let mut depth = 0;
 
@@ -2622,12 +2631,23 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
             };
 
             let offset = (*field_info).offset;
+            let type_ptr = field_get_type_fn
+                .map(|f| f(field_info))
+                .unwrap_or((*field_info)._ty);
+            let type_enum = il2cpp_type_get_type_enum(type_ptr);
+            let type_name = type_get_name_fn
+                .and_then(|f| {
+                    let p = f(type_ptr);
+                    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                })
+                .unwrap_or_else(|| type_enum_to_name(type_enum));
             all_fields.push(format!(
-                r#"{{"name":"{}","offset":{},"class":"{}"}}"#,
-                field_name, offset, class_name
+                r#"{{"name":"{}","offset":{},"class":"{}","type_enum":{},"type_name":"{}"}}"#,
+                json_escape(&field_name), offset, json_escape(&class_name), type_enum,
+                json_escape(&type_name)
             ));
-        }
 
+        }
         if let Some(ref get_parent) = get_parent_fn {
             let parent = get_parent(current_class);
             if parent.is_null() || parent == current_class {
@@ -16167,6 +16187,11 @@ unsafe fn il2cpp_list_methods(class_name: &str) -> String {
         }
     };
 
+    let type_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
+        let p = resolve_il2cpp_symbol("il2cpp_type_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+
     // il2cpp_method_get_flags 获取方法标志
     // 原型: uint32_t il2cpp_method_get_flags(const MethodInfo* method, uint32_t* iflags)
     let method_get_flags_fn: Option<unsafe extern "C" fn(*const c_void, *mut u32) -> u32> = {
@@ -16231,18 +16256,25 @@ unsafe fn il2cpp_list_methods(class_name: &str) -> String {
             })
             .unwrap_or(false);
 
-        // 获取返回类型的type enum
-        let return_type_str = method_get_return_type_fn
-            .map(|f| {
-                let rt = f(method_info);
-                if rt.is_null() {
-                    "void".to_string()
-                } else {
-                    let te = il2cpp_type_get_type_enum(rt);
-                    type_enum_to_name(te)
-                }
-            })
-            .unwrap_or_else(|| "?".to_string());
+        // Preserve the coarse enum for compatibility and add the exact IL2CPP type name.
+        let return_type_ptr = method_get_return_type_fn
+            .map(|f| f(method_info))
+            .unwrap_or(ptr::null());
+        let return_type_str = if return_type_ptr.is_null() {
+            "void".to_string()
+        } else {
+            type_enum_to_name(il2cpp_type_get_type_enum(return_type_ptr))
+        };
+        let return_type_name = if return_type_ptr.is_null() {
+            "void".to_string()
+        } else {
+            type_get_name_fn
+                .and_then(|f| {
+                    let p = f(return_type_ptr);
+                    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                })
+                .unwrap_or_else(|| return_type_str.clone())
+        };
 
         // 检查是否是本类定义的方法（不是继承的）
         let is_own_method = method_get_class_fn
@@ -16253,15 +16285,16 @@ unsafe fn il2cpp_list_methods(class_name: &str) -> String {
             .unwrap_or(true);
 
         methods.push(format!(
-            r#"{{"name":"{}","params":{},"return_type":"{}","static":{},"own":{}}}"#,
+            r#"{{"name":"{}","params":{},"return_type":"{}","return_type_name":"{}","static":{},"own":{}}}"#,
             json_escape(&method_name),
             param_count,
             return_type_str,
+            json_escape(&return_type_name),
             is_static,
             is_own_method
         ));
-    }
 
+    }
     format!(
         r#"{{"ok":true,"requested":"{}","found":"{}","method_count":{},"methods":[{}]}}"#,
         class_name,
