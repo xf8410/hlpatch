@@ -22,7 +22,6 @@
 const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 use rusqlite::{Connection, OpenFlags};
-use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::io::{Read, Write};
 use std::ptr;
@@ -4226,14 +4225,13 @@ unsafe fn read_summary_inner_impl() -> String {
     let proper_ground_turf = read_obscured_int_at(chara_obj, 904);
     let proper_ground_dirt = read_obscured_int_at(chara_obj, 924);
 
-    // _fixedTurnCharaSeed is a complete [u32; 4] at offset 0x198, not an ObscuredInt.
-    // State-word differences are raw numeric features, not confirmed PRNG call counts.
-    let rng_state = if !sm_obj.is_null() {
-        read_rng_state_at(sm_obj as usize)
+    // Runtime reflection confirms offset 0x198 is ObscuredInt _fixedTurnCharaSeed.
+    // This is a named game field, not a complete PRNG state.
+    let fixed_turn_chara_seed = if !sm_obj.is_null() {
+        read_obscured_int_at(sm_obj, 408)
     } else {
-        [0; 4]
+        0
     };
-    // chara_effect_ids: read array via field pointer (not getter)
     let chara_effect_ids_arr = read_ptr_at(chara_obj, 1080); // _charaEffectIdArray
     let chara_effect_ids: Vec<i32> = if !chara_effect_ids_arr.is_null() {
         read_il2cpp_int_list(chara_effect_ids_arr)
@@ -5737,7 +5735,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"{}","year":{},"turn":{},"month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_state":{{"s0":{},"s1":{},"s2":{},"s3":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{}{} }}"#,
+        r#"{{"version":"{}","year":{},"turn":{},"month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{} }}"#,
         PLUGIN_VERSION,
         year,
         cumulative_turn,
@@ -5772,10 +5770,7 @@ unsafe fn read_summary_inner_impl() -> String {
         talent_level,
         chara_grade,
         difficulty,
-        rng_state[0],
-        rng_state[1],
-        rng_state[2],
-        rng_state[3],
+        fixed_turn_chara_seed,
         tr_json,
         sc_json,
         ev_json,
@@ -5788,8 +5783,7 @@ unsafe fn read_summary_inner_impl() -> String {
         ai_json,
         team_json,
         ramen_json,
-        last_action_json,
-        latest_rng_transition_json()
+        last_action_json
     )
 }
 
@@ -6529,64 +6523,18 @@ fn handle_http(mut stream: std::net::TcpStream) {
             r#"{{"sequence":{},"raw_command_id":{},"normalized_command_id":{},"action":"{}","result_type":{},"source":"training_hook"}}"#,
             seq, cmd_id, normalized, action, result_type
         )
-    } else if path == "/seed/history" {
-        let history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
-        let count = history.len();
-        let hist = format!("[{}]", history.iter().cloned().collect::<Vec<_>>().join(","));
-        format!(r#"{{"ok":true,"count":{},"max":{},"history":{}}}"#, count, MAX_SEED_HISTORY, hist)
-    } else if path == "/seed/stats" {
-        let history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
-        let mut deltas = Vec::new();
-        for entry in history.iter() {
-            if let Some(start) = entry.find("\"s1_numeric_delta\":") {
-                let rest = &entry[start + 19..];
-                let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
-                if let Ok(value) = rest[..end].parse::<i64>() { deltas.push(value); }
-            }
-        }
-        if deltas.is_empty() {
-            r#"{"ok":true,"feature":"s1_numeric_delta","is_prng_call_count":false,"count":0}"#.to_string()
-        } else {
-            let avg = deltas.iter().sum::<i64>() as f64 / deltas.len() as f64;
-            format!(r#"{{"ok":true,"feature":"s1_numeric_delta","is_prng_call_count":false,"count":{},"avg":{:.1},"min":{},"max":{}}}"#, deltas.len(), avg, deltas.iter().min().unwrap(), deltas.iter().max().unwrap())
-        }
+    } else if path == "/seed/history" || path == "/seed/stats" {
+        r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
     } else if path == "/debug/training_log" {
-        // Same synchronized transition history; retained for endpoint compatibility.
         let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
         let addr = unsafe { EXEC_TRAINING_ADDR };
-        let history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
-        let log = format!("[{}]", history.iter().cloned().collect::<Vec<_>>().join(","));
-        let seed_before = unsafe {
-
-            format!(
-                "[{}]",
-                LAST_SEED_BEFORE
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        };
-        let seed_after = unsafe {
-            format!(
-                "[{}]",
-                LAST_SEED_AFTER
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        };
         format!(
-            r#"{{"hooked":{},"addr":"0x{:x}","last_seed_before":{},"last_seed_after":{},"log":{}}}"#,
-            hooked, addr, seed_before, seed_after, log
+            r#"{{"hooked":{},"addr":"0x{:x}","rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}}"#,
+            hooked, addr
         )
     } else if path == "/debug/training_log_dl" {
-        // v3.22.98: Download training log file (jsonl)
-        match std::fs::read_to_string("/data/data/jp.pokemon.pokeuma/files/training_log.jsonl") {
-            Ok(content) => content,
-            Err(_) => "".to_string(),
-        }
+        // Do not re-export legacy files containing the invalid u32x4 interpretation.
+        r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
     } else if path.starts_with("/debug/dumpclass") {
         // v3.22.51: Dump all fields of any IL2CPP class by name
         // Usage: /debug/dumpclass?name=WorkSingleModeData
@@ -15030,208 +14978,46 @@ unsafe fn debug_paramsincdec() -> String {
 /// 一键查找训练种子：WorkDataManager → WorkSingleModeData → _fixedTurnCharaSeed
 /// 自动完成 /singletons + read_mem(offset 96) + read_mem(offset 408) 的手动3步流程
 unsafe fn debug_training_seed() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = get_image();
-    if image.is_null() {
-        return r#"{"error":"image_null"}"#.to_string();
-    }
-
-    // 1. 获取 WorkDataManager 单例
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
     let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
-    if wdm_cls.is_null() {
-        return r#"{"error":"wdm_class_not_found"}"#.to_string();
-    }
+    if wdm_cls.is_null() { return r#"{"error":"wdm_class_not_found"}"#.to_string(); }
     let wdm_inst = get_singleton(wdm_cls);
     if wdm_inst.is_null() {
         return r#"{"error":"wdm_null","hint":"game_not_loaded"}"#.to_string();
     }
-
-    let wdm_addr = wdm_inst as usize;
-
-    // 2. 读取 offset 0x60 (96) → <SingleMode>k__BackingField → WorkSingleModeData 指针
     let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
     if sm_ptr == 0 {
-        return format!(
-            r#"{{"error":"single_mode_null","wdm_addr":"0x{:x}","hint":"not_in_training_scene"}}"#,
-            wdm_addr
-        );
+        return r#"{"error":"single_mode_null","hint":"not_in_training_scene"}"#.to_string();
     }
-
-    // 3. 读取 offset 0x198 (408) → _fixedTurnCharaSeed (64 bytes)
-    let seed_addr = sm_ptr + 408;
-    let mut seed_bytes = [0u8; 64];
-    let src = seed_addr as *const u8;
-    for i in 0..64 {
-        seed_bytes[i] = std::ptr::read_unaligned::<u8>(src.add(i));
-    }
-
-    // 4. 解析为 u32 四元组
-    let s0 = u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]]);
-    let s1 = u32::from_le_bytes([seed_bytes[4], seed_bytes[5], seed_bytes[6], seed_bytes[7]]);
-    let s2 = u32::from_le_bytes([seed_bytes[8], seed_bytes[9], seed_bytes[10], seed_bytes[11]]);
-    let s3 = u32::from_le_bytes([
-        seed_bytes[12],
-        seed_bytes[13],
-        seed_bytes[14],
-        seed_bytes[15],
-    ]);
-
-    // 生成 hex dump
-    let mut hex_str = String::new();
-    for (i, b) in seed_bytes.iter().enumerate() {
-        if i > 0 && i % 16 == 0 {
-            hex_str.push('\n');
-        }
-        hex_str.push_str(&format!("{:02x}", b));
-    }
-
+    let value = read_obscured_int_at(sm_ptr as *const c_void, 408);
     format!(
-        r#"{{"ok":true,"wdm_addr":"0x{:x}","single_mode_addr":"0x{:x}","seed_addr":"0x{:x}","seed_s0":{},"seed_s1":{},"seed_s2":{},"seed_s3":{},"seed_hex":"{}"}}"#,
-        wdm_addr, sm_ptr, seed_addr, s0, s1, s2, s3, hex_str
+        r#"{{"ok":true,"field":"WorkSingleModeData._fixedTurnCharaSeed","offset":408,"type":"CodeStage.AntiCheat.ObscuredTypes.ObscuredInt","fixed_turn_chara_seed":{},"is_complete_prng_state":false}}"#,
+        value
     )
 }
-
 // ★ v3.22.98: ExecTraining hook — intercept before training to read seed + predict
 static mut EXEC_TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_EXEC_TRAINING_PROLOGUE: [u8; 16] = [0; 16];
 static mut EXEC_TRAINING_ADDR: usize = 0;
-static mut LAST_SEED_BEFORE: [u32; 4] = [0, 0, 0, 0];
-static mut LAST_SEED_AFTER: [u32; 4] = [0, 0, 0, 0];
-// ★ v3.24.17: 种子历史记录 — 最近 50 次训练的种子变化
-static SEED_HISTORY: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
-const MAX_SEED_HISTORY: usize = 50;
-static mut LAST_MOTIVATION: i32 = -1; // 干劲(1-5), captured in exec_training_hook
-static mut LAST_FAILURE_RATE: i32 = -1; // 失败率(0-10000), from FailureRateService hook
-                                        // FailureRateService hook statics
+// ExecTraining hook is retained only to preserve existing hook behavior; no RNG observations are captured.
 static mut FAILURE_RATE_HOOK_INSTALLED: bool = false;
 static mut ORIG_FAILURE_RATE_PROLOGUE: [u8; 16] = [0; 16];
 static mut FAILURE_RATE_ADDR: usize = 0;
 
-// Hook handler: called instead of ExecTraining (static, 2 params, void)
 extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        unsafe {
-            // Read seed + motivation before training
-            let seed_before = read_seed_inner();
-            LAST_SEED_BEFORE = seed_before;
-            let motivation = read_motivation_inner();
-            LAST_MOTIVATION = motivation;
-
-            // ★ v3.24.9: Use trampoline — no unhook/rehook
-            let trampoline = interceptor_get_trampoline(exec_training_hook as usize);
-            if trampoline == 0 {
-                ura_log(1, "exec_training_hook: trampoline not found");
-                return;
-            }
-            type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void);
-            let original: FnType = std::mem::transmute(trampoline);
-            original(param1, param2);
-
-            // Read seed after training
-            let seed_after = read_seed_inner();
-            LAST_SEED_AFTER = seed_after;
-
-            // Read result from OnSuccessSendCommand hook
-            let result_type = LAST_TRAINING_RESULT;
-            let result_name = match result_type {
-                0 => "GreatSuccess",
-                1 => "Success",
-                2 => "Failure",
-                _ => "Unknown",
-            };
-
-            // Read failure rate from FailureRateService hook (0-10000 = 0%-100%)
-            let failure_rate = LAST_FAILURE_RATE;
-
-            // Capture correlation fields after the original hook chain has completed.
-            let timestamp_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let (sequence, raw_sub_id) = {
-                let _lock = LAST_ACTION_MUTEX.lock();
-                (LAST_ACTION_SEQUENCE, LAST_TRAINING_SUB_ID)
-            };
-            let (turn, scenario_id) = read_training_context_inner();
-            let changed_mask = (0..4).fold(0u8, |mask, i|
-                if seed_before[i] != seed_after[i] { mask | (1 << i) } else { mask });
-            let entry = format!(
-                r#"{{"sequence":{},"timestamp_ms":{},"turn":{},"scenario_id":{},"raw_sub_id":{},"rng_before":{{"s0":{},"s1":{},"s2":{},"s3":{}}},"rng_after":{{"s0":{},"s1":{},"s2":{},"s3":{}}},"s1_numeric_delta":{},"changed_mask":{},"motivation":{},"failure_rate":{},"result":{},"result_name":"{}"}}"#,
-                sequence, timestamp_ms, turn, scenario_id, raw_sub_id,
-                seed_before[0], seed_before[1], seed_before[2], seed_before[3],
-                seed_after[0], seed_after[1], seed_after[2], seed_after[3],
-                seed_after[1] as i64 - seed_before[1] as i64, changed_mask,
-                motivation, failure_rate, result_type, result_name
-            );
-            // v3.22.98: Persist to file for easy download (before push, entry is moved)
-            let log_path = b"/data/data/jp.pokemon.pokeuma/files/training_log.jsonl\0";
-            let line_with_nl = format!("{}\n", entry);
-            let line_bytes = line_with_nl.as_bytes();
-            let fd = sys_open(log_path.as_ptr() as *const i8, 1 | 64 | 1024, 0o644);
-            if fd >= 0 {
-                sys_write(fd, line_bytes.as_ptr(), line_bytes.len());
-                sys_close(fd);
-            }
-
-            let mut history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
-            if history.len() >= MAX_SEED_HISTORY {
-                history.pop_front();
-            }
-            history.push_back(entry);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let trampoline = interceptor_get_trampoline(exec_training_hook as usize);
+        if trampoline == 0 {
+            ura_log(1, "exec_training_hook: trampoline not found");
+            return;
         }
+        type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void);
+        let original: FnType = std::mem::transmute(trampoline);
+        original(param1, param2);
     }));
 }
-
-// Read seed without the full debug_training_seed overhead
-fn latest_rng_transition_json() -> String {
-    let history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
-    history
-        .back()
-        .map(|entry| format!(r#","rng_transition":{}"#, entry))
-        .unwrap_or_default()
-}
-
-unsafe fn read_rng_state_at(single_mode_addr: usize) -> [u32; 4] {
-    if single_mode_addr == 0 {
-        return [0; 4];
-    }
-    let state = (single_mode_addr + 0x198) as *const u32;
-    [
-        std::ptr::read_unaligned(state),
-        std::ptr::read_unaligned(state.add(1)),
-        std::ptr::read_unaligned(state.add(2)),
-        std::ptr::read_unaligned(state.add(3)),
-    ]
-}
-
-unsafe fn read_seed_inner() -> [u32; 4] {
-    if API.is_null() {
-        return [0; 4];
-    }
-    let image = get_image();
-    if image.is_null() {
-        return [0; 4];
-    }
-
-    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
-    if wdm_cls.is_null() {
-        return [0; 4];
-    }
-    let wdm_inst = get_singleton(wdm_cls);
-    if wdm_inst.is_null() {
-        return [0; 4];
-    }
-
-    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
-    if sm_ptr == 0 {
-        return [0; 4];
-    }
-
-    read_rng_state_at(sm_ptr)
-}
-
 unsafe fn read_training_context_inner() -> (i32, i32) {
     if API.is_null() { return (-1, -1); }
     let image = get_image();
