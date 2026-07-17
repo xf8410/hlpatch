@@ -22,6 +22,7 @@
 const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 use rusqlite::{Connection, OpenFlags};
+use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::io::{Read, Write};
 use std::ptr;
@@ -4205,13 +4206,13 @@ unsafe fn read_summary_inner_impl() -> String {
     let proper_ground_turf = read_obscured_int_at(chara_obj, 904);
     let proper_ground_dirt = read_obscured_int_at(chara_obj, 924);
 
-    // ★ v3.24.9: RNG seed from WorkSingleModeData — ObscuredInt (gap=24 to next field)
-    let rng_seed = if !sm_obj.is_null() {
-        read_obscured_int_at(sm_obj, 408)
+    // _fixedTurnCharaSeed is a complete [u32; 4] at offset 0x198, not an ObscuredInt.
+    // State-word differences are raw numeric features, not confirmed PRNG call counts.
+    let rng_state = if !sm_obj.is_null() {
+        read_rng_state_at(sm_obj as usize)
     } else {
-        0
+        [0; 4]
     };
-
     // chara_effect_ids: read array via field pointer (not getter)
     let chara_effect_ids_arr = read_ptr_at(chara_obj, 1080); // _charaEffectIdArray
     let chara_effect_ids: Vec<i32> = if !chara_effect_ids_arr.is_null() {
@@ -5716,7 +5717,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"{}","year":{},"turn":{},"month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{}}}"#,
+        r#"{{"version":"{}","year":{},"turn":{},"month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"rng_state":{{"s0":{},"s1":{},"s2":{},"s3":{}}},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{}{} }}"#,
         PLUGIN_VERSION,
         year,
         cumulative_turn,
@@ -5751,7 +5752,10 @@ unsafe fn read_summary_inner_impl() -> String {
         talent_level,
         chara_grade,
         difficulty,
-        rng_seed,
+        rng_state[0],
+        rng_state[1],
+        rng_state[2],
+        rng_state[3],
         tr_json,
         sc_json,
         ev_json,
@@ -5764,7 +5768,8 @@ unsafe fn read_summary_inner_impl() -> String {
         ai_json,
         team_json,
         ramen_json,
-        last_action_json
+        last_action_json,
+        latest_rng_transition_json()
     )
 }
 
@@ -6505,62 +6510,34 @@ fn handle_http(mut stream: std::net::TcpStream) {
             seq, cmd_id, normalized, action, result_type
         )
     } else if path == "/seed/history" {
-        // ★ v3.24.17: 种子历史查询 — 最近50次训练的种子变化记录
-        let hist = unsafe {
-            if SEED_HISTORY.is_empty() {
-                "[]".to_string()
-            } else {
-                format!("[{}]", SEED_HISTORY.join(","))
-            }
-        };
-        let count = unsafe { SEED_HISTORY.len() };
-        format!(
-            r#"{{"ok":true,"count":{},"max":{},"history":{}}}"#,
-            count, MAX_SEED_HISTORY, hist
-        )
+        let history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
+        let count = history.len();
+        let hist = format!("[{}]", history.iter().cloned().collect::<Vec<_>>().join(","));
+        format!(r#"{{"ok":true,"count":{},"max":{},"history":{}}}"#, count, MAX_SEED_HISTORY, hist)
     } else if path == "/seed/stats" {
-        // ★ v3.24.17: 种子消费统计 — 每次训练消耗的随机步数
-        let stats = unsafe {
-            if SEED_HISTORY.len() < 2 {
-                r#"{"ok":true,"count":0,"avg_delta":0,"min_delta":0,"max_delta":0}"#.to_string()
-            } else {
-                let mut deltas: Vec<i64> = Vec::new();
-                for entry in &SEED_HISTORY {
-                    // 从 entry JSON 中提取 s1_delta
-                    if let Some(start) = entry.find("\"s1_delta\":") {
-                        let rest = &entry[start + 11..];
-                        let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
-                        if let Ok(delta) = rest[..end].parse::<i64>() {
-                            deltas.push(delta);
-                        }
-                    }
-                }
-                if deltas.is_empty() {
-                    r#"{"ok":true,"count":0,"avg_delta":0,"min_delta":0,"max_delta":0}"#.to_string()
-                } else {
-                    let avg = deltas.iter().sum::<i64>() as f64 / deltas.len() as f64;
-                    let min = *deltas.iter().min().unwrap();
-                    let max = *deltas.iter().max().unwrap();
-                    format!(
-                        r#"{{"ok":true,"count":{},"avg_delta":{:.1},"min_delta":{},"max_delta":{}}}"#,
-                        deltas.len(), avg, min, max
-                    )
-                }
+        let history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
+        let mut deltas = Vec::new();
+        for entry in history.iter() {
+            if let Some(start) = entry.find("\"s1_numeric_delta\":") {
+                let rest = &entry[start + 19..];
+                let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
+                if let Ok(value) = rest[..end].parse::<i64>() { deltas.push(value); }
             }
-        };
-        stats
+        }
+        if deltas.is_empty() {
+            r#"{"ok":true,"feature":"s1_numeric_delta","is_prng_call_count":false,"count":0}"#.to_string()
+        } else {
+            let avg = deltas.iter().sum::<i64>() as f64 / deltas.len() as f64;
+            format!(r#"{{"ok":true,"feature":"s1_numeric_delta","is_prng_call_count":false,"count":{},"avg":{:.1},"min":{},"max":{}}}"#, deltas.len(), avg, deltas.iter().min().unwrap(), deltas.iter().max().unwrap())
+        }
     } else if path == "/debug/training_log" {
-        // v3.22.98: Read ExecTraining prediction log (seed + result correlation)
+        // Same synchronized transition history; retained for endpoint compatibility.
         let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
         let addr = unsafe { EXEC_TRAINING_ADDR };
-        let log = unsafe {
-            if TRAINING_PREDICT_LOG.is_empty() {
-                "[]".to_string()
-            } else {
-                format!("[{}]", TRAINING_PREDICT_LOG.join(","))
-            }
-        };
+        let history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
+        let log = format!("[{}]", history.iter().cloned().collect::<Vec<_>>().join(","));
         let seed_before = unsafe {
+
             format!(
                 "[{}]",
                 LAST_SEED_BEFORE
@@ -15103,7 +15080,7 @@ static mut EXEC_TRAINING_ADDR: usize = 0;
 static mut LAST_SEED_BEFORE: [u32; 4] = [0, 0, 0, 0];
 static mut LAST_SEED_AFTER: [u32; 4] = [0, 0, 0, 0];
 // ★ v3.24.17: 种子历史记录 — 最近 50 次训练的种子变化
-static mut SEED_HISTORY: Vec<String> = Vec::new();
+static SEED_HISTORY: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 const MAX_SEED_HISTORY: usize = 50;
 static mut LAST_MOTIVATION: i32 = -1; // 干劲(1-5), captured in exec_training_hook
 static mut LAST_FAILURE_RATE: i32 = -1; // 失败率(0-10000), from FailureRateService hook
@@ -15111,8 +15088,6 @@ static mut LAST_FAILURE_RATE: i32 = -1; // 失败率(0-10000), from FailureRateS
 static mut FAILURE_RATE_HOOK_INSTALLED: bool = false;
 static mut ORIG_FAILURE_RATE_PROLOGUE: [u8; 16] = [0; 16];
 static mut FAILURE_RATE_ADDR: usize = 0;
-static mut TRAINING_PREDICT_LOG: Vec<String> = Vec::new();
-const MAX_PREDICT_LOG: usize = 50;
 
 // Hook handler: called instead of ExecTraining (static, 2 params, void)
 extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
@@ -15150,29 +15125,26 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
             // Read failure rate from FailureRateService hook (0-10000 = 0%-100%)
             let failure_rate = LAST_FAILURE_RATE;
 
-            // Log prediction entry
-            let ts = std::time::SystemTime::now()
+            // Capture correlation fields after the original hook chain has completed.
+            let timestamp_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
+                .map(|d| d.as_millis())
                 .unwrap_or(0);
+            let (sequence, raw_sub_id) = {
+                let _lock = LAST_ACTION_MUTEX.lock();
+                (LAST_ACTION_SEQUENCE, LAST_TRAINING_SUB_ID)
+            };
+            let (turn, scenario_id) = read_training_context_inner();
+            let changed_mask = (0..4).fold(0u8, |mask, i|
+                if seed_before[i] != seed_after[i] { mask | (1 << i) } else { mask });
             let entry = format!(
-                r#"{{"ts":{},"s0":{},"s1_before":{},"s1_after":{},"s1_delta":{},"s2":{},"s3":{},"motivation":{},"failure_rate":{},"result":{},"result_name":"{}"}}"#,
-                ts,
-                seed_before[0],
-                seed_before[1],
-                seed_after[1],
-                (seed_after[1] as i64 - seed_before[1] as i64),
-                seed_before[2],
-                seed_before[3],
-                motivation,
-                failure_rate,
-                result_type,
-                result_name
+                r#"{{"sequence":{},"timestamp_ms":{},"turn":{},"scenario_id":{},"raw_sub_id":{},"rng_before":{{"s0":{},"s1":{},"s2":{},"s3":{}}},"rng_after":{{"s0":{},"s1":{},"s2":{},"s3":{}}},"s1_numeric_delta":{},"changed_mask":{},"motivation":{},"failure_rate":{},"result":{},"result_name":"{}"}}"#,
+                sequence, timestamp_ms, turn, scenario_id, raw_sub_id,
+                seed_before[0], seed_before[1], seed_before[2], seed_before[3],
+                seed_after[0], seed_after[1], seed_after[2], seed_after[3],
+                seed_after[1] as i64 - seed_before[1] as i64, changed_mask,
+                motivation, failure_rate, result_type, result_name
             );
-            if TRAINING_PREDICT_LOG.len() >= MAX_PREDICT_LOG {
-                TRAINING_PREDICT_LOG.remove(0);
-            }
-
             // v3.22.98: Persist to file for easy download (before push, entry is moved)
             let log_path = b"/data/data/jp.pokemon.pokeuma/files/training_log.jsonl\0";
             let line_with_nl = format!("{}\n", entry);
@@ -15183,18 +15155,37 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
                 sys_close(fd);
             }
 
-            TRAINING_PREDICT_LOG.push(entry.clone());
-
-            // ★ v3.24.17: 记录到种子历史
-            if SEED_HISTORY.len() >= MAX_SEED_HISTORY {
-                SEED_HISTORY.remove(0);
+            let mut history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
+            if history.len() >= MAX_SEED_HISTORY {
+                history.pop_front();
             }
-            SEED_HISTORY.push(entry);
+            history.push_back(entry);
         }
     }));
 }
 
 // Read seed without the full debug_training_seed overhead
+fn latest_rng_transition_json() -> String {
+    let history = SEED_HISTORY.lock().unwrap_or_else(|e| e.into_inner());
+    history
+        .back()
+        .map(|entry| format!(r#","rng_transition":{}"#, entry))
+        .unwrap_or_default()
+}
+
+unsafe fn read_rng_state_at(single_mode_addr: usize) -> [u32; 4] {
+    if single_mode_addr == 0 {
+        return [0; 4];
+    }
+    let state = (single_mode_addr + 0x198) as *const u32;
+    [
+        std::ptr::read_unaligned(state),
+        std::ptr::read_unaligned(state.add(1)),
+        std::ptr::read_unaligned(state.add(2)),
+        std::ptr::read_unaligned(state.add(3)),
+    ]
+}
+
 unsafe fn read_seed_inner() -> [u32; 4] {
     if API.is_null() {
         return [0; 4];
@@ -15218,13 +15209,25 @@ unsafe fn read_seed_inner() -> [u32; 4] {
         return [0; 4];
     }
 
-    let seed_addr = (sm_ptr + 408) as *const u32;
-    [
-        std::ptr::read_unaligned::<u32>(seed_addr),
-        std::ptr::read_unaligned::<u32>(seed_addr.add(1)),
-        std::ptr::read_unaligned::<u32>(seed_addr.add(2)),
-        std::ptr::read_unaligned::<u32>(seed_addr.add(3)),
-    ]
+    read_rng_state_at(sm_ptr)
+}
+
+unsafe fn read_training_context_inner() -> (i32, i32) {
+    if API.is_null() { return (-1, -1); }
+    let image = get_image();
+    if image.is_null() { return (-1, -1); }
+    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
+    if wdm_cls.is_null() { return (-1, -1); }
+    let wdm_inst = get_singleton(wdm_cls);
+    if wdm_inst.is_null() { return (-1, -1); }
+    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
+    if sm_ptr == 0 { return (-1, -1); }
+    let turn = read_int_at(sm_ptr as *const c_void, 68);
+    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
+    if sm_class.is_null() { return (turn, -1); }
+    let chara = call_getter_on_instance(sm_class, sm_ptr as *const c_void, "get_Character");
+    let scenario_id = if chara.is_null() { -1 } else { read_obscured_int_at(chara, 568) };
+    (turn, scenario_id)
 }
 
 // Read motivation (干劲) from character data, same path as read_seed_inner
