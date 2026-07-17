@@ -3374,15 +3374,18 @@ const URA_TOTAL_TURNS: i32 = 78; // URA scenario has 78 training turns
 const DEFAULT_TOTAL_TURNS: i32 = 72; // Standard scenarios have 72 turns
 
 // Game CommandId constants (IL2CPP method identifiers)
+// 2026-07-17 修正: 102=力量(Power), 105=耐力(Stamina) — 游戏内ID与UI顺序速耐力根智相反
+// 证据: support_card_data 名卡 command_id — 小海湾SSR 30016=105, 麦昆SSR 30022/30139=105,
+// 小栗帽SSR 30024=102, 北黑SSR 30028=101, 诗歌剧SSR 30030=103
 const CMD_SPEED: i32 = 101;
-const CMD_STAMINA: i32 = 102;
+const CMD_STAMINA: i32 = 105;
 const CMD_GUTS: i32 = 103;
-const CMD_POWER: i32 = 105;
+const CMD_POWER: i32 = 102;
 const CMD_WISDOM: i32 = 106;
 const CMD_URA_SPEED: i32 = 601;
-const CMD_URA_STAMINA: i32 = 602;
+const CMD_URA_STAMINA: i32 = 604;
 const CMD_URA_GUTS: i32 = 603;
-const CMD_URA_POWER: i32 = 604;
+const CMD_URA_POWER: i32 = 602;
 const CMD_URA_WISDOM: i32 = 605;
 const CMD_KAKUSHIMI: i32 = 304;
 
@@ -4594,9 +4597,9 @@ unsafe fn read_summary_inner_impl() -> String {
                     for (&cmd_id, &gauge_val) in &ramen_gauge_gains_map {
                         let cname = match cmd_id {
                             101 | 601 => "Speed",
-                            102 | 602 => "Stamina",
+                            102 | 602 => "Power",
                             103 | 603 => "Guts",
-                            105 | 604 => "Power",
+                            105 | 604 => "Stamina",
                             106 | 605 => "Wiz",
                             _ => "Unknown",
                         };
@@ -5690,14 +5693,14 @@ unsafe fn read_summary_inner_impl() -> String {
         if cmd_id >= 0 {
             let (action, normalized) = match cmd_id {
                 101 => ("Speed", 101),
-                102 => ("Stamina", 102),
+                102 => ("Power", 102),
                 103 => ("Guts", 103),
-                105 => ("Power", 105),
+                105 => ("Stamina", 105),
                 106 => ("Wiz", 106),
                 601 => ("Speed", 101),
-                602 => ("Stamina", 102),
+                602 => ("Power", 102),
                 603 => ("Guts", 103),
-                604 => ("Power", 105),
+                604 => ("Stamina", 105),
                 605 => ("Wiz", 106),
                 _ => ("Unknown", cmd_id),
             };
@@ -6484,14 +6487,14 @@ fn handle_http(mut stream: std::net::TcpStream) {
         drop(_lock);
         let (action, normalized) = match cmd_id {
             101 => ("Speed", 101),
-            102 => ("Stamina", 102),
+            102 => ("Power", 102),
             103 => ("Guts", 103),
-            105 => ("Power", 105),
+            105 => ("Stamina", 105),
             106 => ("Wiz", 106),
             601 => ("Speed", 101),
-            602 => ("Stamina", 102),
+            602 => ("Power", 102),
             603 => ("Guts", 103),
-            604 => ("Power", 105),
+            604 => ("Stamina", 105),
             605 => ("Wiz", 106),
             -1 => ("None", -1),
             _ => ("Unknown", cmd_id),
