@@ -3377,15 +3377,16 @@ const DEFAULT_TOTAL_TURNS: i32 = 72; // Standard scenarios have 72 turns
 // 2026-07-17 修正: 102=力量(Power), 105=耐力(Stamina) — 游戏内ID与UI顺序速耐力根智相反
 // 证据: support_card_data 名卡 command_id — 小海湾SSR 30016=105, 麦昆SSR 30022/30139=105,
 // 小栗帽SSR 30024=102, 北黑SSR 30028=101, 诗歌剧SSR 30030=103
+// Ramen(剧本14)指令 601-605 经 MDB single_mode_training.base_command_id 实证: 601→101速度, 602→105耐力, 603→102力量, 604→103根性, 605→106智力
 const CMD_SPEED: i32 = 101;
 const CMD_STAMINA: i32 = 105;
 const CMD_GUTS: i32 = 103;
 const CMD_POWER: i32 = 102;
 const CMD_WISDOM: i32 = 106;
 const CMD_URA_SPEED: i32 = 601;
-const CMD_URA_STAMINA: i32 = 604;
-const CMD_URA_GUTS: i32 = 603;
-const CMD_URA_POWER: i32 = 602;
+const CMD_URA_STAMINA: i32 = 602;
+const CMD_URA_GUTS: i32 = 604;
+const CMD_URA_POWER: i32 = 603;
 const CMD_URA_WISDOM: i32 = 605;
 const CMD_KAKUSHIMI: i32 = 304;
 
@@ -4556,14 +4557,14 @@ unsafe fn read_summary_inner_impl() -> String {
                                 ramen_vital_cost_map.insert(cmd_id, vc);
                                 let alt_id = match cmd_id {
                                     601 => Some(101),
-                                    602 => Some(102),
-                                    603 => Some(103),
-                                    604 => Some(105),
+                                    602 => Some(105),
+                                    603 => Some(102),
+                                    604 => Some(103),
                                     605 => Some(106),
                                     101 => Some(601),
-                                    102 => Some(602),
-                                    103 => Some(603),
-                                    105 => Some(604),
+                                    102 => Some(603),
+                                    103 => Some(604),
+                                    105 => Some(602),
                                     106 => Some(605),
                                     _ => None,
                                 };
@@ -4597,9 +4598,9 @@ unsafe fn read_summary_inner_impl() -> String {
                     for (&cmd_id, &gauge_val) in &ramen_gauge_gains_map {
                         let cname = match cmd_id {
                             101 | 601 => "Speed",
-                            102 | 602 => "Power",
-                            103 | 603 => "Guts",
-                            105 | 604 => "Stamina",
+                            102 | 603 => "Power",
+                            103 | 604 => "Guts",
+                            105 | 602 => "Stamina",
                             106 | 605 => "Wiz",
                             _ => "Unknown",
                         };
@@ -5698,9 +5699,9 @@ unsafe fn read_summary_inner_impl() -> String {
                 105 => ("Stamina", 105),
                 106 => ("Wiz", 106),
                 601 => ("Speed", 101),
-                602 => ("Power", 102),
-                603 => ("Guts", 103),
-                604 => ("Stamina", 105),
+                602 => ("Stamina", 105),
+                603 => ("Power", 102),
+                604 => ("Guts", 103),
                 605 => ("Wiz", 106),
                 _ => ("Unknown", cmd_id),
             };
@@ -6492,9 +6493,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             105 => ("Stamina", 105),
             106 => ("Wiz", 106),
             601 => ("Speed", 101),
-            602 => ("Power", 102),
-            603 => ("Guts", 103),
-            604 => ("Stamina", 105),
+            602 => ("Stamina", 105),
+            603 => ("Power", 102),
+            604 => ("Guts", 103),
             605 => ("Wiz", 106),
             -1 => ("None", -1),
             _ => ("Unknown", cmd_id),
