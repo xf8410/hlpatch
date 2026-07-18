@@ -77,9 +77,11 @@ Runtime IDs 1022/1060/1077/1120 directly match this definition. Runtime 1080 (Tr
 Exact method candidates found in local bounded method indexes:
 
 - `Gallop.SingleMode.ScenarioRamen.PartsSingleModeScenarioRamenCheckPointCutDirector.GetShuffledScenarioLinkCharaIdArray`
-  - address: `0x7339ad6d88`
+  - current phone runtime address: `0x73384eed88` (the older method-index address differed, so raw addresses are not stable across builds/runtime layouts)
   - static, one parameter
-  - likely checkpoint presentation shuffling; not yet connected to run-start NPC roster creation.
+  - first 384 bytes captured: no `ret` and no reported integer constants in this prefix, so the body continues beyond the sample
+  - the prefix contains a one-time metadata initialization guard followed by many calls and collection/object accesses; it is not a tiny fixed-array getter
+  - this sample cannot establish whether it only shuffles checkpoint presentation characters or constructs the run-start NPC roster; do not connect it to backfill selection yet
 - `Gallop.CharaInfoListContextFactory.CreateFromAllScenarioLinkCharaDownload`
   - address: `0x7338f68a68`
   - generic scenario-link download context; no Ramen initialization call-chain evidence yet.
@@ -88,17 +90,13 @@ Exact method candidates found in local bounded method indexes:
 
 ## Next exact query
 
-First exclude or confirm the checkpoint-presentation candidate with only 384 bytes:
+The first 384 bytes end mid-method at offset `0x180`. Fetch one overlapping continuation by exact runtime address, limited to 384 bytes:
 
 ```text
-http://127.0.0.1:18765/il2cpp/disassemble?class=PartsSingleModeScenarioRamenCheckPointCutDirector&method=GetShuffledScenarioLinkCharaIdArray&bytes=384
+http://127.0.0.1:18765/il2cpp/disassemble_addr?addr=0x73384eef08&bytes=384
 ```
 
-After the result:
-
-1. Save only a compact call/constant summary here and push it.
-2. If presentation-only, mark it excluded and make one next exact query.
-3. Do not perform global class or method scans on the phone.
+This starts at method address `0x73384eed88 + 0x180`. The overlap/boundary is intentional. Analyze only calls, branches, constants, and the return boundary; do not perform global class or method scans on the phone. Save the compact conclusion here and push it before another query.
 
 Additional runtime tests:
 
