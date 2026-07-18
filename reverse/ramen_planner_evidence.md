@@ -127,7 +127,13 @@ Write-side/xref query result:
 - `SingleModeRamenAPI.SendStart` exists with seven parameters, but the scenario-specific `ObscuredSingleModeRamenDataSetStart` has only `AutoSelectInfo`, `AutoSelectSetInfo`, and `IsCheckedUrafEvent`; it contains no NPC roster. This is evidence that roster/partner setup is handled by common single-mode start data or another common layer, not Ramen's three-field start payload.
 - The current artifacts therefore cannot produce setter callers without either (a) correctly mapped/disassembled machine code plus xrefs or (b) a richer runtime metadata/code dump. Unsafe raw-address phone probing remains prohibited.
 
-Next offline-only target: inspect common single-mode start/load data definitions and named start-apply methods for partner/evaluation arrays, one exact class at a time. This may reveal the roster field even without code xrefs.
+Common start-layer query result:
+
+- `WorkSingleModeData.ApplySingleModeStartResponse` exists as a named instance method with one response parameter (indexed address `0x7339dc8ab8`). `ApplyCommonResponse` exists with seven parameters (`0x7339dc83ac`). These are the first credible common run-start entry points above Ramen's three-field start payload.
+- `WorkSingleModeData` also exposes `CreateCharacter`, `ApplyCharacter`, `ApplyHomeInfo`, and `AddRaceConditionByStartInfo`; `WorkSingleModeHomeInfo.Apply` and scenario-specific `ApplyRamenCommandInfo` operate on home/command state.
+- No common standalone `*DataSetStart` payload class is present in the declaration indexes beyond Ramen/Breeders scenario payloads. This supports the hypothesis that partner roster/evaluation data is embedded in the generic start response consumed by `ApplySingleModeStartResponse`/`ApplyCommonResponse`.
+
+Next exact static target: establish the response parameter type/fields for `WorkSingleModeData.ApplySingleModeStartResponse`, or disassemble that named method offline once SO address mapping is proven. Look specifically for evaluation/partner arrays feeding `SingleModeTrainingPartnerEtcCharaEntity`; do not inspect broad start-dialog UI classes.
 
 Additional runtime tests:
 
