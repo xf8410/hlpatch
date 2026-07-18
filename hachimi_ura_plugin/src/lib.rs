@@ -6258,7 +6258,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_dataset_path"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6535,6 +6535,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/training_log_dl" {
         // Do not re-export legacy files containing the invalid u32x4 interpretation.
         r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
+    } else if path == "/debug/ramen_dataset_path" {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_dataset_path() }))
+            .unwrap_or_else(|_| r#"{"error":"ramen_dataset_path_panic"}"#.to_string())
     } else if path == "/debug/ramen_planner_state" {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_planner_state() }))
             .unwrap_or_else(|_| r#"{"error":"ramen_planner_state_panic"}"#.to_string())
@@ -12848,6 +12851,206 @@ unsafe fn ramen_object_list_json(
         entries.push(format!("{{{}}}", parts.join(",")));
     }
     format!("[{}]", entries.join(","))
+}
+
+/// ★ v3.24.18: 诊断端点 — 逐 getter 诊断拉面杯 DataSet 获取路径
+/// 不进行全局 class 枚举，只输出小型结构化 JSON
+unsafe fn debug_ramen_dataset_path() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+
+    // 1. WorkDataManager → SingleMode → Character
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm = get_singleton(wdm_class);
+    if wdm.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
+    if sm.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
+
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara = call_getter_ref(sm_class, sm, "get_Character");
+    if chara.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+
+    // 解析 IL2CPP API 函数指针
+    let get_method_fn: Option<FnClassGetMethodFromName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let invoke_fn: Option<FnRuntimeInvoke> = {
+        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let get_name_fn: Option<FnClassGetName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let get_ns_fn: Option<unsafe extern "C" fn(*mut c_void) -> *const c_char> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let get_parent_fn: Option<FnClassGetParent> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let get_fields_fn: Option<FnClassGetFields> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_fields");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+
+    let class_name_of = |cls: *mut c_void| -> String {
+        if cls.is_null() { return "null".to_string(); }
+        if let Some(ref f) = get_name_fn {
+            let p = f(cls);
+            if !p.is_null() { return CStr::from_ptr(p).to_string_lossy().into_owned(); }
+        }
+        "?".to_string()
+    };
+    let ns_name_of = |cls: *mut c_void| -> String {
+        if cls.is_null() { return "null".to_string(); }
+        if let Some(ref f) = get_ns_fn {
+            let p = f(cls);
+            if !p.is_null() { return CStr::from_ptr(p).to_string_lossy().into_owned(); }
+        }
+        "".to_string()
+    };
+
+    // 2. 逐个尝试 3 个 getter
+    let getter_names: &[&str] = &["get_ScenarioRamen", "get_WorkScenarioRamen", "get_Ramen"];
+    let mut getter_results: Vec<String> = Vec::new();
+
+    for &gname in getter_names {
+        // 检查 method 是否存在
+        let method_ptr = if let Some(ref get_method) = get_method_fn {
+            let cname = to_cstr(gname);
+            get_method(chara_class, cname.as_ptr(), 0) as *mut c_void
+        } else {
+            ptr::null_mut()
+        };
+        let method_found = !method_ptr.is_null();
+
+        // 调用 getter
+        let (result_ptr, exc_ptr) = if method_found {
+            if let Some(ref invoke) = invoke_fn {
+                let cname = to_cstr(gname);
+                let method = get_method_fn.unwrap()(chara_class, cname.as_ptr(), 0);
+                let mut exc: *mut c_void = ptr::null_mut();
+                let r = invoke(method, chara as *mut c_void, ptr::null_mut(), &mut exc);
+                (r, exc)
+            } else {
+                (ptr::null_mut(), ptr::null_mut())
+            }
+        } else {
+            (ptr::null_mut(), ptr::null_mut())
+        };
+
+        let result_class = if !result_ptr.is_null() {
+            get_class_from_object(result_ptr)
+        } else {
+            ptr::null_mut()
+        };
+
+        let mut entry = format!(
+            r#"{{"getter":"{}","method_found":{},"method_ptr":"0x{:x}","invoke_called":{},"exception":"0x{:x}","result_ptr":"0x{:x}","result_class":"{}","result_namespace":"{}""#,
+            gname, method_found, method_ptr as usize,
+            method_found, exc_ptr as usize, result_ptr as usize,
+            class_name_of(result_class), ns_name_of(result_class)
+        );
+
+        // 3. 对非空 result，遍历 class chain（最多8层）
+        if !result_ptr.is_null() && !result_class.is_null() {
+            let mut chain: Vec<String> = Vec::new();
+            let mut current = result_class;
+            let mut depth = 0;
+
+            loop {
+                if current.is_null() || depth >= 8 { break; }
+
+                let cn = class_name_of(current);
+                let ns = ns_name_of(current);
+
+                // 检查 get_DataSet 方法
+                let has_get_dataset = if let Some(ref get_method) = get_method_fn {
+                    let cname = to_cstr("get_DataSet");
+                    !get_method(current, cname.as_ptr(), 0).is_null()
+                } else { false };
+
+                // 检查 <DataSet>k__BackingField 字段
+                let mut field_offset: i32 = -1;
+                let mut field_found = false;
+                if let Some(ref get_fields) = get_fields_fn {
+                    let mut iter: *mut c_void = ptr::null_mut();
+                    loop {
+                        let fi = get_fields(current, &mut iter);
+                        if fi.is_null() { break; }
+                        if !(*fi).name.is_null() {
+                            let fname = CStr::from_ptr((*fi).name).to_string_lossy();
+                            if fname == "<DataSet>k__BackingField" || fname == "DataSet" {
+                                field_found = true;
+                                field_offset = (*fi).offset;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // 如果有 get_DataSet，尝试诊断 invoke
+                let (ds_ptr, ds_exc, ds_class_name) = if has_get_dataset && invoke_fn.is_some() {
+                    let cname = to_cstr("get_DataSet");
+                    let method = get_method_fn.unwrap()(current, cname.as_ptr(), 0);
+                    let mut exc: *mut c_void = ptr::null_mut();
+                    let r = invoke_fn.unwrap()(method, result_ptr as *mut c_void, ptr::null_mut(), &mut exc);
+                    let rcls = if !r.is_null() { get_class_from_object(r) } else { ptr::null_mut() };
+                    (r, exc, class_name_of(rcls))
+                } else {
+                    (ptr::null_mut(), ptr::null_mut(), "not_checked".to_string())
+                };
+
+                chain.push(format!(
+                    r#"{{"depth":{},"class":"{}","namespace":"{}","has_get_DataSet":{},"dataset_field_found":{},"dataset_field_offset":{},"dataset_invoke_ptr":"0x{:x}","dataset_invoke_exc":"0x{:x}","dataset_invoke_class":"{}"}}"#,
+                    depth, cn, ns, has_get_dataset,
+                    field_found, field_offset,
+                    ds_ptr as usize, ds_exc as usize, ds_class_name
+                ));
+
+                // 如果找到了非空 dataset，停止
+                if !ds_ptr.is_null() { break; }
+
+                if let Some(ref get_parent) = get_parent_fn {
+                    let parent = get_parent(current);
+                    if parent.is_null() || parent == current { break; }
+                    current = parent;
+                } else {
+                    break;
+                }
+                depth += 1;
+            }
+            entry.push_str(&format!(",\"class_chain\":[{}]", chain.join(",")));
+        }
+
+        entry.push('}');
+        getter_results.push(entry);
+    }
+
+    // 4. 精确查询两个 DataSet class
+    let ds_class_empty_ns = find_class(image, to_cstr("").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
+    let ds_class_gallop_ns = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
+
+    // 5. 查询 WorkSingleModeScenarioRamen class
+    let ramen_class_gallop = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
+    let ramen_class_empty = find_class(image, to_cstr("").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
+
+    format!(
+        r#"{{"ok":true,"endpoint":"ramen_dataset_path","scenario_id":14,"chara_ptr":"0x{:x}","chara_class":"{}","getters":[{}],"dataset_class_empty_ns":{{"found":{},"ptr":"0x{:x}"}},"dataset_class_gallop_ns":{{"found":{},"ptr":"0x{:x}"}},"ramen_class_gallop":{{"found":{},"ptr":"0x{:x}"}},"ramen_class_empty":{{"found":{},"ptr":"0x{:x}"}}}}"#,
+        chara as usize, class_name_of(chara_class),
+        getter_results.join(","),
+        !ds_class_empty_ns.is_null(), ds_class_empty_ns as usize,
+        !ds_class_gallop_ns.is_null(), ds_class_gallop_ns as usize,
+        !ramen_class_gallop.is_null(), ramen_class_gallop as usize,
+        !ramen_class_empty.is_null(), ramen_class_empty as usize
+    )
 }
 
 unsafe fn debug_ramen_planner_state() -> String {
