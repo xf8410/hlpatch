@@ -13117,8 +13117,8 @@ unsafe fn ramen_raw_object_list_json(
             ));
         }
         items.push(format!(
-            r#"{{"index":{},"element_class":"{}","element_namespace":"{}","raw_fields":[{}]}}"#,
-            index, json_escape(&class_name_of(class)), json_escape(&ns_name_of(class)), raw_fields.join(","),
+            r#"{{"index":{},"element_class":"{}","raw_fields":[{}]}}"#,
+            index, json_escape(&get_class_name_from_pointer(class)), raw_fields.join(","),
         ));
     }
     format!(
