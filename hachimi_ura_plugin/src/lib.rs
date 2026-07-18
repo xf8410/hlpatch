@@ -6535,6 +6535,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/training_log_dl" {
         // Do not re-export legacy files containing the invalid u32x4 interpretation.
         r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
+    } else if path == "/debug/ramen_planner_state" {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_planner_state() }))
+            .unwrap_or_else(|_| r#"{"error":"ramen_planner_state_panic"}"#.to_string())
     } else if path == "/debug/race_random_program_exact" {
         unsafe { debug_race_random_program_exact() }
     } else if path.starts_with("/debug/dumpclass") {
@@ -12806,6 +12809,108 @@ unsafe fn il2cpp_read_single_field(class_name: &str, field_name: &str) -> String
 
 /// v3.22.51: /debug/ramenfields — Walk all ramen arrays, dump element class + fields
 /// For each array: read first element, get class from object header, dump all fields + hex
+unsafe fn inline_obscured_int_list_json(list_obj: *const c_void) -> String {
+    if list_obj.is_null() { return "[]".to_string(); }
+    let base = list_obj as *const u8;
+    let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if len > 200 { return "[]".to_string(); }
+    let mut values = Vec::with_capacity(len);
+    for i in 0..len {
+        let elem = base.add(IL2CPP_LIST_ITEMS_OFF + i * OBSCURED_INT_SIZE);
+        values.push(read_obscured_int_at(elem as *const c_void, 0).to_string());
+    }
+    format!("[{}]", values.join(","))
+}
+
+unsafe fn ramen_object_list_json(
+    ds_class: *mut c_void,
+    ds_obj: *const c_void,
+    getter: &str,
+    fields: &[&str],
+) -> String {
+    let list = call_getter_on_instance(ds_class, ds_obj, getter);
+    if list.is_null() { return "[]".to_string(); }
+    let base = list as *const u8;
+    let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if len > 200 { return "[]".to_string(); }
+    let mut entries = Vec::with_capacity(len);
+    for i in 0..len {
+        let obj = std::ptr::read_unaligned::<*mut c_void>(
+            base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+        );
+        if obj.is_null() { continue; }
+        let mut parts = Vec::with_capacity(fields.len());
+        for field in fields {
+            let getter_name = format!("get_{}", field);
+            let value = read_obscured_int_from_obj(obj, &getter_name);
+            parts.push(format!(r#""{}":{}"#, field, value));
+        }
+        entries.push(format!("{{{}}}", parts.join(",")));
+    }
+    format!("[{}]", entries.join(","))
+}
+
+unsafe fn debug_ramen_planner_state() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm = get_singleton(wdm_class);
+    if wdm.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
+    if sm.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara = call_getter_ref(sm_class, sm, "get_Character");
+    if chara.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+    let scenario = try_get_scenario_obj(chara_class, chara, 14);
+    if scenario.is_null() { return r#"{"error":"not_in_ramen_scenario"}"#.to_string(); }
+    let scenario_class = get_class_from_object(scenario);
+    let ds = call_getter_ref(scenario_class, scenario, "get_DataSet");
+    if ds.is_null() { return r#"{"error":"no_ramen_dataset"}"#.to_string(); }
+    let dc = get_class_from_object(ds);
+
+    let checkpoint_pt = call_getter_obscured_int(dc, ds, "get_CheckPointPt");
+    let expected_checkpoint_pt = call_getter_obscured_int(dc, ds, "get_ExpectedCheckPointPt");
+    let special_feeling_num = call_getter_obscured_int(dc, ds, "get_SpecialFeelingNum");
+    let recommend_type = call_getter_obscured_int(dc, ds, "get_RecommendType");
+    let selected = inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_SelectedRegionIdArray"));
+    let all_selected = inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_AllSelectedRegionIdArray"));
+    let used_text = inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_UsedTwinkleTextIdArray"));
+
+    let feelings = ramen_object_list_json(dc, ds, "get_FeelingInfoArray", &["FeelingIndex", "FeelingId"]);
+    let feeling_turns = ramen_object_list_json(dc, ds, "get_FeelingTurnInfoArray", &["RemainTurn", "FeelingId"]);
+    let command_feelings = ramen_object_list_json(dc, ds, "get_CommandFeelingInfoArray", &["CommandType", "CommandId", "FeelingId"]);
+    let checkpoints = ramen_object_list_json(dc, ds, "get_CheckPointInfoArray", &["CheckPointType", "ResultState"]);
+    let active_effects = ramen_object_list_json(dc, ds, "get_ActiveEffectArray", &["EffectCategory", "EffectId", "EffectValue"]);
+
+    let last = call_getter_on_instance(dc, ds, "get_LastTastingInfo");
+    let last_tasting = if last.is_null() {
+        "null".to_string()
+    } else {
+        format!(r#"{{"feeling_id_1_num":{},"feeling_id_2_num":{},"feeling_id_3_num":{},"region_id":{}}}"#,
+            read_obscured_int_from_obj(last, "get_FeelingId1Num"),
+            read_obscured_int_from_obj(last, "get_FeelingId2Num"),
+            read_obscured_int_from_obj(last, "get_FeelingId3Num"),
+            read_obscured_int_from_obj(last, "get_RegionId"))
+    };
+    let uraf = call_getter_on_instance(dc, ds, "get_UrafEffectInfo");
+    let uraf_effect = if uraf.is_null() { "null".to_string() } else {
+        format!(r#"{{"type":{},"state":{}}}"#,
+            read_obscured_int_from_obj(uraf, "get_UrafEffectType"),
+            read_obscured_int_from_obj(uraf, "get_UrafEffectState"))
+    };
+
+    format!(r#"{{"schema_version":1,"source":"runtime_observation","scenario_id":14,"checkpoint_pt":{},"expected_checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"selected_region_ids":{},"all_selected_region_ids":{},"feeling_inventory_fifo":{},"feeling_turns":{},"command_feelings":{},"last_tasting":{},"checkpoints":{},"active_effects":{},"uraf_effect":{},"used_twinkle_text_ids":{},"is_gauge_gained":{},"is_uraf_effect_select_event_checked":{},"is_not_gain_special_feeling":{},"recipe_rules_included":false}}"#,
+        checkpoint_pt, expected_checkpoint_pt, special_feeling_num, recommend_type,
+        selected, all_selected, feelings, feeling_turns, command_feelings, last_tasting,
+        checkpoints, active_effects, uraf_effect, used_text,
+        call_getter_bool(dc, ds, "get_IsGaugeGained"),
+        call_getter_bool(dc, ds, "get_IsUrafEffectSelectEventChecked"),
+        call_getter_bool(dc, ds, "get_IsNotGainSpecialFeeling"))
+}
+
 unsafe fn debug_ramenfields() -> String {
     if API.is_null() {
         return r#"{"error":"api_null"}"#.to_string();
