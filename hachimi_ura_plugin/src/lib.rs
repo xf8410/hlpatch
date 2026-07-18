@@ -13061,6 +13061,64 @@ unsafe fn debug_ramen_dataset_path() -> String {
 /// It invokes only the DataSet list getter, then reads element fields directly.
 /// It never walks TrainingFeelingEntity._gaugeGainCountDict and never calls
 /// TrainingFeelingEntity.GetGainCount; both are unsafe on the live process.
+/// Bounded decoder for the nested FeelingTurnArray SZARRAY only.
+unsafe fn ramen_raw_nested_object_array_json(array: *mut c_void) -> String {
+    if array.is_null() {
+        return r#"{"status":"null","count":0,"items":[]}"#.to_string();
+    }
+    let base = array as *const u8;
+    let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if len > 16 {
+        return format!(r#"{{"status":"too_long","count":{},"items":[]}}"#, len);
+    }
+    let mut items = Vec::with_capacity(len);
+    for index in 0..len {
+        let obj = std::ptr::read_unaligned::<*mut c_void>(
+            base.add(0x20 + index * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+        );
+        if obj.is_null() || !is_readable_range(obj as usize, 0x10) {
+            items.push(format!(r#"{{"index":{},"status":"null_or_unreadable"}}"#, index));
+            continue;
+        }
+        let class = get_class_from_object(obj);
+        let mut raw_fields = Vec::new();
+        for (name, offset, ty) in collect_all_fields(class).into_iter().take(12) {
+            let type_enum = il2cpp_type_get_type_enum(ty);
+            let type_name = {
+                let p = resolve_il2cpp_symbol("il2cpp_type_get_name");
+                if p.is_null() {
+                    type_enum_to_name(type_enum)
+                } else {
+                    let f: unsafe extern "C" fn(*const c_void) -> *const c_char = std::mem::transmute(p);
+                    let n = f(ty);
+                    if n.is_null() { type_enum_to_name(type_enum) } else { CStr::from_ptr(n).to_string_lossy().into_owned() }
+                }
+            };
+            let value = if type_name.contains("ObscuredInt") {
+                read_obscured_int_at(obj, offset).to_string()
+            } else {
+                match type_enum {
+                    IL2CPP_TYPE_BOOLEAN | IL2CPP_TYPE_I1 | IL2CPP_TYPE_U1 |
+                    IL2CPP_TYPE_I2 | IL2CPP_TYPE_U2 | IL2CPP_TYPE_I4 |
+                    IL2CPP_TYPE_U4 | IL2CPP_TYPE_I8 | IL2CPP_TYPE_U8 |
+                    IL2CPP_TYPE_R4 | IL2CPP_TYPE_R8 | IL2CPP_TYPE_STRING =>
+                        read_field_value_json(obj, offset, ty),
+                    _ => "null".to_string(),
+                }
+            };
+            raw_fields.push(format!(
+                r#"{{"raw_name":"{}","offset":{},"type":"{}","type_enum":{},"value":{}}}"#,
+                json_escape(&name), offset, json_escape(&type_name), type_enum, value,
+            ));
+        }
+        items.push(format!(
+            r#"{{"index":{},"element_class":"{}","raw_fields":[{}]}}"#,
+            index, json_escape(&get_class_name_from_pointer(class)), raw_fields.join(","),
+        ));
+    }
+    format!(r#"{{"status":"ok","count":{},"items":[{}]}}"#, len, items.join(","))
+}
+
 unsafe fn ramen_raw_object_list_json(
     ds_class: *mut c_void,
     ds_obj: *const c_void,
@@ -13108,6 +13166,10 @@ unsafe fn ramen_raw_object_list_json(
                     IL2CPP_TYPE_U4 | IL2CPP_TYPE_I8 | IL2CPP_TYPE_U8 |
                     IL2CPP_TYPE_R4 | IL2CPP_TYPE_R8 | IL2CPP_TYPE_STRING =>
                         read_field_value_json(obj, offset, ty),
+                    29 if name.contains("FeelingTurnArray") => {
+                        let nested = std::ptr::read_unaligned::<*mut c_void>((obj as *const u8).add(offset as usize) as *const *mut c_void);
+                        ramen_raw_nested_object_array_json(nested)
+                    },
                     _ => "null".to_string(),
                 }
             };
