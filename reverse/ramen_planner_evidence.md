@@ -91,13 +91,19 @@ Exact method candidates found in local bounded method indexes:
 
 ## Next exact query
 
-Identify the one non-initialization helper called by the completed shuffle method, limited to 384 bytes:
+### Unsafe query recorded
+
+The exact-address request below caused the game to crash and must not be repeated:
 
 ```text
-http://127.0.0.1:18765/il2cpp/disassemble_addr?addr=0x73384edc30&bytes=384
+/il2cpp/disassemble_addr?addr=0x73384edc30&bytes=384
 ```
 
-Analyze whether it is a generic collection shuffle/copy helper. If so, exclude the cut-director method from run-start NPC pool construction and move to a higher-level initialization candidate. Do not perform global scans.
+Possible causes include an unsafe/non-method boundary, unreadable span, or the address endpoint itself crossing a protected boundary. No semantic conclusion may be drawn from the crash. Mark runtime address `0x73384edc30` as unsafe for direct reads.
+
+## Next exact query
+
+Stop following raw call targets by address. The cut-director method is not required for the planner and is now excluded from further phone probing as a presentation-layer candidate. Resume from a named, metadata-resolved run-start/common initialization method only; use `/il2cpp/disassemble?class=...&method=...` with at most 256 bytes, never this raw address.
 
 Additional runtime tests:
 
