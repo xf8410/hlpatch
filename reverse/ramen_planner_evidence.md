@@ -79,9 +79,10 @@ Exact method candidates found in local bounded method indexes:
 - `Gallop.SingleMode.ScenarioRamen.PartsSingleModeScenarioRamenCheckPointCutDirector.GetShuffledScenarioLinkCharaIdArray`
   - current phone runtime address: `0x73384eed88` (the older method-index address differed, so raw addresses are not stable across builds/runtime layouts)
   - static, one parameter
-  - first 384 bytes captured: no `ret` and no reported integer constants in this prefix, so the body continues beyond the sample
-  - the prefix contains a one-time metadata initialization guard followed by many calls and collection/object accesses; it is not a tiny fixed-array getter
-  - this sample cannot establish whether it only shuffles checkpoint presentation characters or constructs the run-start NPC roster; do not connect it to backfill selection yet
+  - complete boundary now observed: continuation from method offset `0x180` returns at continuation offset `0x4c`, so this method ends around total offset `0x1d0`; bytes after continuation offset `0x50` belong to the next function
+  - no reported integer constants occur in the method, and it has no visible fixed six-member construction in the captured body
+  - immediately before its final collection/result handling it calls runtime target `0x73384edc30` from total method offset `0x18c`; this is the next exact helper to identify
+  - because this method belongs to the checkpoint cut director and receives one parameter, current evidence favors transforming/shuffling an already supplied scenario-link character collection for presentation, not defining the run-start backfill pool; keep this as a strong exclusion candidate until the helper is identified
 - `Gallop.CharaInfoListContextFactory.CreateFromAllScenarioLinkCharaDownload`
   - address: `0x7338f68a68`
   - generic scenario-link download context; no Ramen initialization call-chain evidence yet.
@@ -90,13 +91,13 @@ Exact method candidates found in local bounded method indexes:
 
 ## Next exact query
 
-The first 384 bytes end mid-method at offset `0x180`. Fetch one overlapping continuation by exact runtime address, limited to 384 bytes:
+Identify the one non-initialization helper called by the completed shuffle method, limited to 384 bytes:
 
 ```text
-http://127.0.0.1:18765/il2cpp/disassemble_addr?addr=0x73384eef08&bytes=384
+http://127.0.0.1:18765/il2cpp/disassemble_addr?addr=0x73384edc30&bytes=384
 ```
 
-This starts at method address `0x73384eed88 + 0x180`. The overlap/boundary is intentional. Analyze only calls, branches, constants, and the return boundary; do not perform global class or method scans on the phone. Save the compact conclusion here and push it before another query.
+Analyze whether it is a generic collection shuffle/copy helper. If so, exclude the cut-director method from run-start NPC pool construction and move to a higher-level initialization candidate. Do not perform global scans.
 
 Additional runtime tests:
 
