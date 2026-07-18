@@ -112,6 +112,8 @@ Offline artifact audit and one named-repository query:
 - The reports describe a parsed 44 MB v31 metadata artifact, but no corresponding `global-metadata.dat` file is presently present in `/home/agora` or `/tmp`; only derived reports/method indexes remain.
 - Existing named method index identifies `Gallop.SingleModeTrainingPartnerRepository` with overloads `Get()` / `Get(1)` / `Get(2)`, plus `ConvertToTrainingCommandIdList`, `get_ScenarioId`, `get_WorkSingleModeHomeInfoData`, `get_SingleModeCommandInfoDataArray`, `get_WorkSingleModeCharaData`, and `get_EvaluationList`. This repository is a confirmed named access layer for final training partners, not yet a run-start roster constructor.
 
+One exact entity query adds a useful identity distinction: `SingleModeTrainingPartnerEntity` and `SingleModeTrainingPartnerUniqueCharaEntity` both expose separate `get_PartnerId` and `get_CharaId`, along with command-location getters. Therefore the current runtime equality between non-deck `partner_id` and MDB `chara_id` is an observed value relationship for these samples, not a type-level guarantee. Future diagnostics should read both named getters/fields before generalizing identity mapping.
+
 Next offline-only query: inspect the exact named classes around training-partner *creation/setup* (not the final repository getter) in existing method indexes, one class at a time. Do not infer current code from the v2.28.5 SO. If no named constructor can be established, the real blocker is a matching current SO/runtime metadata dump—not entering a育成局.
 
 Additional runtime tests:
