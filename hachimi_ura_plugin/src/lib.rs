@@ -12866,10 +12866,13 @@ unsafe fn debug_ramen_planner_state() -> String {
     if chara.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
     let scenario = try_get_scenario_obj(chara_class, chara, 14);
     if scenario.is_null() { return r#"{"error":"not_in_ramen_scenario"}"#.to_string(); }
-    let scenario_class = get_class_from_object(scenario);
+    // Use the declared class; the runtime header may point at a generated subclass.
+    let scenario_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
+    if scenario_class.is_null() { return r#"{"error":"no_ramen_scenario_class"}"#.to_string(); }
     let ds = call_getter_ref(scenario_class, scenario, "get_DataSet");
     if ds.is_null() { return r#"{"error":"no_ramen_dataset"}"#.to_string(); }
-    let dc = get_class_from_object(ds);
+    let declared_dc = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
+    let dc = if declared_dc.is_null() { get_class_from_object(ds) } else { declared_dc };
 
     let checkpoint_pt = call_getter_obscured_int(dc, ds, "get_CheckPointPt");
     let expected_checkpoint_pt = call_getter_obscured_int(dc, ds, "get_ExpectedCheckPointPt");
