@@ -88,7 +88,7 @@ Exact method candidates found in local bounded method indexes:
   - generic scenario-link download context; no Ramen initialization call-chain evidence yet.
 - Generic methods `IsEnableScenarioLinkChara` and `IsEnableScenarioLinkSupportCardChara` exist, but are not yet linked to Ramen NPC selection.
 - `WorkSingleModeScenarioRamen` exposes DataSet apply methods only; roster initialization is likely in a higher-level/common run-start path.
-- Repository artifact provenance was rechecked offline. `/home/agora/hlpatch-reverse/artifacts/reverse/libil2cpp.so` exists and is a 218,715,344-byte ARM64 ELF, but repository reports identify it as game v2.28.5. The current phone method prefix diverges from this ELF after a generic 16-byte prologue, so this old SO must not be used to assign current addresses/control flow. The repository's metadata-derived reports and named method indexes remain useful for names/schema hypotheses, but current machine-code conclusions require a matching build artifact.
+- Repository artifact provenance was rechecked offline. `/home/agora/hlpatch-reverse/artifacts/reverse/libil2cpp.so` exists and is a 218,715,344-byte ARM64 ELF. Repository reports label the game package version as v2.28.5; this does **not** prove the SO is obsolete, because package/app version and internal/native-library version labels are different concepts. The earlier comparison found only a generic 16-byte prologue at one location and divergence afterward; that is insufficient to identify the method or reject the SO. Runtime virtual addresses also require correct module slide/RVA mapping. Treat this SO as a potentially matching artifact until its build identity or a longer unique method signature is verified.
 
 ## Next exact query
 
@@ -108,13 +108,13 @@ Stop following raw call targets by address. The cut-director method is not requi
 
 Offline artifact audit and one named-repository query:
 
-- The protected historical workspace does contain `/home/agora/hlpatch-reverse/artifacts/reverse/libil2cpp.so` (218,715,344 bytes), but repository provenance labels it game v2.28.5. A generic 16-byte prologue matches the current phone method, then diverges; therefore it is not a matching current binary and cannot support current control-flow claims.
+- The protected historical workspace contains `/home/agora/hlpatch-reverse/artifacts/reverse/libil2cpp.so` (218,715,344 bytes). Its report's v2.28.5 label is the game package version and does not establish that the SO is outdated. A generic 16-byte prologue match followed by divergence only proves that the chosen offline offset was not yet mapped/identified correctly; it does not disqualify the binary.
 - The reports describe a parsed 44 MB v31 metadata artifact, but no corresponding `global-metadata.dat` file is presently present in `/home/agora` or `/tmp`; only derived reports/method indexes remain.
 - Existing named method index identifies `Gallop.SingleModeTrainingPartnerRepository` with overloads `Get()` / `Get(1)` / `Get(2)`, plus `ConvertToTrainingCommandIdList`, `get_ScenarioId`, `get_WorkSingleModeHomeInfoData`, `get_SingleModeCommandInfoDataArray`, `get_WorkSingleModeCharaData`, and `get_EvaluationList`. This repository is a confirmed named access layer for final training partners, not yet a run-start roster constructor.
 
 One exact entity query adds a useful identity distinction: `SingleModeTrainingPartnerEntity` and `SingleModeTrainingPartnerUniqueCharaEntity` both expose separate `get_PartnerId` and `get_CharaId`, along with command-location getters. Therefore the current runtime equality between non-deck `partner_id` and MDB `chara_id` is an observed value relationship for these samples, not a type-level guarantee. Future diagnostics should read both named getters/fields before generalizing identity mapping.
 
-Next offline-only query: inspect the exact named classes around training-partner *creation/setup* (not the final repository getter) in existing method indexes, one class at a time. Do not infer current code from the v2.28.5 SO. If no named constructor can be established, the real blocker is a matching current SO/runtime metadata dump—not entering a育成局.
+Next offline-only query: establish the SO mapping correctly using ELF PT_LOAD segments plus a longer unique signature from a known named method, then use the named method index/RVA relationship to disassemble exact training-partner creation/setup methods. Do not reject the SO based on the package-version label or a generic prologue mismatch.
 
 Additional runtime tests:
 
