@@ -114,7 +114,13 @@ Offline artifact audit and one named-repository query:
 
 One exact entity query adds a useful identity distinction: `SingleModeTrainingPartnerEntity` and `SingleModeTrainingPartnerUniqueCharaEntity` both expose separate `get_PartnerId` and `get_CharaId`, along with command-location getters. Therefore the current runtime equality between non-deck `partner_id` and MDB `chara_id` is an observed value relationship for these samples, not a type-level guarantee. Future diagnostics should read both named getters/fields before generalizing identity mapping.
 
-Next offline-only query: establish the SO mapping correctly using ELF PT_LOAD segments plus a longer unique signature from a known named method, then use the named method index/RVA relationship to disassemble exact training-partner creation/setup methods. Do not reject the SO based on the package-version label or a generic prologue mismatch.
+Offline SO mapping result:
+
+- Repository documentation gives its historical conversion as `load_base=0x7330ef37c4`, `vaddr=dump_addr-load_base`, then PT_LOAD file mapping. Applying it to the indexed cut-director address lands on bytes that are clearly mid-function, so the recorded method addresses and this on-disk SO still lack a proven common address epoch/slide.
+- A full streaming search of the 218 MB SO found 1,279 copies of the generic 16-byte prologue. None had the phone method's next fixed instruction pair (`mov w19,w0; tbnz w8,#0,...`) at the expected offset. Thus the earlier prologue hit was non-unique. This still does not prove the SO is stale; it proves signature-based identity has not been established and runtime code may differ by relocation/patch/build.
+- Existing named index adds `SingleModeTrainingPartnerEtcCharaEntity`, the mutable non-deck entity with setters for `PartnerId`, `CharaId`, `TrainingCommandId`, and `TrainingBaseCommandId`. The roster constructor must populate this entity or its backing data, making setter callers/write sites the correct static target rather than final `TrainingPartnerArray` getters.
+
+Next offline-only query: find existing indexed classes/methods that construct or populate `SingleModeTrainingPartnerEtcCharaEntity` (setter callers/write-side services). If current derived indexes contain no caller/xref information, document that exact limitation instead of probing unsafe phone addresses.
 
 Additional runtime tests:
 
