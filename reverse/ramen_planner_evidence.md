@@ -133,7 +133,14 @@ Common start-layer query result:
 - `WorkSingleModeData` also exposes `CreateCharacter`, `ApplyCharacter`, `ApplyHomeInfo`, and `AddRaceConditionByStartInfo`; `WorkSingleModeHomeInfo.Apply` and scenario-specific `ApplyRamenCommandInfo` operate on home/command state.
 - No common standalone `*DataSetStart` payload class is present in the declaration indexes beyond Ramen/Breeders scenario payloads. This supports the hypothesis that partner roster/evaluation data is embedded in the generic start response consumed by `ApplySingleModeStartResponse`/`ApplyCommonResponse`.
 
-Next exact static target: establish the response parameter type/fields for `WorkSingleModeData.ApplySingleModeStartResponse`, or disassemble that named method offline once SO address mapping is proven. Look specifically for evaluation/partner arrays feeding `SingleModeTrainingPartnerEtcCharaEntity`; do not inspect broad start-dialog UI classes.
+Additional exact named targets:
+
+- `SingleModeUtils.IsEnableScenarioLinkChara(int?, int?)` is a static two-parameter boolean method at indexed address `0x733949b830`.
+- `SingleModeUtils.IsEnableScenarioLinkSupportCardChara(int?, int?)` is a static two-parameter boolean method at `0x733949b968`.
+- Compiler-generated predicates `<IsEnableScenarioLinkChara>b__0` and `<IsEnableScenarioLinkSupportCardChara>b__0` confirm both methods filter/search a collection rather than being simple constants. Parameter types remain unknown in the current index.
+- These are stronger Link-conflict/filter candidates than the checkpoint cut-director shuffle method, but no caller link to `ApplySingleModeStartResponse` is yet present.
+
+Next exact static target: establish the response parameter type/fields for `WorkSingleModeData.ApplySingleModeStartResponse` and the two `SingleModeUtils` parameter types from a richer metadata artifact or correctly mapped disassembly. Look specifically for evaluation/partner arrays feeding `SingleModeTrainingPartnerEtcCharaEntity`; do not inspect broad start-dialog UI classes.
 
 Additional runtime tests:
 
