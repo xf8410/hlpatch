@@ -6258,7 +6258,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_dataset_path"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6363,6 +6363,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { debug_cmdinfo() }
     } else if path == "/debug/training_partners" {
         debug_training_partners()
+    } else if path == "/debug/ramen_participants" {
+        debug_ramen_participants()
     } else if path == "/training/result" {
         // v3.22.94: Read latest training result from hook
         let result = unsafe { LAST_TRAINING_RESULT };
@@ -13595,6 +13597,111 @@ unsafe fn debug_il2cpp_collection(collection: *mut c_void, max_items: usize) -> 
         element_size,
         items.join(",")
     )
+}
+
+/// Snapshot the final training-partner arrays and classify only by the equipped
+/// support-card position roster. Non-matches remain unknown_nondeck; this
+/// endpoint does not infer that every non-deck participant is a scenario NPC.
+unsafe fn debug_ramen_participants_inner() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    let wdm_class = find_class_by_short_name(image, "WorkDataManager");
+    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
+    let home_class = find_class_by_short_name(image, "WorkSingleModeHomeInfoData");
+    let chara_class = find_class_by_short_name(image, "WorkSingleModeCharaData");
+    if wdm_class.is_null() || sm_class.is_null() || home_class.is_null() || chara_class.is_null() {
+        return r#"{"error":"required_class_null"}"#.to_string();
+    }
+    let wdm = get_singleton(wdm_class);
+    if wdm.is_null() { return r#"{"error":"wdm_null"}"#.to_string(); }
+    let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
+    if sm.is_null() { return r#"{"error":"sm_null"}"#.to_string(); }
+    let home = call_getter_on_instance(sm_class, sm, "get_HomeInfoData");
+    let chara = call_getter_ref(sm_class, sm, "get_Character");
+    if home.is_null() || chara.is_null() { return r#"{"error":"home_or_chara_null"}"#.to_string(); }
+
+    let supports = call_getter_on_instance(chara_class, chara, "get_EquipSupportCardArray");
+    let mut deck: Vec<(i32, i32)> = Vec::new();
+    if !supports.is_null() {
+        let base = supports as *const u8;
+        let count = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if count <= 6 {
+            for i in 0..count {
+                let obj = std::ptr::read_unaligned::<*mut c_void>(
+                    base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+                );
+                if obj.is_null() { continue; }
+                let position = read_obscured_int_at(obj, 0x10);
+                let card_id = read_obscured_int_at(obj, 0x24);
+                if (1..=6).contains(&position) && card_id > 0 { deck.push((position, card_id)); }
+            }
+        }
+    }
+    deck.sort_by_key(|entry| entry.0);
+    let deck_json = deck.iter().map(|(position, card_id)| format!(
+        r#"{{"position":{},"support_card_id":{}}}"#, position, card_id,
+    )).collect::<Vec<_>>().join(",");
+
+    let commands = read_field_value(home_class, home, "CommandInfoArray");
+    if commands.is_null() { return r#"{"error":"command_info_array_null"}"#.to_string(); }
+    let base = commands as *const u8;
+    let count = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if count > 16 { return format!(r#"{{"error":"command_count_too_large","count":{}}}"#, count); }
+    let mut command_json = Vec::new();
+    for i in 0..count {
+        let command = std::ptr::read_unaligned::<*mut c_void>(
+            base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+        );
+        if command.is_null() { continue; }
+        let command_id = read_obscured_int_at(command, 36);
+        if !matches!(command_id, 101 | 102 | 103 | 105 | 106) { continue; }
+        let partners = read_ptr_at(command, TRAINING_PARTNER_ARRAY_OFF);
+        let mut items = Vec::new();
+        let mut deck_count = 0usize;
+        let mut unknown_count = 0usize;
+        if !partners.is_null() {
+            let pbase = partners as *const u8;
+            let pcount = std::ptr::read_unaligned::<usize>(pbase.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            if pcount <= 16 {
+                for slot in 0..pcount {
+                    let value = pbase.add(IL2CPP_LIST_ITEMS_OFF + slot * OBSCURED_INT_SIZE);
+                    let partner_id = read_obscured_int_at(value as *const c_void, 0);
+                    if partner_id <= 0 { continue; }
+                    if let Some((position, card_id)) = deck.iter().find(|(position, _)| *position == partner_id) {
+                        deck_count += 1;
+                        items.push(format!(r#"{{"slot":{},"partner_id":{},"classification":"deck_support","deck_position":{},"support_card_id":{}}}"#,
+                            slot, partner_id, position, card_id));
+                    } else {
+                        unknown_count += 1;
+                        items.push(format!(r#"{{"slot":{},"partner_id":{},"classification":"unknown_nondeck"}}"#,
+                            slot, partner_id));
+                    }
+                }
+            }
+        }
+        command_json.push(format!(
+            r#"{{"command_id":{},"final_participant_count":{},"deck_support_count":{},"unknown_nondeck_count":{},"participants":[{}]}}"#,
+            command_id, items.len(), deck_count, unknown_count, items.join(","),
+        ));
+    }
+    format!(r#"{{"schema_version":1,"source":"runtime_observation","read_only":true,"participant_layer":"final_training_partner_array","deck_roster":[{}],"commands":[{}],"classification_rule":"partner_id matched against equipped support position only","nondeck_is_scenario_npc_confirmed":false,"assigned_before_capacity_raw":null,"pointers_persisted":false}}"#,
+        deck_json, command_json.join(","))
+}
+
+fn debug_ramen_participants() -> String {
+    let _lock = READ_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    let jump_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+    if jump_result != 0 {
+        SIGSEGV_RECOVERY.store(false, Ordering::Relaxed);
+        return r#"{"error":"sigsegv_recovered"}"#.to_string();
+    }
+    SIGSEGV_RECOVERY.store(true, Ordering::Relaxed);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        debug_ramen_participants_inner()
+    })).unwrap_or_else(|_| r#"{"error":"panic_caught"}"#.to_string());
+    SIGSEGV_RECOVERY.store(false, Ordering::Relaxed);
+    result
 }
 
 /// 诊断训练伙伴 — 只读，不修改 /summary 或评分
