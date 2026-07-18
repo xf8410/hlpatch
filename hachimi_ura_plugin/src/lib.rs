@@ -13057,6 +13057,76 @@ unsafe fn debug_ramen_dataset_path() -> String {
         !ramen_empty.is_null(), ramen_empty as usize
     )
 }
+/// Bounded raw reader for Ramen acquisition-state lists.
+/// It invokes only the DataSet list getter, then reads element fields directly.
+/// It never walks TrainingFeelingEntity._gaugeGainCountDict and never calls
+/// TrainingFeelingEntity.GetGainCount; both are unsafe on the live process.
+unsafe fn ramen_raw_object_list_json(
+    ds_class: *mut c_void,
+    ds_obj: *const c_void,
+    getter: &str,
+) -> String {
+    let list = call_getter_on_instance(ds_class, ds_obj, getter);
+    if list.is_null() {
+        return format!(r#"{{"getter":"{}","status":"null","count":0,"items":[]}}"#, getter);
+    }
+    let base = list as *const u8;
+    let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if len > 64 {
+        return format!(r#"{{"getter":"{}","status":"too_long","count":{},"items":[]}}"#, getter, len);
+    }
+    let type_get_name: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
+        let p = resolve_il2cpp_symbol("il2cpp_type_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let mut items = Vec::with_capacity(len);
+    for index in 0..len {
+        let obj = std::ptr::read_unaligned::<*mut c_void>(
+            base.add(IL2CPP_LIST_ITEMS_OFF + index * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+        );
+        if obj.is_null() {
+            items.push(format!(r#"{{"index":{},"status":"null"}}"#, index));
+            continue;
+        }
+        let class = get_class_from_object(obj);
+        let fields = collect_all_fields(class);
+        let mut raw_fields = Vec::new();
+        for (name, offset, ty) in fields.into_iter().take(24) {
+            let type_enum = il2cpp_type_get_type_enum(ty);
+            let type_name = type_get_name
+                .and_then(|f| {
+                    let p = f(ty);
+                    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                })
+                .unwrap_or_else(|| type_enum_to_name(type_enum));
+            let value = if type_name.contains("ObscuredInt") {
+                read_obscured_int_at(obj, offset).to_string()
+            } else {
+                match type_enum {
+                    IL2CPP_TYPE_BOOLEAN | IL2CPP_TYPE_I1 | IL2CPP_TYPE_U1 |
+                    IL2CPP_TYPE_I2 | IL2CPP_TYPE_U2 | IL2CPP_TYPE_I4 |
+                    IL2CPP_TYPE_U4 | IL2CPP_TYPE_I8 | IL2CPP_TYPE_U8 |
+                    IL2CPP_TYPE_R4 | IL2CPP_TYPE_R8 | IL2CPP_TYPE_STRING =>
+                        read_field_value_json(obj, offset, ty),
+                    _ => "null".to_string(),
+                }
+            };
+            raw_fields.push(format!(
+                r#"{{"raw_name":"{}","offset":{},"type":"{}","type_enum":{},"value":{}}}"#,
+                json_escape(&name), offset, json_escape(&type_name), type_enum, value,
+            ));
+        }
+        items.push(format!(
+            r#"{{"index":{},"element_class":"{}","element_namespace":"{}","raw_fields":[{}]}}"#,
+            index, json_escape(&class_name_of(class)), json_escape(&ns_name_of(class)), raw_fields.join(","),
+        ));
+    }
+    format!(
+        r#"{{"getter":"{}","status":"ok","count":{},"items":[{}]}}"#,
+        getter, len, items.join(","),
+    )
+}
+
 unsafe fn debug_ramen_planner_state() -> String {
     if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
     let image = get_image();
@@ -13073,7 +13143,6 @@ unsafe fn debug_ramen_planner_state() -> String {
     if chara.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
     let scenario = try_get_scenario_obj(chara_class, chara, 14);
     if scenario.is_null() { return r#"{"error":"not_in_ramen_scenario"}"#.to_string(); }
-    // Use the declared class; the runtime header may point at a generated subclass.
     let scenario_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
     if scenario_class.is_null() { return r#"{"error":"no_ramen_scenario_class"}"#.to_string(); }
     let ds = call_getter_ref(scenario_class, scenario, "get_DataSet");
@@ -13089,8 +13158,12 @@ unsafe fn debug_ramen_planner_state() -> String {
     let all_selected = inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_AllSelectedRegionIdArray"));
     let used_text = inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_UsedTwinkleTextIdArray"));
 
-    let feelings = ramen_object_list_json(dc, ds, "get_FeelingInfoArray", &["FeelingIndex", "FeelingId"]);
-    let feeling_turns = ramen_object_list_json(dc, ds, "get_FeelingTurnInfoArray", &["RemainTurn", "FeelingId"]);
+    let inventory_items = ramen_object_list_json(dc, ds, "get_FeelingInfoArray", &["FeelingIndex", "FeelingId"]);
+    let inventory_count = inventory_items.matches("FeelingIndex").count();
+    let acquisition_gauges_raw = ramen_raw_object_list_json(dc, ds, "get_FeelingTurnInfoArray");
+    let feeling_reduce_turns_raw = ramen_raw_object_list_json(dc, ds, "get_FeelingReduceTurnInfoArray");
+    let reduce_base_turns_raw = ramen_raw_object_list_json(dc, ds, "get_ReduceBaseTurnInfoArray");
+    let training_exec_raw = ramen_raw_object_list_json(dc, ds, "get_TrainingExecInfoArray");
     let command_feelings = ramen_object_list_json(dc, ds, "get_CommandFeelingInfoArray", &["CommandType", "CommandId", "FeelingId"]);
     let checkpoints = ramen_object_list_json(dc, ds, "get_CheckPointInfoArray", &["CheckPointType", "ResultState"]);
     let active_effects = ramen_object_list_json(dc, ds, "get_ActiveEffectArray", &["EffectCategory", "EffectId", "EffectValue"]);
@@ -13112,10 +13185,11 @@ unsafe fn debug_ramen_planner_state() -> String {
             read_obscured_int_from_obj(uraf, "get_UrafEffectState"))
     };
 
-    format!(r#"{{"schema_version":1,"source":"runtime_observation","scenario_id":14,"checkpoint_pt":{},"expected_checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"selected_region_ids":{},"all_selected_region_ids":{},"feeling_inventory_fifo":{},"feeling_turns":{},"command_feelings":{},"last_tasting":{},"checkpoints":{},"active_effects":{},"uraf_effect":{},"used_twinkle_text_ids":{},"is_gauge_gained":{},"is_uraf_effect_select_event_checked":{},"is_not_gain_special_feeling":{},"recipe_rules_included":false}}"#,
+    format!(r#"{{"schema_version":2,"source":"runtime_observation","scenario_id":14,"checkpoint_pt":{},"expected_checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"selected_region_ids":{},"all_selected_region_ids":{},"inventory":{{"count":{},"max_count":10,"items":{}}},"acquisition_gauges_raw":{},"feeling_reduce_turns_raw":{},"reduce_base_turns_raw":{},"training_exec_raw":{},"acquisition_result_raw":null,"command_feelings":{},"last_tasting":{},"checkpoints":{},"active_effects":{},"uraf_effect":{},"used_twinkle_text_ids":{},"is_gauge_gained":{},"is_uraf_effect_select_event_checked":{},"is_not_gain_special_feeling":{},"unsafe_gauge_dictionary_skipped":true,"unsafe_get_gain_count_skipped":true,"raw_null_value_means_not_safely_decoded":true,"recipe_rules_included":false}}"#,
         checkpoint_pt, expected_checkpoint_pt, special_feeling_num, recommend_type,
-        selected, all_selected, feelings, feeling_turns, command_feelings, last_tasting,
-        checkpoints, active_effects, uraf_effect, used_text,
+        selected, all_selected, inventory_count, inventory_items,
+        acquisition_gauges_raw, feeling_reduce_turns_raw, reduce_base_turns_raw, training_exec_raw,
+        command_feelings, last_tasting, checkpoints, active_effects, uraf_effect, used_text,
         call_getter_bool(dc, ds, "get_IsGaugeGained"),
         call_getter_bool(dc, ds, "get_IsUrafEffectSelectEventChecked"),
         call_getter_bool(dc, ds, "get_IsNotGainSpecialFeeling"))
