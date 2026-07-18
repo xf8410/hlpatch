@@ -88,6 +88,7 @@ Exact method candidates found in local bounded method indexes:
   - generic scenario-link download context; no Ramen initialization call-chain evidence yet.
 - Generic methods `IsEnableScenarioLinkChara` and `IsEnableScenarioLinkSupportCardChara` exist, but are not yet linked to Ramen NPC selection.
 - `WorkSingleModeScenarioRamen` exposes DataSet apply methods only; roster initialization is likely in a higher-level/common run-start path.
+- Repository artifact provenance was rechecked offline. `/home/agora/hlpatch-reverse/artifacts/reverse/libil2cpp.so` exists and is a 218,715,344-byte ARM64 ELF, but repository reports identify it as game v2.28.5. The current phone method prefix diverges from this ELF after a generic 16-byte prologue, so this old SO must not be used to assign current addresses/control flow. The repository's metadata-derived reports and named method indexes remain useful for names/schema hypotheses, but current machine-code conclusions require a matching build artifact.
 
 ## Next exact query
 
@@ -103,7 +104,9 @@ Possible causes include an unsafe/non-method boundary, unreadable span, or the a
 
 ## Next exact query
 
-Stop following raw call targets by address. The cut-director method is not required for the planner and is now excluded from further phone probing as a presentation-layer candidate. Resume from a named, metadata-resolved run-start/common initialization method only; use `/il2cpp/disassemble?class=...&method=...` with at most 256 bytes, never this raw address.
+Stop following raw call targets by address. The cut-director method is not required for the planner and is excluded from further phone probing as a presentation-layer candidate.
+
+Next offline-only query: use the repository method index to identify one named higher-level/common run-start method that references scenario-special/link character setup. Do not infer current code from the v2.28.5 SO. If no named caller can be established from existing indexes/reports, the real blocker is a matching current `libil2cpp.so` or runtime metadata dump—not entering a育成局.
 
 Additional runtime tests:
 
