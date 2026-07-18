@@ -120,7 +120,14 @@ Offline SO mapping result:
 - A full streaming search of the 218 MB SO found 1,279 copies of the generic 16-byte prologue. None had the phone method's next fixed instruction pair (`mov w19,w0; tbnz w8,#0,...`) at the expected offset. Thus the earlier prologue hit was non-unique. This still does not prove the SO is stale; it proves signature-based identity has not been established and runtime code may differ by relocation/patch/build.
 - Existing named index adds `SingleModeTrainingPartnerEtcCharaEntity`, the mutable non-deck entity with setters for `PartnerId`, `CharaId`, `TrainingCommandId`, and `TrainingBaseCommandId`. The roster constructor must populate this entity or its backing data, making setter callers/write sites the correct static target rather than final `TrainingPartnerArray` getters.
 
-Next offline-only query: find existing indexed classes/methods that construct or populate `SingleModeTrainingPartnerEtcCharaEntity` (setter callers/write-side services). If current derived indexes contain no caller/xref information, document that exact limitation instead of probing unsafe phone addresses.
+Write-side/xref query result:
+
+- Existing `dump_all_methods_*.json` files are declaration indexes only (class, method name, address, parameter count, return type). `SingleModeTrainingPartnerEtcCharaEntity` occurs only at its declaration; no caller/xref data exists in these indexes or compact reports.
+- Exact name searches for `CreateTrainingPartner`/`SetupTrainingPartner` resolve UI/detail/setup methods, not the roster constructor. No indexed method named `CreateEtcChara` or `LotteryTrainingPartner` exists.
+- `SingleModeRamenAPI.SendStart` exists with seven parameters, but the scenario-specific `ObscuredSingleModeRamenDataSetStart` has only `AutoSelectInfo`, `AutoSelectSetInfo`, and `IsCheckedUrafEvent`; it contains no NPC roster. This is evidence that roster/partner setup is handled by common single-mode start data or another common layer, not Ramen's three-field start payload.
+- The current artifacts therefore cannot produce setter callers without either (a) correctly mapped/disassembled machine code plus xrefs or (b) a richer runtime metadata/code dump. Unsafe raw-address phone probing remains prohibited.
+
+Next offline-only target: inspect common single-mode start/load data definitions and named start-apply methods for partner/evaluation arrays, one exact class at a time. This may reveal the roster field even without code xrefs.
 
 Additional runtime tests:
 
