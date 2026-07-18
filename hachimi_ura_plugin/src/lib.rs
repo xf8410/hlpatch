@@ -6535,6 +6535,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/training_log_dl" {
         // Do not re-export legacy files containing the invalid u32x4 interpretation.
         r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
+    } else if path == "/debug/race_random_program_exact" {
+        unsafe { debug_race_random_program_exact() }
     } else if path.starts_with("/debug/dumpclass") {
         // v3.22.51: Dump all fields of any IL2CPP class by name
         // Usage: /debug/dumpclass?name=WorkSingleModeData
@@ -12152,6 +12154,28 @@ unsafe fn read_ranking_data() -> String {
 // ★ v3.22.0: 4 new endpoints for training prediction, event recommendation,
 //   inheritance compatibility, and turn log
 // ============================================================
+
+unsafe fn exact_class_diagnostic(image: *const c_void, namespace: &str, name: &str) -> String {
+    let ns = to_cstr(namespace);
+    let class_name = to_cstr(name);
+    let class = find_class(image, ns.as_ptr(), class_name.as_ptr());
+    if class.is_null() {
+        return format!(r#"{{"namespace":"{}","name":"{}","found":false}}"#, namespace, name);
+    }
+    format!(
+        r#"{{"namespace":"{}","name":"{}","found":true,"fields":{},"methods":{}}}"#,
+        namespace, name, enumerate_class_fields(class), enumerate_class_methods(class)
+    )
+}
+
+unsafe fn debug_race_random_program_exact() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    let model = exact_class_diagnostic(image, "Gallop", "SingleModeRaceRandomProgram");
+    let formatter = exact_class_diagnostic(image, "Gallop.MsgPack.Formatters", "SingleModeRaceRandomProgramFormatter");
+    format!(r#"{{"exact_lookup_only":true,"global_iteration":false,"model":{},"formatter":{}}}"#, model, formatter)
+}
 
 /// v3.22.51: /debug/dumpclass","/debug/storydata?name=ClassName — Dump all fields of any IL2CPP class
 /// Uses il2cpp_class_get_fields (metadata only, no runtime_invoke)
