@@ -15,13 +15,9 @@ This file is the repository-side compact checkpoint for Ramen scenario 14 revers
 
 ## Universal-material substitution readout
 
-Named static definitions confirm the game retains the completed tasting transaction in `ServingPracticeTransactionRepository.Get()` as `ServingPracticeTransactionEntity`, exposing:
+Named static definitions expose `ConsumedFeelingList`, `ConsumedSpecialFeelingNum`, and `ActiveRegion` on `ServingPracticeTransactionEntity`. However, the first implementation called `ServingPracticeTransactionRepository.Get()` from the HTTP `/debug/ramen_planner_state` request thread and caused a real-device native crash. Commit `b35d96e` was therefore reverted immediately; v3.24.24 is the rollback release.
 
-- `ConsumedFeelingList`: ordinary material consumption by `FeelingVO.FeelingType` and `FeelingCountVO.FeelingCount`;
-- `ConsumedSpecialFeelingNum`: total universal-material consumption;
-- `ActiveRegion`: selected region/ramen.
-
-hlpatch v3.24.23 now adds `serving_transaction` to `/debug/ramen_planner_state` with `region_id`, `consumed_special_feeling_num`, and bounded `consumed_feelings[{feeling_id,count}]`. Commit `b35d96e` plus mode-fix `2ad1bb5`; Actions run `29686575165` succeeded. This reads the game's completed transaction, not an inferred before/after difference. Runtime validation with a tasting that actually substitutes universal material is still required before declaring exact semantics fully confirmed.
+The repository/context is unsafe for on-demand HTTP-thread access. Future testing must capture at the game's own confirmation/transaction boundary into a bounded plain-data cache, and HTTP may return only that cache. Until such a hook is separately validated, universal substitution mapping remains unavailable rather than inferred.
 
 ## Published diagnostics
 
