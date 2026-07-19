@@ -46,11 +46,18 @@ Deck positions in the first snapshot:
 - 5: 30173
 - 6: 30227
 
-Final non-deck partner IDs observed in one turn:
+First final-participant snapshot non-deck IDs:
 
 - 1022, 1060, 1077, 1080, 1120
 
-They appeared alongside five equipped supports; deck position 3 was absent that turn. A single final-participant snapshot cannot prove a six-member scenario roster because one member may be absent.
+A later strict next-training-turn snapshot contained all of these plus 1058 simultaneously:
+
+- scenario-character candidates: 1022, 1058, 1060, 1077, 1080, 1120
+- additional low partner IDs: 102 and 103
+
+All six scenario-character candidates were present across the five commands in the same turn, so absence can no longer explain a seventh scenario-training NPC. This strongly confirms the current run's six-member scenario-training roster as the five fixed horse characters 1022/1058/1060/1077/1120 plus dynamic 1080. IDs 102/103 are separate non-deck participant types and must not be counted as scenario-roster characters until identified. Light Hello 9008 did not appear even when all six roster members were simultaneously visible; `single_mode_special_chara` therefore includes scenario-special/story/link characters beyond the six training-NPC roster.
+
+For this run (Oguri Cap trainee, support 30305 Tazuna Link card), evidence strongly supports Tazuna's training-NPC place being unavailable and 1080 Transcend being the run-start backfill. It does not yet establish the complete candidate pool or selection algorithm.
 
 ## MDB key definitions
 
