@@ -13,6 +13,16 @@ This file is the repository-side compact checkpoint for Ramen scenario 14 revers
 - After a useful query, summarize the evidence here and push it. Future analysis should read this file rather than reopening large JSON artifacts.
 - Unknown semantics stay `raw` or `unknown`; do not infer from names alone.
 
+## Universal-material substitution readout
+
+Named static definitions confirm the game retains the completed tasting transaction in `ServingPracticeTransactionRepository.Get()` as `ServingPracticeTransactionEntity`, exposing:
+
+- `ConsumedFeelingList`: ordinary material consumption by `FeelingVO.FeelingType` and `FeelingCountVO.FeelingCount`;
+- `ConsumedSpecialFeelingNum`: total universal-material consumption;
+- `ActiveRegion`: selected region/ramen.
+
+hlpatch v3.24.23 now adds `serving_transaction` to `/debug/ramen_planner_state` with `region_id`, `consumed_special_feeling_num`, and bounded `consumed_feelings[{feeling_id,count}]`. Commit `b35d96e` plus mode-fix `2ad1bb5`; Actions run `29686575165` succeeded. This reads the game's completed transaction, not an inferred before/after difference. Runtime validation with a tasting that actually substitutes universal material is still required before declaring exact semantics fully confirmed.
+
 ## Published diagnostics
 
 - `/debug/ramen_planner_state` schema v2:
