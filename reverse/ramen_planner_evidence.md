@@ -140,7 +140,19 @@ Additional exact named targets:
 - Compiler-generated predicates `<IsEnableScenarioLinkChara>b__0` and `<IsEnableScenarioLinkSupportCardChara>b__0` confirm both methods filter/search a collection rather than being simple constants. Parameter types remain unknown in the current index.
 - These are stronger Link-conflict/filter candidates than the checkpoint cut-director shuffle method, but no caller link to `ApplySingleModeStartResponse` is yet present.
 
-Next exact static target: establish the response parameter type/fields for `WorkSingleModeData.ApplySingleModeStartResponse` and the two `SingleModeUtils` parameter types from a richer metadata artifact or correctly mapped disassembly. Look specifically for evaluation/partner arrays feeding `SingleModeTrainingPartnerEtcCharaEntity`; do not inspect broad start-dialog UI classes.
+`single_mode_14_deck_info.deck_type` evidence:
+
+- `MasterSingleMode14DeckInfo` exposes only generic unload/storage access in the current method index; no semantic getter or direct code caller is named. The table remains only five exact support-card rows.
+- Exact cross-table query shows these five cards are also used by scenario-14 outing effects. All old Tazuna/Light Hello cards (10021/30021/10083/30052, deck_type 1) grant `special_feeling_num=1` on outing story steps 1..5. New Tazuna 30305 (deck_type 2) grants `special_feeling_num=2` on all five steps.
+- Therefore deck_type is strongly associated with the card's Ramen-specific bonus tier/handling, not evidence for selecting an NPC roster. Do not use deck_type to infer a Tazuna-vs-Light-Hello NPC slot.
+
+Offline tooling/address result:
+
+- An isolated Alpine `binutils`/`objdump` was downloaded under `/tmp/binutils-offline` without installing system packages.
+- Existing reports clarify that historical method-dump addresses may point inside/near method bodies and require a historical load base plus ELF PT_LOAD mapping. Directly treating each indexed address as an entry is invalid.
+- The old SO can now be disassembled safely offline in bounded ranges, but exact method identity still needs boundary/call-chain validation before semantic claims.
+
+Next exact static target: establish the generic start response parameter type/fields for `WorkSingleModeData.ApplySingleModeStartResponse`; then look for evaluation/partner arrays feeding `SingleModeTrainingPartnerEtcCharaEntity`. Separately identify callers of the two `SingleModeUtils` Link filters. Do not inspect broad start-dialog UI classes.
 
 Additional runtime tests:
 
