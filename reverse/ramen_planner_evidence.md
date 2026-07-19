@@ -59,7 +59,15 @@ All six scenario-character candidates were present across the five commands in t
 
 For this run (Oguri Cap trainee, support 30305 Tazuna Link card), evidence strongly supports Tazuna's training-NPC place being unavailable and 1080 Transcend being the run-start backfill. It does not yet establish the complete candidate pool or selection algorithm.
 
-A later snapshot at the second-year region-selection point again showed low non-deck IDs 102 and 103, while the six-member scenario roster had four present (1022/1058/1080/1120) and two absent (1060/1077). This independently supports per-turn absence among the fixed six and shows 102/103 are stable recurring generic non-deck participant IDs, not transient corruption. Their identities remain unknown until matched against the UI; do not conflate runtime partner ID 102 with `single_mode_special_chara.id=102` without object/visual evidence.
+A later snapshot at the second-year region-selection point again showed low non-deck IDs 102 and 103, while the six-member scenario roster had four present (1022/1058/1080/1120) and two absent (1060/1077). This independently supports per-turn absence among the fixed six and shows 102/103 are stable recurring generic non-deck participant IDs, not transient corruption.
+
+The user then matched every non-deck participant against the UI in that exact snapshot:
+
+- stamina: partner 103 = reporter; partner 1120 = Calstone Light O
+- power: partner 102 = chairperson; partner 1022 = Fine Motion; partner 1058 = Meisho Doto
+- guts: partner 1080 = Transcend
+
+Therefore runtime partner IDs 102 and 103 are now confirmed as the generic chairperson and reporter respectively. They are not scenario-roster members and must be classified separately. This also confirms that high runtime partner IDs 1022/1058/1080/1120 map to the displayed scenario character identities in this snapshot.
 
 ## MDB key definitions
 
