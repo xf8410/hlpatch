@@ -59,6 +59,8 @@ All six scenario-character candidates were present across the five commands in t
 
 For this run (Oguri Cap trainee, support 30305 Tazuna Link card), evidence strongly supports Tazuna's training-NPC place being unavailable and 1080 Transcend being the run-start backfill. It does not yet establish the complete candidate pool or selection algorithm.
 
+A later snapshot at the second-year region-selection point again showed low non-deck IDs 102 and 103, while the six-member scenario roster had four present (1022/1058/1080/1120) and two absent (1060/1077). This independently supports per-turn absence among the fixed six and shows 102/103 are stable recurring generic non-deck participant IDs, not transient corruption. Their identities remain unknown until matched against the UI; do not conflate runtime partner ID 102 with `single_mode_special_chara.id=102` without object/visual evidence.
+
 ## MDB key definitions
 
 `single_mode_14_deck_info` has only five rows:
