@@ -1,6 +1,6 @@
 [package]
 name = "hachimi_ura"
-version = "3.24.23"
+version = "3.24.22"
 edition = "2021"
 authors = ["URA Plugin Developer"]
 description = "Umamusume Response Analyzer - URA Blackboard Plugin for Hachimi (minimal V3)"

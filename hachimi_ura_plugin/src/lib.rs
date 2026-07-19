@@ -991,22 +991,6 @@ unsafe fn call_getter_ref(
     call_getter_on_instance(class, instance, method_name)
 }
 
-/// Invoke a parameterless static method that returns an object/reference.
-unsafe fn call_static_ref(class: *mut c_void, method_name: &str) -> *mut c_void {
-    if class.is_null() { return ptr::null_mut(); }
-    let get_ptr = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-    let invoke_ptr = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-    if get_ptr.is_null() || invoke_ptr.is_null() { return ptr::null_mut(); }
-    let get: FnClassGetMethodFromName = std::mem::transmute(get_ptr);
-    let invoke: FnRuntimeInvoke = std::mem::transmute(invoke_ptr);
-    let name = to_cstr(method_name);
-    let method = get(class, name.as_ptr(), 0);
-    if method.is_null() { return ptr::null_mut(); }
-    let mut exc: *mut c_void = ptr::null_mut();
-    let result = invoke(method, ptr::null_mut(), ptr::null_mut(), &mut exc);
-    if exc.is_null() { result } else { ptr::null_mut() }
-}
-
 /// Call getter that returns i32 (value type - gets boxed by il2cpp_runtime_invoke)
 /// The boxed value is at result_ptr + 16 (after Il2CppObject header on 64-bit)
 unsafe fn call_getter_int(class: *mut c_void, instance: *const c_void, method_name: &str) -> i32 {
@@ -13137,42 +13121,6 @@ unsafe fn ramen_raw_nested_object_array_json(array: *mut c_void) -> String {
     format!(r#"{{"status":"ok","count":{},"items":[{}]}}"#, len, items.join(","))
 }
 
-unsafe fn ramen_consumed_feeling_list_json(list: *mut c_void) -> String {
-    if list.is_null() { return "[]".to_string(); }
-    let base = list as *const u8;
-    let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if len > 8 { return "[]".to_string(); }
-    let mut items = Vec::with_capacity(len);
-    for index in 0..len {
-        let obj = std::ptr::read_unaligned::<*mut c_void>(
-            base.add(IL2CPP_LIST_ITEMS_OFF + index * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void);
-        if obj.is_null() { continue; }
-        let class = get_class_from_object(obj);
-        items.push(format!(r#"{{"index":{},"feeling_id":{},"count":{}}}"#,
-            index, call_getter_int(class, obj, "get_FeelingType"),
-            call_getter_int(class, obj, "get_FeelingCount")));
-    }
-    format!("[{}]", items.join(","))
-}
-
-unsafe fn ramen_serving_transaction_json(image: *const c_void) -> String {
-    let repo = find_class(image, to_cstr("Gallop.SingleMode.ScenarioRamen").as_ptr(),
-        to_cstr("ServingPracticeTransactionRepository").as_ptr());
-    if repo.is_null() { return r#"{"status":"repository_class_missing"}"#.to_string(); }
-    let tx = call_static_ref(repo, "Get");
-    if tx.is_null() { return r#"{"status":"not_available"}"#.to_string(); }
-    let class = get_class_from_object(tx);
-    let consumed = call_getter_on_instance(class, tx, "get_ConsumedFeelingList");
-    let special = call_getter_on_instance(class, tx, "get_ConsumedSpecialFeelingNum");
-    let special_count = if special.is_null() { -1 } else {
-        call_getter_int(get_class_from_object(special), special, "get_SpecialFeelingCount") };
-    let region = call_getter_on_instance(class, tx, "get_ActiveRegion");
-    let region_id = if region.is_null() { -1 } else {
-        call_getter_int(get_class_from_object(region), region, "get_RegionType") };
-    format!(r#"{{"status":"ok","region_id":{},"consumed_special_feeling_num":{},"consumed_feelings":{}}}"#,
-        region_id, special_count, ramen_consumed_feeling_list_json(consumed))
-}
-
 unsafe fn ramen_raw_object_list_json(
     ds_class: *mut c_void,
     ds_obj: *const c_void,
@@ -13281,7 +13229,6 @@ unsafe fn debug_ramen_planner_state() -> String {
     let reduce_base_turns_raw = ramen_raw_object_list_json(dc, ds, "get_ReduceBaseTurnInfoArray");
     let training_exec_raw = ramen_raw_object_list_json(dc, ds, "get_TrainingExecInfoArray");
     let command_feelings = ramen_object_list_json(dc, ds, "get_CommandFeelingInfoArray", &["CommandType", "CommandId", "FeelingId"]);
-    let serving_transaction = ramen_serving_transaction_json(image);
     let checkpoints = ramen_object_list_json(dc, ds, "get_CheckPointInfoArray", &["CheckPointType", "ResultState"]);
     let active_effects = ramen_object_list_json(dc, ds, "get_ActiveEffectArray", &["EffectCategory", "EffectId", "EffectValue"]);
 
@@ -13302,11 +13249,11 @@ unsafe fn debug_ramen_planner_state() -> String {
             read_obscured_int_from_obj(uraf, "get_UrafEffectState"))
     };
 
-    format!(r#"{{"schema_version":2,"source":"runtime_observation","scenario_id":14,"checkpoint_pt":{},"expected_checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"selected_region_ids":{},"all_selected_region_ids":{},"inventory":{{"count":{},"max_count":10,"items":{}}},"acquisition_gauges_raw":{},"feeling_reduce_turns_raw":{},"reduce_base_turns_raw":{},"training_exec_raw":{},"acquisition_result_raw":null,"command_feelings":{},"last_tasting":{},"serving_transaction":{},"checkpoints":{},"active_effects":{},"uraf_effect":{},"used_twinkle_text_ids":{},"is_gauge_gained":{},"is_uraf_effect_select_event_checked":{},"is_not_gain_special_feeling":{},"unsafe_gauge_dictionary_skipped":true,"unsafe_get_gain_count_skipped":true,"raw_null_value_means_not_safely_decoded":true,"recipe_rules_included":false}}"#,
+    format!(r#"{{"schema_version":2,"source":"runtime_observation","scenario_id":14,"checkpoint_pt":{},"expected_checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"selected_region_ids":{},"all_selected_region_ids":{},"inventory":{{"count":{},"max_count":10,"items":{}}},"acquisition_gauges_raw":{},"feeling_reduce_turns_raw":{},"reduce_base_turns_raw":{},"training_exec_raw":{},"acquisition_result_raw":null,"command_feelings":{},"last_tasting":{},"checkpoints":{},"active_effects":{},"uraf_effect":{},"used_twinkle_text_ids":{},"is_gauge_gained":{},"is_uraf_effect_select_event_checked":{},"is_not_gain_special_feeling":{},"unsafe_gauge_dictionary_skipped":true,"unsafe_get_gain_count_skipped":true,"raw_null_value_means_not_safely_decoded":true,"recipe_rules_included":false}}"#,
         checkpoint_pt, expected_checkpoint_pt, special_feeling_num, recommend_type,
         selected, all_selected, inventory_count, inventory_items,
         acquisition_gauges_raw, feeling_reduce_turns_raw, reduce_base_turns_raw, training_exec_raw,
-        command_feelings, last_tasting, serving_transaction, checkpoints, active_effects, uraf_effect, used_text,
+        command_feelings, last_tasting, checkpoints, active_effects, uraf_effect, used_text,
         call_getter_bool(dc, ds, "get_IsGaugeGained"),
         call_getter_bool(dc, ds, "get_IsUrafEffectSelectEventChecked"),
         call_getter_bool(dc, ds, "get_IsNotGainSpecialFeeling"))
