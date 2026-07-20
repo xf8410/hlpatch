@@ -67,15 +67,20 @@ jobs:
         run: |
           TAG="v${VERSION}"
           ASSET="hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so"
+          asset_exists() {
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+              --jq '.assets[].name' 2>/dev/null | grep -Fxq "$(basename "$ASSET")"
+          }
           for attempt in 1 2 3 4; do
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release upload "$TAG" "$ASSET" --clobber && exit 0
-            else
+            # A previous upload may have succeeded even if uploads.github.com returned 502/503.
+            asset_exists && exit 0
+            if ! gh release view "$TAG" >/dev/null 2>&1; then
               gh release create "$TAG" --title "$TAG" \
-                --notes "Automated plugin build $TAG" && \
-              gh release upload "$TAG" "$ASSET" --clobber && exit 0
+                --notes "Automated plugin build $TAG" || true
             fi
+            gh release upload "$TAG" "$ASSET" --clobber && exit 0
+            asset_exists && exit 0
             sleep $((attempt * 15))
           done
-          echo "Release API failed after retries" >&2
+          echo "Release asset missing after retries" >&2
           exit 1
