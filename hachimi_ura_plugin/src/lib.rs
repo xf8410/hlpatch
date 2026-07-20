@@ -90,13 +90,17 @@ static CRASH_STEP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 static mut LAST_STEP_BUF: [u8; 128] = [0; 128];
 static LAST_STEP_LEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static AUTO_UPDATE_STATUS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-// ★ v3.22.94: Training result hook — intercept OnSuccessSendCommand to read resultType
-static mut LAST_TRAINING_RESULT: i32 = -1;
-static mut LAST_TRAINING_SUB_ID: i32 = -1;
-// ★ v2.2: 真实 CommandId 捕获 — 从 training_hook_handler 记录
-static mut LAST_ACTION_COMMAND_ID: i32 = -1;
-static mut LAST_ACTION_SEQUENCE: u64 = 0;
-static LAST_ACTION_MUTEX: Mutex<()> = Mutex::new(());
+// ★ Training result/action state is shared by the game hook and HTTP/summary threads.
+// Keep correlated fields under one mutex to avoid data races and torn records.
+struct ActionState {
+    training_result: i32,
+    training_sub_id: i32,
+    command_id: i32,
+    sequence: u64,
+}
+static ACTION_STATE: Mutex<ActionState> = Mutex::new(ActionState {
+    training_result: -1, training_sub_id: -1, command_id: -1, sequence: 0,
+});
 static mut TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_ON_SUCCESS_PROLOGUE: [u8; 16] = [0; 16];
 static mut ON_SUCCESS_ADDR: usize = 0;
@@ -5706,10 +5710,9 @@ unsafe fn read_summary_inner_impl() -> String {
 
     // ★ v2.2: last_action 字段 — 从缓存读取，不调用 IL2CPP
     let last_action_json = {
-        let _lock = LAST_ACTION_MUTEX.lock();
-        let cmd_id = unsafe { LAST_ACTION_COMMAND_ID };
-        let seq = unsafe { LAST_ACTION_SEQUENCE };
-        drop(_lock);
+        let (cmd_id, seq) = ACTION_STATE.lock()
+            .map(|state| (state.command_id, state.sequence))
+            .unwrap_or((-1, 0));
         if cmd_id >= 0 {
             let (action, normalized) = match cmd_id {
                 101 => ("Speed", 101),
@@ -6367,8 +6370,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         debug_ramen_participants()
     } else if path == "/training/result" {
         // v3.22.94: Read latest training result from hook
-        let result = unsafe { LAST_TRAINING_RESULT };
-        let sub_id = unsafe { LAST_TRAINING_SUB_ID };
+        let (result, sub_id) = ACTION_STATE.lock()
+            .map(|state| (state.training_result, state.training_sub_id))
+            .unwrap_or((-1, -1));
         let hooked = unsafe { TRAINING_HOOK_INSTALLED };
         format!(
             r#"{{"result_type":{},"sub_id":{},"hooked":{},"result_name":"{}"}}"#,
@@ -6502,11 +6506,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         r#"{"ok":true}"#.to_string()
     } else if path == "/action/latest" {
         // ★ v2.2: 返回最新动作记录（只读缓存，不调用 IL2CPP）
-        let _lock = LAST_ACTION_MUTEX.lock();
-        let cmd_id = unsafe { LAST_ACTION_COMMAND_ID };
-        let seq = unsafe { LAST_ACTION_SEQUENCE };
-        let result_type = unsafe { LAST_TRAINING_RESULT };
-        drop(_lock);
+        let (cmd_id, seq, result_type) = ACTION_STATE.lock()
+            .map(|state| (state.command_id, state.sequence, state.training_result))
+            .unwrap_or((-1, 0, -1));
         let (action, normalized) = match cmd_id {
             101 => ("Speed", 101),
             102 => ("Power", 102),
@@ -7453,15 +7455,11 @@ extern "C" fn training_hook_handler(
 ) -> *mut c_void {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unsafe {
-            LAST_TRAINING_RESULT = result_type;
-            LAST_TRAINING_SUB_ID = sub_id;
-
-            // ★ v2.2: 记录真实 command_id 和 sequence
-            // sub_id 可能是训练子命令 ID，记录用于动作识别
-            {
-                let _lock = LAST_ACTION_MUTEX.lock();
-                LAST_ACTION_COMMAND_ID = sub_id;
-                LAST_ACTION_SEQUENCE += 1;
+            if let Ok(mut state) = ACTION_STATE.lock() {
+                state.training_result = result_type;
+                state.training_sub_id = sub_id;
+                state.command_id = sub_id;
+                state.sequence += 1;
             }
 
             // Use trampoline — no unhook/rehook needed
