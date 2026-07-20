@@ -60,23 +60,15 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create Release
-        if: steps.check_tag.outputs.exists != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          files: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-          draft: false
-          prerelease: false
+      - name: Publish release asset
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update Release Asset
-        if: steps.check_tag.outputs.exists == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          files: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          ASSET="hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber
+          else
+            gh release create "$TAG" "$ASSET" --title "$TAG" --notes "Automated plugin build $TAG"
+          fi
