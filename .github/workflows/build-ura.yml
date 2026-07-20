@@ -71,8 +71,9 @@ jobs:
             if gh release view "$TAG" >/dev/null 2>&1; then
               gh release upload "$TAG" "$ASSET" --clobber && exit 0
             else
-              gh release create "$TAG" "$ASSET" --title "$TAG" \
-                --notes "Automated plugin build $TAG" && exit 0
+              gh release create "$TAG" --title "$TAG" \
+                --notes "Automated plugin build $TAG" && \
+              gh release upload "$TAG" "$ASSET" --clobber && exit 0
             fi
             sleep $((attempt * 15))
           done
