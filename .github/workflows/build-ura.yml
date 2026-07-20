@@ -67,8 +67,14 @@ jobs:
         run: |
           TAG="v${VERSION}"
           ASSET="hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$ASSET" --clobber
-          else
-            gh release create "$TAG" "$ASSET" --title "$TAG" --notes "Automated plugin build $TAG"
-          fi
+          for attempt in 1 2 3 4; do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" "$ASSET" --clobber && exit 0
+            else
+              gh release create "$TAG" "$ASSET" --title "$TAG" \
+                --notes "Automated plugin build $TAG" && exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          echo "Release API failed after retries" >&2
+          exit 1
