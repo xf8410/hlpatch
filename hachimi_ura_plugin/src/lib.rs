@@ -6424,7 +6424,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6702,6 +6702,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/training_log_dl" {
         // Do not re-export legacy files containing the invalid u32x4 interpretation.
         r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
+    } else if path == "/debug/ramen_formula_targets" {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_formula_targets() }))
+            .unwrap_or_else(|_| r#"{"error":"ramen_formula_targets_panic"}"#.to_string())
     } else if path == "/debug/ramen_dataset_path" {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_dataset_path() }))
             .unwrap_or_else(|_| r#"{"error":"ramen_dataset_path_panic"}"#.to_string())
@@ -13568,6 +13571,179 @@ unsafe fn debug_ramenfields() -> String {
         ds_class_name,
         arrays_json.join(","),
         uraf_json
+    )
+}
+
+/// Scenario 14 formula investigation: resolve only the five named methods from the
+/// current process. This endpoint never invokes a target method and reads at most 64
+/// executable bytes after validating /proc/self/maps.
+unsafe fn debug_ramen_formula_targets() -> String {
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
+    let image = get_image();
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
+
+    let get_methods_ptr = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+    let get_name_ptr = resolve_il2cpp_symbol("il2cpp_method_get_name");
+    let get_param_count_ptr = resolve_il2cpp_symbol("il2cpp_method_get_param_count");
+    let get_return_type_ptr = resolve_il2cpp_symbol("il2cpp_method_get_return_type");
+    let type_get_name_ptr = resolve_il2cpp_symbol("il2cpp_type_get_name");
+    if get_methods_ptr.is_null() || get_name_ptr.is_null() || get_param_count_ptr.is_null() {
+        return r#"{"error":"method_enum_api_not_found"}"#.to_string();
+    }
+
+    let get_methods: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void =
+        std::mem::transmute(get_methods_ptr);
+    let get_name: unsafe extern "C" fn(*const c_void) -> *const c_char =
+        std::mem::transmute(get_name_ptr);
+    let get_param_count: unsafe extern "C" fn(*const c_void) -> u32 =
+        std::mem::transmute(get_param_count_ptr);
+    let get_return_type: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> =
+        if get_return_type_ptr.is_null() { None } else { Some(std::mem::transmute(get_return_type_ptr)) };
+    let type_get_name: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> =
+        if type_get_name_ptr.is_null() { None } else { Some(std::mem::transmute(type_get_name_ptr)) };
+
+    let targets: [(&str, &str, u32); 5] = [
+        ("ServingPracticeRegionEffectBonusVO", "Apply", 1),
+        ("ServingPracticeRegionEffectRepository", "GetWithCheckPointPt", 2),
+        ("ServingPracticeEffectVO", "CreateRegionEffect", 4),
+        ("ServingPracticeEffectRepositoryUtil", "GetTrainingMatchingObtain", 1),
+        ("ServingPracticeTransactionEntity", "IsBonusEffectTraining", 1),
+    ];
+    let maps = match std::fs::read_to_string("/proc/self/maps") {
+        Ok(v) => v,
+        Err(_) => return r#"{"error":"proc_maps_unavailable"}"#.to_string(),
+    };
+    let mut results = Vec::new();
+
+    for (class_name, method_name, expected_params) in targets {
+        let class = find_class_by_short_name(image, class_name);
+        if class.is_null() {
+            results.push(format!(
+                r#"{{"class":"{}","method":"{}","status":"class_not_found"}}"#,
+                class_name, method_name
+            ));
+            continue;
+        }
+
+        let mut iter: *mut c_void = ptr::null_mut();
+        let mut method_info: *const c_void = ptr::null();
+        loop {
+            let candidate = get_methods(class, &mut iter);
+            if candidate.is_null() {
+                break;
+            }
+            let candidate_name_ptr = get_name(candidate);
+            if candidate_name_ptr.is_null() {
+                continue;
+            }
+            let candidate_name = CStr::from_ptr(candidate_name_ptr).to_string_lossy();
+            if candidate_name == method_name && get_param_count(candidate) == expected_params {
+                method_info = candidate;
+                break;
+            }
+        }
+        if method_info.is_null() {
+            results.push(format!(
+                r#"{{"class":"{}","method":"{}","expected_params":{},"status":"method_not_found"}}"#,
+                class_name, method_name, expected_params
+            ));
+            continue;
+        }
+        if !is_readable_range(method_info as usize, std::mem::size_of::<usize>()) {
+            results.push(format!(
+                r#"{{"class":"{}","method":"{}","status":"method_info_unreadable"}}"#,
+                class_name, method_name
+            ));
+            continue;
+        }
+
+        // Current IL2CPP MethodInfo layout: methodPointer is the first pointer.
+        let method_addr = std::ptr::read_unaligned::<usize>(method_info as *const usize);
+        if method_addr == 0 || method_addr % 4 != 0 {
+            results.push(format!(
+                r#"{{"class":"{}","method":"{}","method_info":"0x{:x}","method_addr":"0x{:x}","status":"invalid_method_pointer"}}"#,
+                class_name, method_name, method_info as usize, method_addr
+            ));
+            continue;
+        }
+
+        let mut mapping: Option<(usize, usize, usize, String, String)> = None;
+        for line in maps.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 5 || !parts[1].contains('x') {
+                continue;
+            }
+            let (start_text, end_text) = match parts[0].split_once('-') {
+                Some(v) => v,
+                None => continue,
+            };
+            let start = match usize::from_str_radix(start_text, 16) { Ok(v) => v, Err(_) => continue };
+            let end = match usize::from_str_radix(end_text, 16) { Ok(v) => v, Err(_) => continue };
+            if method_addr < start || method_addr >= end {
+                continue;
+            }
+            let file_offset = match usize::from_str_radix(parts[2], 16) { Ok(v) => v, Err(_) => continue };
+            let path = if parts.len() > 5 { parts[5..].join(" ") } else { String::new() };
+            mapping = Some((start, end, file_offset, parts[1].to_string(), path));
+            break;
+        }
+        let (map_start, map_end, file_offset, perms, module_path) = match mapping {
+            Some(v) => v,
+            None => {
+                results.push(format!(
+                    r#"{{"class":"{}","method":"{}","method_addr":"0x{:x}","status":"executable_mapping_not_found"}}"#,
+                    class_name, method_name, method_addr
+                ));
+                continue;
+            }
+        };
+        let load_bias = match map_start.checked_sub(file_offset) {
+            Some(v) => v,
+            None => {
+                results.push(format!(
+                    r#"{{"class":"{}","method":"{}","status":"invalid_load_bias"}}"#,
+                    class_name, method_name
+                ));
+                continue;
+            }
+        };
+        let rva = method_addr - load_bias;
+        let byte_count = 64usize.min(map_end - method_addr);
+        if byte_count < 16 || !is_readable_range(method_addr, byte_count) {
+            results.push(format!(
+                r#"{{"class":"{}","method":"{}","method_addr":"0x{:x}","status":"method_bytes_unreadable"}}"#,
+                class_name, method_name, method_addr
+            ));
+            continue;
+        }
+        let bytes = std::slice::from_raw_parts(method_addr as *const u8, byte_count);
+        let first_bytes_hex = bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let return_type_name = get_return_type
+            .and_then(|f| {
+                let t = f(method_info);
+                if t.is_null() { return None; }
+                type_get_name.and_then(|name_fn| {
+                    let p = name_fn(t);
+                    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                })
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        results.push(format!(
+            r#"{{"class":"{}","method":"{}","params":{},"return_type":"{}","method_info":"0x{:x}","method_addr":"0x{:x}","map_start":"0x{:x}","map_end":"0x{:x}","map_file_offset":"0x{:x}","load_bias":"0x{:x}","rva":"0x{:x}","map_perms":"{}","module_path":"{}","bytes_read":{},"first_bytes_hex":"{}","status":"runtime_direct"}}"#,
+            class_name, method_name, expected_params, json_escape(&return_type_name),
+            method_info as usize, method_addr, map_start, map_end, file_offset, load_bias, rva,
+            json_escape(&perms), json_escape(&module_path), byte_count, first_bytes_hex
+        ));
+    }
+
+    format!(
+        r#"{{"ok":true,"schema_version":1,"scenario_id":14,"source":"current_runtime_methodinfo","read_only":true,"bytes_per_method":64,"same_build_status":"unverified_until_local_byte_comparison","targets":[{}]}}"#,
+        results.join(",")
     )
 }
 
