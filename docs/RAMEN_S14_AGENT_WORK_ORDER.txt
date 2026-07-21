@@ -1,0 +1,563 @@
+=== BEGIN_OF_WORK_ORDER ===
+DOCUMENT_ID: RAMEN-S14-AGENT-WORK-ORDER
+DOCUMENT_VERSION: 1
+DOCUMENT_LANGUAGE: zh-CN
+REQUIRED_SECTIONS: MAIN,A,B,C,D,E,F,G,H
+RULE_PRIORITY: SYSTEM_SAFETY > CURRENT_USER_INSTRUCTION > EVIDENCE_RULES > FILE_OUTPUT_RULES > TASK_STEPS > OLD_CHAT_SUMMARY
+
+第0章：使用说明
+
+本文件是 Scenario 14 拉面杯训练收益公式调查的唯一执行工单。执行者必须完整读取到 EOF，报告 DOCUMENT_ID、文件字节数、行数、SHA-256、各节 END 哨兵和 EOF_SENTINEL，然后立即从 NEXT_ACTION 开始实际执行。不得只复述计划，不得等待用户反复发送“继续”。
+
+本文件不能覆盖执行平台的系统安全规则。已批准范围内的普通、可逆操作不应反复询问；真正破坏性、秘密访问、强推、删除或超范围操作仍按系统规则处理。
+
+第1章：任务目标
+
+确认赛马娘 Scenario 14 拉面杯中最终训练收益的真实计算链和整数运算顺序，包括：
+
+1. 剧本训练基础值；
+2. 普通训练效果与支援卡训练效果；
+3. 干劲系数；
+4. 友情训练与友情加成；
+5. Scenario 14 地区效果；
+6. 吃面当回合基础效果；
+7. 全局 CheckPointPt 对地区效果的增量；
+8. 技能 Pt 训练效果；
+9. 属性/技能 Pt 单次上限；
+10. 每一步加算、乘算、整数除法、截断、舍入和封顶位置。
+
+最终必须回答：
+
+最终属性收益 = ?
+最终技能Pt收益 = ?
+
+若只能确认局部公式，只提交局部证据；未确认部分保持 UNKNOWN，禁止为完成任务而脑补。
+
+第2章：可信源与禁止源
+
+只允许使用：
+
+- 同构建 libil2cpp.so；
+- 与其配对的 global-metadata.dat；
+- 同构建 dump.cs / script.json / il2cpp.h；
+- 同构建定点反汇编；
+- master.mdb 原始表；
+- 严格控制变量的运行时样本；
+- 可复现的仓库脚本和测试。
+
+禁止将以下内容作为公式证据：
+
+- Wiki、BWiki、攻略站、论坛、视频口述、社交媒体；
+- 搜索引擎摘要；
+- 其他 AI 无原始来源的结论；
+- 不同构建的地址和反汇编拼接；
+- 仅凭方法名、字段名或显示文本进行的猜测；
+- 其他剧本公式。
+
+第3章：当前远端基线
+
+开始修改前必须再次核对远端 HEAD，不得覆盖并发提交。
+
+uma-data:
+repo: xf8410/uma-data
+main: 44d5ad6f96d8
+Action 29832420863: success
+已有 Scenario 14 地区、资源经济、吃面效果、RMJ检查点、Gauge 目录及 22 项测试。
+
+hlpatch:
+repo: xf8410/hlpatch
+程序基线 main: 0c134e22355a
+plugin version: 3.24.28
+Action 29833184190: success
+已输出 ramen.acquisition_gauges、ramen.command_feelings、ramen.command_gauge_vectors。
+注意：本工单文件本身提交后，hlpatch main 会前进；以远端实际 HEAD 为准。
+
+uma-juece:
+repo: xf8410/uma-juece
+main: 146169fe9fb3
+APK version: 1.28
+Action 29844206914: success
+已实现资源规划器及地区多选三组合资源排序。
+
+第4章：已确认的 Scenario 14 边界
+
+1. Scenario 8 Cook 与 Scenario 14 Ramen 必须严格分离。
+2. 地区选择是从多个候选中选择恰好 3 个，不是三个选项中选一个。
+3. 静态候选回退：turn 3 为 Region 1..5；turn 24 为 6..10；turn 48 为 11..20；完整组合数分别为 10、10、120。
+4. 组合必须整体枚举和排序，不能单地区打分后简单取前三。
+5. SelectedRegionIdArray / AllSelectedRegionIdArray 是已选或历史状态，不是当前候选池。
+6. CheckPointPt 是类似试食会/RMJ的全局进度，不是每地区独立点数，也不是温泉杯挖掘机制。
+7. single_mode_14_region_effect_bonus 的 min_pt/max_pt 不得命名为地区点数。
+8. Gauge 阈值 7；满槽得对应诀窍 1 个并重置；超额不结转；普通诀窍共享 10 槽，满时 FIFO 顶旧。
+9. 当前地区组合器只按资源可行性排序，地区效果和训练价值尚未进入生产评分。
+
+第5章：同构建解包输入
+
+GitHub Codespace:
+effective-space-invention-x5pgq49w7w9x3vvjv
+repo: xf8410/hlpatch
+machine: basicLinux32gb
+完成或真实阻塞后必须停止该 Codespace，避免继续计费。
+
+Codespace 文件：
+/workspaces/hlpatch/base.apk = 112328704 bytes
+/workspaces/hlpatch/split_config.arm64_v8a.apk = 80877650 bytes
+/workspaces/hlpatch/libil2cpp.so = 218715344 bytes
+/workspaces/hlpatch/global-metadata.dat = 45244256 bytes
+
+Agora Local Sandbox 已下载：
+/home/agora/work/game-unpack/libil2cpp.so
+/home/agora/work/game-unpack/global-metadata.dat
+
+libil2cpp.so:
+size: 218715344
+sha256: 3e32f9792d85a79f4cead60fc7676e187ecada3bccf6aa4d28d809aa7918d5c0
+
+ global-metadata.dat:
+size: 45244256
+sha256: af653230aca9fba539348040d3718bbc265f64a2613083e11989dd36c6b224bf
+
+ELF Build ID:
+bb6576b6d897b54922cb2f4ea9322ac6f820abbf
+
+这两个文件必须配对使用，禁止更换其中一个后沿用旧映射。
+
+第6章：当前工具状态与恢复点
+
+Codespace 已下载官方：
+Perfare/Il2CppDumper v6.7.46
+/workspaces/tools/Il2CppDumper/Il2CppDumper.dll
+
+当前失败日志：
+/workspaces/il2cpp-same-build/dumper.log
+
+已验证失败原因：工具要求 Microsoft.NETCore.App 6.0.0；Codespace 只有 .NET 9/10。输入文件尚未被证明损坏，不能把 Runtime 缺失误报为解析失败。
+
+尚未生成或尚未确认非空：
+/workspaces/il2cpp-same-build/dump.cs
+/workspaces/il2cpp-same-build/script.json
+/workspaces/il2cpp-same-build/il2cpp.h
+/workspaces/il2cpp-same-build/stringliteral.json
+
+NEXT_ACTION 的第一步必须是实际运行 .NET 主版本前滚；失败后立即安装 .NET 6 Runtime，不要重新下载 252 MB 输入文件。
+
+[MAIN_END] MAIN-SAME-BUILD-TRAINING-FORMULA
+
+附录A：连续执行协议
+
+[EXECUTE_NOW]
+收到工单后立即执行第一条工具命令。禁止只回复“开始”“下一步”“正在处理”。
+
+[CONTINUOUS_EXECUTION]
+在已授权范围内连续执行：调查→提取→验证→修改→测试→提交→推送→CI→修复→状态更新→停止Codespace。普通步骤之间不得等待用户发送“继续”。
+
+[NO_PROGRESS_ONLY]
+每次回复前至少取得一项实际工具结果、新证据、代码修改、验证过的失败原因或真实阻塞。计划和进度占位不算成果。
+
+[NO_FAKE_BACKGROUND_WORK]
+不得声称回复后后台继续。模型没有后台工作能力；所有“已完成”必须有可核查输出。
+
+[RESUME_FROM_LAST_SUCCESS]
+超时、stream reset、网络中断或上下文重启后，读取本工单/唯一状态文件，核对远端 HEAD、git status、最后成功产物大小和哈希，从最后成功点继续。不得重复下载和重复读取已确认大型材料。
+
+[NO_REDUNDANT_APPROVAL]
+用户已预授权：读取指定仓库；启动已批准 Codespace；下载用户仓库中的 APK/SO/metadata；下载可信官方分析工具；临时解包；生成映射；定点反汇编；小范围修改指定仓库；测试；普通提交推送；CI失败修复；完成后停止本次Codespace。
+
+以下仍需遵守系统安全规则：删除/覆盖受保护目录；删除远端数据；强推或改写历史；暴露秘密；创建新长期付费资源；超范围破坏性操作。
+
+[NO_VALUE_JUDGMENT_ABORT]
+不得以“目前没用”“太难”“以后再做”“静态分析可能失败”为由停工。排除错误路径、缩小 UNKNOWN、证明某方法无关均是有效成果。
+
+[STOP_WHEN_UNPROVEN]
+不能证明时保持 UNKNOWN/HYPOTHESIS，但必须继续尝试工单内尚未执行的可靠路径；不能用“禁止脑补”作为立即停工借口。
+
+[NO_EXTERNAL_TEXT]
+拒绝攻略站、Wiki、论坛、搜索摘要及其他 AI 口述结论。只用同构建解包、IL2CPP、master.mdb和严格运行时样本。
+
+[BLOCKER_STANDARD]
+只有所需输入确实不存在/不可访问，且所有已批准可靠替代路径都已实际失败，并且下一步必须由用户提供新文件/设备/权限时，才允许 BLOCKED。
+
+不得把一次超时、TLS错误、Git push失败但API可用、缺少可安装Runtime、一个工具失败但有替代工具、等待CI、需要查调用者等视为阻塞。
+
+合法阻塞格式：
+BLOCKED_AT:
+LAST_CONFIRMED_RESULT:
+ATTEMPTED_PATHS:
+EXACT_FAILURE:
+MISSING_INPUT:
+WHY_NO_RELIABLE_ALTERNATIVE:
+MINIMUM_USER_ACTION:
+
+[A_END] A-CONTINUOUS-NO-FAKE-BACKGROUND
+
+附录B：当前技术缺口与具体步骤
+
+[B1] 同构建方法映射尚未生成。
+必须先尝试：
+
+cd /workspaces/il2cpp-same-build
+DOTNET_ROLL_FORWARD=Major \
+/home/codespace/.dotnet/dotnet \
+/workspaces/tools/Il2CppDumper/Il2CppDumper.dll \
+/workspaces/hlpatch/libil2cpp.so \
+/workspaces/hlpatch/global-metadata.dat \
+> dumper.log 2>&1
+
+然后实际检查输出文件和日志尾部。
+
+[B2] 若仍要求 .NET 6，立即安装官方 .NET 6 Runtime（不需要完整 SDK）：
+
+mkdir -p /workspaces/tools/dotnet6
+wget -O /workspaces/tools/dotnet-install.sh https://dot.net/v1/dotnet-install.sh
+bash /workspaces/tools/dotnet-install.sh \
+  --runtime dotnet \
+  --version 6.0.36 \
+  --install-dir /workspaces/tools/dotnet6
+
+再执行：
+
+/workspaces/tools/dotnet6/dotnet \
+/workspaces/tools/Il2CppDumper/Il2CppDumper.dll \
+/workspaces/hlpatch/libil2cpp.so \
+/workspaces/hlpatch/global-metadata.dat \
+> /workspaces/il2cpp-same-build/dumper.log 2>&1
+
+[B3] 若 Il2CppDumper 明确不支持该 metadata，再使用可信官方 Cpp2IL。不得退回旧构建地址，不得因第一个工具失败而猜公式。
+
+[B4] 映射成功条件：dump.cs 与 script.json 非空；记录工具版本、Build ID、两个 SHA-256。
+
+[B5] 第一目标方法：
+Gallop.SingleMode.ScenarioRamen.ServingPracticeRegionEffectBonusVO.Apply(System.Int32)
+
+必须证明 Apply(input) 的实际整数运算，不能根据命名猜 input + AddValue。
+
+[B6] 第二目标调用链：
+ServingPracticeRegionEffectRepository.GetWithCheckPointPt
+ServingPracticeRegionEffectRepository.CreateRegionEffectBonusList
+ServingPracticeEffectVO.CreateRegionEffect
+
+必须确认 CheckPointPt 如何选择 bonus 行、add_value 如何作用以及作用时机。
+
+[B7] 第三目标：
+ServingPracticeEffectRepositoryUtil.GetTrainingMatchingObtain
+ServingPracticeRegionEffectRepositoryUtils.GetTrainingMatchingObtain
+ServingPracticeTransactionEntity.IsBonusEffectTraining
+
+确认 type 2/4/21 如何匹配训练，type 19/20 是否进入数值倍率还是机制触发。
+
+[B8] 第四目标：追踪最终写入 WorkSingleModeScenarioRamenDataSet.CommandInfoArray[].ParamsIncDecInfoArray[]，证明它是最终值还是中间值。
+
+[B9] 定点反汇编初始范围 256 字节，必要时扩到 512 字节。不得提交完整 SO、dump.cs、script.json或整块反汇编。
+
+[B10] 训练公式确认后仍需严格运行时配对验证，记录相同角色、训练等级、干劲、站位、友情人数、地区效果，仅改变吃面或 CheckPointPt 条件的样本。无法控制变量时最多 SUPPORTED。
+
+[B11] 运行时候选池仍未接入。ramen.selectable_region_ids 已预留；缺失时仅在 turn 3/24/48 用 master 阶段回退，禁止把历史 SelectedRegionIdArray 当候选池。
+
+[B12] 当前地区组合只按资源排序。公式确认后才允许回填地区效果价值。
+
+[B_END] B-SAME-BUILD-FORMULA-GAPS
+
+附录C：对“541张卡事件链全部完成”总结的严格反驳
+
+[C1] 现有成果最多可称：
+MDB_RELATION_CATALOG_COMPLETE
+TITLE_MAPPING_COMPLETE
+SCHEMA_COMPLETE
+SENSITIVITY_FRAMEWORK_COMPLETE
+
+不能称：
+COMPLETE_EVENT_CHAIN
+COMPLETE_CHOICE_REWARD_MODEL
+SERVER_ONLY_REWARD_CONFIRMED
+
+当前应标：
+REWARD_PAYLOAD_UNRESOLVED
+CLIENT_RESOURCE_SEARCH_INCOMPLETE
+SERVER_AUTHORITY_UNPROVEN
+PROBABILITY_IDENTIFICATION_INCOMPLETE
+
+[C2] 541 张卡按段数和挂载方式分类完成，只证明 MDB 关系遍历和挂载目录完成，不证明全部 Story 分支、选项、奖励、概率、条件、失败分支和触发顺序完成。准确名称是“全541张卡MDB事件挂载关系目录”。
+
+[C3] “0段”只能表示当前 MDB 查询路径未找到链段，不能直接称“无事件”。仍可能存在角色共享、共通、特殊、剧本注入、AssetBundle直接引用或运行时拼装。
+
+[C4] text_data category=181 的 14 个标题只证明 Story ID→标题，不证明正文、选项、分支、奖励、概率或条件。
+
+[C5] 发现 GetChoiceRewardResponse 类只证明客户端含响应类型/API路径。不能仅凭类存在证明奖励完全服务端动态生成、客户端没有奖励数据、概率只在服务端或抓包是唯一来源。
+
+必须检查 Request/Response字段、Deserialize/MessagePack、调用者、响应是完整数值还是引用ID、本地奖励表、Story AssetBundle、Addressables、缓存和离线逻辑。
+
+[C6] 如果 Story AssetBundle 仍可能解决，就不能同时宣布奖励不在客户端。正确结论：当前 MDB 未含完整奖励载荷；Story资源、缓存和API响应尚待检查；API是否唯一来源 UNKNOWN。
+
+[C7] 六个概率保持 UNKNOWN 是诚实状态，只能证明 Schema/敏感性框架完成，不能证明概率模型完成。
+
+[C8] 完整事件链至少需要五方对齐：MDB挂载、Story AssetBundle分支、UI选项数、API choice/result ID、实际奖励结果。
+
+[C9] 禁止的终局说法：
+“全541张卡完整事件链已完成”
+“奖励只能由服务端动态获取”
+“客户端不存在奖励数据”
+“概率只能靠抓包取得”
+
+[C_END] C-RELATION-CATALOG-NOT-COMPLETE-REWARD
+
+附录D：证据等级、结论账本与错误隔离
+
+[EVIDENCE_LABEL]
+状态仅允许：CONFIRMED、SUPPORTED、HYPOTHESIS、UNKNOWN、INVALIDATED。
+
+CONFIRMED：同构建实现/反汇编或严格运行时样本直接证明。
+SUPPORTED：强命名或调用关系证据，但缺算术/顺序/运行时复核。
+HYPOTHESIS：待验证候选。
+UNKNOWN：证据不足。
+INVALIDATED：已证明版本混用、错误剧本、错误数据源或错误解释。
+
+allowed_use 规则：
+CONFIRMED 可为 production_formula；
+SUPPORTED 最多 display_and_investigation；
+HYPOTHESIS/UNKNOWN 只能 investigation_only；
+INVALIDATED 必须 none。
+
+[CLAIM_LEDGER]
+每条重要结论必须包含：claim_id、claim、status、allowed_use、evidence_type、source_repository、source_commit、source_build_id、source_file、exact_location、counter_evidence、unknowns、last_verified。
+
+[NO_FALSE_NEGATIVE]
+“当前检查源未找到”只能写 NOT_FOUND_IN_INSPECTED_SOURCE，不能直接写 DOES_NOT_EXIST_CLIENT_SIDE。否定结论必须列 inspected_sources、uninspected_sources、search_method、search_limit、allowed_inference。
+
+[BUILD_FINGERPRINT_REQUIRED]
+每条二进制结论必须附 Build ID、SO SHA-256、metadata SHA-256、映射工具版本、方法地址和反汇编范围。
+
+[NO_UNVERIFIED_PROMOTION]
+结论被复制到 README、状态文档、报告或对话不会提升证据等级。升级必须有新增可复现证据。
+
+[INVALIDATED_RESULT_LOCK]
+跨构建地址、错误剧本、错误表、错误字段语义、不可靠外部文本等结果必须进入 invalidated_results，allowed_use=none。旧运行时地址 0x7339b12a0c 映射到另一构建 chunk_042 的结果已 INVALIDATED，不得复用。
+
+[CONTRADICTION_CHECK]
+提交前检查：是否与 master/运行时冲突；是否跨剧本；是否跨构建；是否把全局 CheckPointPt称地区点数；是否把UNKNOWN硬编码；是否把显示文本当公式；是否在最终 gains 上重复乘倍率；是否一处称客户端不存在而另一处称AssetBundle可得。
+
+[CI_NOT_EVIDENCE]
+CI通过只证明构建/测试满足当前断言，不独立证明机制语义正确。
+
+[D_END] D-CLAIM-LEDGER-NO-PROMOTION
+
+附录E：强制执行关键词
+
+[EXECUTE_NOW]
+收到后立即执行第一条命令。
+
+[CONTINUOUS_EXECUTION]
+预授权范围内连续工作，不等“继续”。
+
+[NO_PROGRESS_ONLY]
+禁止只发计划和进度。
+
+[NO_FAKE_BACKGROUND_WORK]
+禁止假装后台工作。
+
+[RESUME_FROM_LAST_SUCCESS]
+中断后从最后成功点恢复。
+
+[NO_REDUNDANT_APPROVAL]
+普通可逆、已授权步骤不重复询问；真正破坏性/秘密/超范围操作仍遵守安全规则。
+
+[NO_VALUE_JUDGMENT_ABORT]
+禁止以没用、太难、以后再做为由停工。
+
+[BLOCKER_STANDARD]
+所有可靠替代路径实际失败后才可BLOCKED。
+
+[SAME_BUILD_ONLY]
+二进制、metadata、映射和反汇编同Build ID。
+
+[NO_CROSS_SCENARIO]
+禁止套用温泉杯、种田杯、DREAMS、Heroes等机制。
+
+[NO_EXTERNAL_TEXT]
+拒绝外部攻略和无原始证据结论。
+
+[EVIDENCE_LABEL]
+每条结论标证据等级和用途。
+
+[NO_FALSE_NEGATIVE]
+未找到不等于不存在。
+
+[NO_CLASS_EXISTENCE_OVERCLAIM]
+类存在不等于服务端唯一来源。
+
+[NO_UNVERIFIED_PROMOTION]
+重复引用不增加证据。
+
+[CONTRADICTION_CHECK]
+提交前主动查冲突。
+
+[FILE_OUTPUT_PROTOCOL]
+固定文件、固定Schema、一次完整生成。
+
+[CI_GREEN_GATE]
+修改必须推送并检查CI，全绿才结束。
+
+[STATUS_SINGLE_FILE]
+只维护 hlpatch-current-status-20260721.md。
+
+[STOP_CODESPACE_ON_FINISH]
+完成或真实阻塞后停止本次Codespace。
+
+[E_END] E-EXECUTE-NOW-CI-GREEN
+
+附录F：正式文件产出协议
+
+[CANONICAL_FILE_CONTRACT]
+本阶段正式仓库产物最多为：
+1. uma-data/scenario_14_ramen_model/training_formula_evidence.json
+2. uma-data/scenario_14_ramen_model/tests/test_training_formula_evidence.py
+3. uma-data/scenario_14_ramen_model/README.md 中不超过30行的短章节
+4. 仅在可重复生成时才添加 extract_training_formula_evidence.py
+5. 必要时更新 Scenario 14 workflow
+
+禁止创建 final_v2、fixed、new、backup、日期流水账或多份状态文件。
+
+[TEMP_VALIDATE_ATOMIC_REPLACE]
+调查过程只写 /tmp/ramen-formula-work/。正式JSON必须先完整生成到临时文件，执行 json.tool、测试和禁词检查后再原子替换。禁止边调查边 append 正式JSON。
+
+[DETERMINISTIC_OUTPUT]
+JSON固定key/数组排序、2空格缩进；重复运行输出一致；禁止当前时间、随机ID、绝对本地路径进入可重建目录。
+
+[BOUNDED_EVIDENCE]
+禁止提交 SO、APK、metadata、dump.cs、script.json、完整日志或chunk。正式JSON只保存方法、地址、指纹、结构化算术操作和短摘要。
+
+[SOURCE_LOCATOR_REQUIRED]
+每条证据必须可定位到仓库/提交/Build ID/文件哈希/方法地址/MDB表与主键。
+
+[NO_RAW_TERMINAL_PASTE]
+禁止把完整终端输出粘入正式文件；先解析必要字段。
+
+[GIT_SMALL_COMMIT]
+一次提交只含本模块证据、测试、README短章节和必要生成脚本/workflow。不得混入二进制、日志、IDE文件和无关格式化。
+
+[STATUS_UPDATE_LAST]
+代码、推送、CI完成后最后更新唯一状态文件。CI未绿不得写完成。
+
+[F_END] F-FIXED-FILES-ATOMIC-REPLACE-CI-GREEN
+
+附录G：固定证据Schema与测试要求
+
+training_formula_evidence.json 顶层固定字段：
+
+schema_version: 1
+scenario_id: 14
+investigation
+build
+methods
+claims
+formula_groups
+invalidated_results
+unknowns
+runtime_validation
+
+investigation.completion_state 只允许：
+INCOMPLETE
+STATIC_PARTIAL
+STATIC_CONFIRMED
+RUNTIME_VALIDATED
+PRODUCTION_INTEGRATED
+
+investigation.production_formula_ready：只有达到充分 CONFIRMED 且运行时验证满足工单时才可 true。
+
+build 必须包含：
+elf_build_id
+libil2cpp_sha256
+metadata_sha256
+mapping_tool.name
+mapping_tool.version
+
+每个 method 必须包含：
+method_id
+class
+method
+signature
+virtual_address
+evidence_status
+operations
+source.mapping_file
+source.binary_build_id
+
+每个 claim 必须包含：
+claim_id
+claim
+status
+allowed_use
+evidence
+counter_evidence
+unknowns
+
+invalidated_results 必须包含跨构建旧地址错误，allowed_use=none。
+
+测试至少验证：
+- scenario_id和schema_version；
+- Build ID为40位十六进制；
+- 两个SHA-256为64位十六进制；
+- claim_id唯一；
+- 非CONFIRMED不能production_formula；
+- 不完整状态时production_formula_ready=false；
+- 禁止外部文本来源；
+- 禁止“地区独立点数”；
+- INVALIDATED的allowed_use必须none；
+- 同构建指纹一致；
+- 未确认公式不能声称complete/final。
+
+README只写短摘要：状态、Build指纹、CONFIRMED、SUPPORTED、UNKNOWN及 evidence.json 链接，不复制大段证据。
+
+证据未完整时提交消息使用：
+data: add Scenario 14 training formula evidence
+
+只有完整确认时才可使用：
+data: confirm Scenario 14 training gain formula
+
+[G_END] G-FIXED-SCHEMA-TEST-GUARD
+
+附录H：Git、CI、状态和Codespace收尾
+
+修改uma-data后必须运行 Scenario 14 全部测试并检查“Scenario 14 Ramen data validation”。
+修改hlpatch后必须升级补丁版本并检查“Build Hachimi URA Plugin”。
+修改uma-juece后必须升级APK版本并检查“Build APK”。
+
+CI失败处理：只读失败步骤的短日志→修复→重测→提交推送→再检查，直到相关CI全绿。
+
+提交前必须执行：
+git status --short
+git diff --check
+git diff --stat
+
+若出现以下文件进入Git，必须停止并移除暂存：
+libil2cpp.so
+global-metadata.dat
+base.apk
+split_config.arm64_v8a.apk
+dump.cs
+script.json
+*.log
+chunk_*.asm
+任何 /tmp 文件
+
+唯一状态文件：hlpatch-current-status-20260721.md。只记录远端提交、Action ID、证据状态和剩余UNKNOWN，不粘贴完整JSON/反汇编，不创建新日期状态文件。
+
+任务完成条件：
+- 同构建映射生成；
+- Apply(int)算术得到同构建证明；
+- GetWithCheckPointPt→地区效果VO链明确；
+- 地区/吃面效果进入训练收益的位置明确或诚实UNKNOWN；
+- 最终收益是否已包含效果得到证明；
+- 舍入位置得到证明或诚实UNKNOWN；
+- 结论有证据等级；
+- 未知未硬编码；
+- 修改已推送；
+- 相关CI全绿；
+- 唯一状态文件更新；
+- 本次启动的Codespace已停止。
+
+[H_END] H-GIT-CI-STATUS-CODESPACE
+
+=== END_OF_WORK_ORDER ===
+EOF_SENTINEL: RAMEN-S14-STRICT-WORK-ORDER-END-20260722
+REQUIRED_SECTIONS: MAIN,A,B,C,D,E,F,G,H
+NEXT_ACTION: RUN_DOTNET_ROLL_FORWARD_MAJOR_THEN_INSTALL_DOTNET6_IF_NEEDED
