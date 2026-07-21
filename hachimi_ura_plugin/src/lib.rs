@@ -5593,38 +5593,41 @@ unsafe fn read_summary_inner_impl() -> String {
                 }
             }
             if cat >= 0 {
+                // Runtime/MDB evidence: category 1 IDs address
+                // single_mode_14_region_effect rows; category 2 IDs address
+                // single_mode_14_basic_effect rows. Keep category 4 generic
+                // until its ID domain is independently proven.
                 let cat_name = match cat {
-                    1 => "試食会",
-                    2 => "地域",
-                    4 => "隠し味",
-                    _ => "他",
+                    1 => "地区效果",
+                    2 => "吃面效果",
+                    4 => "特殊效果",
+                    _ => "未解析效果",
                 };
                 let name = format!("{}#{}", cat_name, eid);
-                let desc = format!("+{}%", val);
+                // EffectValue is not universally a percentage (some effects
+                // add a character, trigger hints, or raise a cap), so the SO
+                // must not invent a display unit. Consumers resolve semantics
+                // from EffectCategory + EffectId and retain this raw value.
                 buffs.push(format!(
-                    r#"{{"name":"{}","EffectId":{},"EffectValue":{},"desc":"{}","type":"Ramen"}}"#,
-                    name, eid, val, desc
+                    r#"{{"name":"{}","EffectCategory":{},"EffectId":{},"EffectValue":{},"desc":"","type":"Ramen"}}"#,
+                    name, cat, eid, val
                 ));
             }
         }
         if ramen_uraf_type >= 0 {
-            let ut_name = match ramen_uraf_type {
-                1 => "試食会",
-                2 => "地域",
-                4 => "隠し味",
-                _ => "?",
-            };
+            // UrafEffectType is a separate enum. Do not reuse ActiveEffect
+            // category labels until its values are independently mapped.
             let state_name = match ramen_uraf_state {
-                0 => "無効",
-                1 => "有効",
-                _ => "?",
+                0 => "无效",
+                1 => "有效",
+                _ => "未知",
             };
             buffs.push(format!(
-                r#"{{"name":"裏風:{}","UrafEffectType":{},"type":"Ramen"}}"#,
-                ut_name, ramen_uraf_type
+                r#"{{"name":"特殊机制","UrafEffectType":{},"type":"Ramen"}}"#,
+                ramen_uraf_type
             ));
             buffs.push(format!(
-                r#"{{"name":"裏風状態","state":"{}","UrafEffectState":{},"type":"Ramen"}}"#,
+                r#"{{"name":"特殊机制状态","state":"{}","UrafEffectState":{},"type":"Ramen"}}"#,
                 state_name, ramen_uraf_state
             ));
         }
