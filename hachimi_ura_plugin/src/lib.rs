@@ -4305,6 +4305,7 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_feeling_info_json = String::new();
     let mut ramen_acquisition_gauges_json = String::new();
     let mut ramen_command_feelings_json = String::new();
+    let mut ramen_command_gauge_vectors_json = String::new();
     // ★ v3.22.39: Aggregate sozai counts while reading FeelingInfo
     let mut ramen_sozai_counts: [i32; 3] = [0, 0, 0]; // [麺=1, スープ=2, トッピング=3]
     let mut ramen_selected_region_ids_json = String::new();
@@ -4555,6 +4556,80 @@ unsafe fn read_summary_inner_impl() -> String {
                                 ));
                             }
                             ramen_command_feelings_json = parts.join(",");
+                        }
+                    }
+                }
+
+                // Final per-command acquisition vectors for the resource planner.
+                // This reads the proven bounded FeelingReduceTurnInfoArray and its
+                // nested FeelingTurnArray only; it does not reconstruct any formula.
+                let fr_off = cached_find_field_offset(ds_class, "FeelingReduceTurnInfoArray");
+                if fr_off >= 0 {
+                    let list_obj = read_ptr_at(dataset_obj, fr_off);
+                    if !list_obj.is_null() {
+                        let lb = list_obj as *const u8;
+                        let count = std::ptr::read_unaligned::<usize>(
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                        );
+                        if count > 0 && count <= 20 {
+                            let mut vectors = Vec::new();
+                            for i in 0..count {
+                                let item = std::ptr::read_unaligned::<*mut c_void>(
+                                    lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
+                                        as *const *mut c_void,
+                                );
+                                if item.is_null() { continue; }
+                                let class = std::ptr::read_unaligned::<*mut c_void>(
+                                    item as *const *mut c_void,
+                                );
+                                let type_off = cached_find_field_offset(class, "CommandType");
+                                let id_off = cached_find_field_offset(class, "CommandId");
+                                let turns_off = cached_find_field_offset(class, "FeelingTurnArray");
+                                let command_type = if type_off >= 0 {
+                                    read_obscured_int_at(item, type_off)
+                                } else { -1 };
+                                let command_id = if id_off >= 0 {
+                                    read_obscured_int_at(item, id_off)
+                                } else { -1 };
+                                if turns_off < 0 { continue; }
+                                let turns = read_ptr_at(item, turns_off);
+                                if turns.is_null() { continue; }
+                                let tb = turns as *const u8;
+                                let turn_count = std::ptr::read_unaligned::<usize>(
+                                    tb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                                );
+                                if turn_count == 0 || turn_count > 3 { continue; }
+                                let mut progress = Vec::new();
+                                for j in 0..turn_count {
+                                    let turn_item = std::ptr::read_unaligned::<*mut c_void>(
+                                        tb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE)
+                                            as *const *mut c_void,
+                                    );
+                                    if turn_item.is_null() { continue; }
+                                    let turn_class = std::ptr::read_unaligned::<*mut c_void>(
+                                        turn_item as *const *mut c_void,
+                                    );
+                                    let feeling_off = cached_find_field_offset(turn_class, "FeelingId");
+                                    let remain_off = cached_find_field_offset(turn_class, "RemainTurn");
+                                    let feeling_id = if feeling_off >= 0 {
+                                        read_obscured_int_at(turn_item, feeling_off)
+                                    } else { -1 };
+                                    let remaining = if remain_off >= 0 {
+                                        read_obscured_int_at(turn_item, remain_off)
+                                    } else { -1 };
+                                    progress.push(format!(
+                                        r#"{{"feeling_id":{},"remaining":{}}}"#,
+                                        feeling_id, remaining
+                                    ));
+                                }
+                                if !progress.is_empty() {
+                                    vectors.push(format!(
+                                        r#"{{"command_type":{},"command_id":{},"progress":[{}]}}"#,
+                                        command_type, command_id, progress.join(",")
+                                    ));
+                                }
+                            }
+                            ramen_command_gauge_vectors_json = vectors.join(",");
                         }
                     }
                 }
@@ -5776,7 +5851,7 @@ unsafe fn read_summary_inner_impl() -> String {
             0
         };
         format!(
-            r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"acquisition_gauges":[{}],"command_feelings":[{}],"selected_region_ids":[{}],"active_effects":[{}],"gauge_gains":[{}]}}"#,
+            r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"acquisition_gauges":[{}],"command_feelings":[{}],"command_gauge_vectors":[{}],"selected_region_ids":[{}],"active_effects":[{}],"gauge_gains":[{}]}}"#,
             ramen_checkpoint_pt,
             moriagari_level,
             ramen_special_feeling_num,
@@ -5787,6 +5862,7 @@ unsafe fn read_summary_inner_impl() -> String {
             ramen_feeling_info_json,
             ramen_acquisition_gauges_json,
             ramen_command_feelings_json,
+            ramen_command_gauge_vectors_json,
             ramen_selected_region_ids_json,
             ramen_active_effects_raw_json,
             ramen_gauge_gains_json
