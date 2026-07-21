@@ -4303,6 +4303,8 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_special_feeling_num: i32 = -1;
     let mut ramen_recommend_type: i32 = -1;
     let mut ramen_feeling_info_json = String::new();
+    let mut ramen_acquisition_gauges_json = String::new();
+    let mut ramen_command_feelings_json = String::new();
     // ★ v3.22.39: Aggregate sozai counts while reading FeelingInfo
     let mut ramen_sozai_counts: [i32; 3] = [0, 0, 0]; // [麺=1, スープ=2, トッピング=3]
     let mut ramen_selected_region_ids_json = String::new();
@@ -4477,6 +4479,86 @@ unsafe fn read_summary_inner_impl() -> String {
                         }
                     }
                 }
+                // Resource acquisition state. Read the two proven bounded lists
+                // directly from DataSet memory; do not call unsafe GetGainCount.
+                let aft_off = cached_find_field_offset(ds_class, "FeelingTurnInfoArray");
+                if aft_off >= 0 {
+                    let list_obj = read_ptr_at(dataset_obj, aft_off);
+                    if !list_obj.is_null() {
+                        let lb = list_obj as *const u8;
+                        let count = std::ptr::read_unaligned::<usize>(
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                        );
+                        if count > 0 && count <= 3 {
+                            let mut parts = Vec::new();
+                            for i in 0..count {
+                                let item = std::ptr::read_unaligned::<*mut c_void>(
+                                    lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
+                                        as *const *mut c_void,
+                                );
+                                if item.is_null() { continue; }
+                                let class = std::ptr::read_unaligned::<*mut c_void>(
+                                    item as *const *mut c_void,
+                                );
+                                let remain_off = cached_find_field_offset(class, "RemainTurn");
+                                let feeling_off = cached_find_field_offset(class, "FeelingId");
+                                let remain = if remain_off >= 0 {
+                                    read_obscured_int_at(item, remain_off)
+                                } else { -1 };
+                                let feeling_id = if feeling_off >= 0 {
+                                    read_obscured_int_at(item, feeling_off)
+                                } else { -1 };
+                                parts.push(format!(
+                                    r#"{{"feeling_id":{},"remaining":{}}}"#,
+                                    feeling_id, remain
+                                ));
+                            }
+                            ramen_acquisition_gauges_json = parts.join(",");
+                        }
+                    }
+                }
+
+                let cf_off = cached_find_field_offset(ds_class, "CommandFeelingInfoArray");
+                if cf_off >= 0 {
+                    let list_obj = read_ptr_at(dataset_obj, cf_off);
+                    if !list_obj.is_null() {
+                        let lb = list_obj as *const u8;
+                        let count = std::ptr::read_unaligned::<usize>(
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                        );
+                        if count > 0 && count <= 20 {
+                            let mut parts = Vec::new();
+                            for i in 0..count {
+                                let item = std::ptr::read_unaligned::<*mut c_void>(
+                                    lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
+                                        as *const *mut c_void,
+                                );
+                                if item.is_null() { continue; }
+                                let class = std::ptr::read_unaligned::<*mut c_void>(
+                                    item as *const *mut c_void,
+                                );
+                                let type_off = cached_find_field_offset(class, "CommandType");
+                                let id_off = cached_find_field_offset(class, "CommandId");
+                                let feeling_off = cached_find_field_offset(class, "FeelingId");
+                                let command_type = if type_off >= 0 {
+                                    read_obscured_int_at(item, type_off)
+                                } else { -1 };
+                                let command_id = if id_off >= 0 {
+                                    read_obscured_int_at(item, id_off)
+                                } else { -1 };
+                                let feeling_id = if feeling_off >= 0 {
+                                    read_obscured_int_at(item, feeling_off)
+                                } else { -1 };
+                                parts.push(format!(
+                                    r#"{{"command_type":{},"command_id":{},"feeling_id":{}}}"#,
+                                    command_type, command_id, feeling_id
+                                ));
+                            }
+                            ramen_command_feelings_json = parts.join(",");
+                        }
+                    }
+                }
+
                 // ★ v3.22.52: Read CommandInfoArray from DataSet for Ramen gains
                 // HomeInfoData.ParamsIncDecInfoArray is empty for Ramen,
                 // real gains are in DataSet.CommandInfoArray[].ParamsIncDecInfoArray
@@ -5694,7 +5776,7 @@ unsafe fn read_summary_inner_impl() -> String {
             0
         };
         format!(
-            r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"selected_region_ids":[{}],"active_effects":[{}],"gauge_gains":[{}]}}"#,
+            r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"acquisition_gauges":[{}],"command_feelings":[{}],"selected_region_ids":[{}],"active_effects":[{}],"gauge_gains":[{}]}}"#,
             ramen_checkpoint_pt,
             moriagari_level,
             ramen_special_feeling_num,
@@ -5703,6 +5785,8 @@ unsafe fn read_summary_inner_impl() -> String {
             ramen_sozai_counts[1],
             ramen_sozai_counts[2],
             ramen_feeling_info_json,
+            ramen_acquisition_gauges_json,
+            ramen_command_feelings_json,
             ramen_selected_region_ids_json,
             ramen_active_effects_raw_json,
             ramen_gauge_gains_json
