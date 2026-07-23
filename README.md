@@ -2,6 +2,11 @@
 
 基于 [Hachimi](https://github.com/akemiko/hachimi) 框架的赛马娘育成辅助插件，通过注入游戏进程读取 IL2CPP 内存数据，提供 HTTP 端点查询与自动推送能力。
 
+> **2026-07-23（v3.24.32）**
+> - HTTP 服务仅绑定 `127.0.0.1:18765`；局域网/电脑调试请用 `adb forward tcp:18765 tcp:18765`
+> - 拉面杯候选地区池只在选择回合（3/24/48）以 `selectable_region_ids_derived` 输出；其余回合移至 `region_pool_for_latest_selection_phase_derived` 并标 `currently_selectable_status`
+> - 体积数据导出（reverse/ 下 19 个 JSON/TXT，211MB）已迁移至 [uma-data exports/](https://github.com/xf8410/uma-data/tree/main/exports)（LFS）；仓库历史已重写瘦身，旧 commit SHA 失效，请按 tag 检索
+
 ## 功能亮点
 
 - **实时属性读取**：速度/耐力/力量/毅力/贤、体力/体力上限/技能Pt/粉丝数/干劲
