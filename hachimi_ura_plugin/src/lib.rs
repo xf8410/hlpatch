@@ -6455,6 +6455,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     const DL_ALLOWED: &[&str] = &[
         "/summary", "/scenario", "/data",
         "/api/sniff", "/api/sniff/diag", "/api/event/choices",
+        "/debug/event_reward_targets",
         "/debug/all", "/debug/params", "/debug/cmdinfo", "/debug/breeders",
         "/debug/training_partners", "/debug/rameninfo", "/debug/laststep",
         "/debug/storydata", "/debug/ramenfields", "/debug/gauge", "/debug/gauge2",
@@ -6468,7 +6469,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6746,6 +6747,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/training_log_dl" {
         // Do not re-export legacy files containing the invalid u32x4 interpretation.
         r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
+    } else if path == "/debug/event_reward_targets" {
+        // v3.24.33: fixed-list, metadata-only discovery; no object reads or invokes.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_event_reward_targets() }))
+            .unwrap_or_else(|_| r#"{"error":"event_reward_targets_panic"}"#.to_string())
     } else if path == "/debug/ramen_formula_targets" {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_formula_targets() }))
             .unwrap_or_else(|_| r#"{"error":"ramen_formula_targets_panic"}"#.to_string())
@@ -13790,6 +13795,105 @@ unsafe fn debug_ramen_region_select() -> String {
         is_selection_turn,
         candidates_json, selectable_getter_found,
         methods_json, json_escape(&mdb_status))
+}
+
+/// v3.24.33: metadata-only event-choice reward target inventory.
+/// Fixed allow-list; no runtime object reads, method calls, hooks, or mutation.
+unsafe fn debug_event_reward_targets() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+
+    let get_methods_ptr = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+    let get_name_ptr = resolve_il2cpp_symbol("il2cpp_method_get_name");
+    let get_param_count_ptr = resolve_il2cpp_symbol("il2cpp_method_get_param_count");
+    let get_return_type_ptr = resolve_il2cpp_symbol("il2cpp_method_get_return_type");
+    let type_get_name_ptr = resolve_il2cpp_symbol("il2cpp_type_get_name");
+    if get_methods_ptr.is_null() || get_name_ptr.is_null() || get_param_count_ptr.is_null() {
+        return r#"{"error":"method_metadata_api_not_found"}"#.to_string();
+    }
+    let get_methods: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void =
+        std::mem::transmute(get_methods_ptr);
+    let get_name: unsafe extern "C" fn(*const c_void) -> *const c_char =
+        std::mem::transmute(get_name_ptr);
+    let get_param_count: unsafe extern "C" fn(*const c_void) -> u32 =
+        std::mem::transmute(get_param_count_ptr);
+    let get_return_type: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> =
+        if get_return_type_ptr.is_null() { None } else { Some(std::mem::transmute(get_return_type_ptr)) };
+    let type_get_name: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> =
+        if type_get_name_ptr.is_null() { None } else { Some(std::mem::transmute(type_get_name_ptr)) };
+
+    const TARGETS: &[&str] = &[
+        "SingleModeGetChoiceRewardResponse",
+        "SingleModeCookGetChoiceRewardResponse",
+        "SingleModeRamenGetChoiceRewardResponse",
+        "SingleModeArcGetChoiceRewardResponse",
+        "SingleModeBreedersGetChoiceRewardResponse",
+        "SingleModeFreeGetChoiceRewardResponse",
+        "SingleModeLegendGetChoiceRewardResponse",
+        "SingleModeLiveGetChoiceRewardResponse",
+        "SingleModeMechaGetChoiceRewardResponse",
+        "SingleModeOnsenGetChoiceRewardResponse",
+        "SingleModePioneerGetChoiceRewardResponse",
+        "SingleModeSportGetChoiceRewardResponse",
+        "SingleModeTeamGetChoiceRewardResponse",
+        "SingleModeVenusGetChoiceRewardResponse",
+        "SingleModeChoiceRewardInfo",
+        "EventChoiceBranchReward",
+        "EventChoiceRewardGainParam",
+        "SingleModeStoryChoiceRewardUI",
+        "StoryChoiceParam",
+        "StoryChoiceController",
+    ];
+    const KEYWORDS: &[&str] = &[
+        "Choice", "Reward", "Branch", "Gain", "Effect", "Param",
+        "Motivation", "Vital", "Hp", "Skill", "Hint", "Status",
+    ];
+
+    let mut classes = Vec::with_capacity(TARGETS.len());
+    let mut found_count = 0usize;
+    for class_name in TARGETS {
+        let class = find_class_by_short_name(image, class_name);
+        if class.is_null() {
+            classes.push(format!(r#"{{"name":"{}","found":false}}"#, class_name));
+            continue;
+        }
+        found_count += 1;
+        let fields = enumerate_class_fields(class);
+        let mut methods = Vec::new();
+        let mut iter: *mut c_void = ptr::null_mut();
+        loop {
+            let method = get_methods(class, &mut iter);
+            if method.is_null() || methods.len() >= 64 { break; }
+            let name_ptr = get_name(method);
+            if name_ptr.is_null() { continue; }
+            let name = CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
+            if !KEYWORDS.iter().any(|word| name.contains(word)) { continue; }
+            let param_count = get_param_count(method).min(32);
+            let return_type = get_return_type
+                .and_then(|f| {
+                    let ty = f(method);
+                    if ty.is_null() { return None; }
+                    type_get_name.and_then(|name_fn| {
+                        let p = name_fn(ty);
+                        if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                    })
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+            methods.push(format!(
+                r#"{{"name":"{}","param_count":{},"return_type":"{}"}}"#,
+                json_escape(&name), param_count, json_escape(&return_type)
+            ));
+        }
+        classes.push(format!(
+            r#"{{"name":"{}","found":true,"fields":{},"relevant_method_count":{},"relevant_methods":[{}]}}"#,
+            class_name, fields, methods.len(), methods.join(",")
+        ));
+    }
+    format!(
+        r#"{{"ok":true,"schema_version":1,"plugin_version":"{}","source":"current_runtime_il2cpp_metadata","read_only":true,"runtime_object_reads":false,"runtime_invokes":false,"hooks_installed":false,"target_count":{},"found_count":{},"method_cap_per_class":64,"classes":[{}]}}"#,
+        PLUGIN_VERSION, TARGETS.len(), found_count, classes.join(",")
+    )
 }
 
 unsafe fn debug_ramen_formula_targets() -> String {
