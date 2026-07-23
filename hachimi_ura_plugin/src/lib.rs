@@ -6455,7 +6455,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     const DL_ALLOWED: &[&str] = &[
         "/summary", "/scenario", "/data",
         "/api/sniff", "/api/sniff/diag", "/api/event/choices",
-        "/debug/event_reward_targets",
+        "/debug/event_reward_targets", "/debug/resource_meta_schema",
         "/debug/all", "/debug/params", "/debug/cmdinfo", "/debug/breeders",
         "/debug/training_partners", "/debug/rameninfo", "/debug/laststep",
         "/debug/storydata", "/debug/ramenfields", "/debug/gauge", "/debug/gauge2",
@@ -6469,7 +6469,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets","/debug/resource_storage","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -7276,6 +7276,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         return;
     } else if path == "/debug/resource_storage" {
         debug_resource_storage()
+    } else if path == "/debug/resource_meta_schema" {
+        debug_resource_meta_schema()
     } else if path == "/debug/resource_meta_dl" {
         // Allow only the index and its known SQLite sidecars; never an arbitrary path.
         let part = parse_query(&full_uri, "part");
@@ -9997,6 +9999,88 @@ fn find_resource_storage() -> Result<(String, String), String> {
     Err("resource_storage_not_found".to_string())
 }
 
+
+/// Inspect the downloaded resource index in place. This is strictly read-only,
+/// returns bounded schema data and a small set of rows containing "story".
+fn debug_resource_meta_schema() -> String {
+    let (meta, _) = match find_resource_storage() {
+        Ok(v) => v,
+        Err(e) => return format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
+    };
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = match Connection::open_with_flags(&meta, flags) {
+        Ok(v) => v,
+        Err(e) => return format!(r#"{{"ok":false,"error":"meta_open_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
+    };
+    let mut master = match conn.prepare(
+        "SELECT name, type, COALESCE(sql,'') FROM sqlite_master \
+         WHERE type IN ('table','view') ORDER BY type, name LIMIT 128"
+    ) {
+        Ok(v) => v,
+        Err(e) => return format!(r#"{{"ok":false,"error":"schema_query_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
+    };
+    let objects: Vec<(String, String, String)> = match master.query_map([], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    }) {
+        Ok(rows) => rows.filter_map(Result::ok).collect(),
+        Err(e) => return format!(r#"{{"ok":false,"error":"schema_read_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
+    };
+
+    let quote_ident = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let mut object_json = Vec::new();
+    let mut story_samples = Vec::new();
+    for (name, kind, sql) in objects.iter() {
+        let pragma = format!("PRAGMA table_info({})", quote_ident(name));
+        let columns: Vec<(String, String)> = conn.prepare(&pragma).ok().and_then(|mut stmt| {
+            stmt.query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2).unwrap_or_default())))
+                .ok().map(|rows| rows.filter_map(Result::ok).take(64).collect())
+        }).unwrap_or_default();
+        let cols_json: Vec<String> = columns.iter().map(|(n, t)| format!(
+            r#"{{"name":"{}","type":"{}"}}"#, json_escape(n), json_escape(t)
+        )).collect();
+        let sql_short: String = sql.chars().take(1000).collect();
+        object_json.push(format!(
+            r#"{{"name":"{}","type":"{}","sql":"{}","columns":[{}]}}"#,
+            json_escape(name), json_escape(kind), json_escape(&sql_short), cols_json.join(",")
+        ));
+
+        if kind != "table" || columns.is_empty() || story_samples.len() >= 40 { continue; }
+        let selected: Vec<&(String, String)> = columns.iter().take(16).collect();
+        let predicates: Vec<String> = selected.iter().map(|(c, _)|
+            format!("CAST({} AS TEXT) LIKE '%story%'", quote_ident(c))).collect();
+        let query = format!(
+            "SELECT {} FROM {} WHERE {} LIMIT {}",
+            selected.iter().map(|(c, _)| quote_ident(c)).collect::<Vec<_>>().join(","),
+            quote_ident(name), predicates.join(" OR "), 40usize.saturating_sub(story_samples.len())
+        );
+        if let Ok(mut stmt) = conn.prepare(&query) {
+            let col_count = selected.len();
+            if let Ok(mut rows) = stmt.query([]) {
+                while story_samples.len() < 40 {
+                    let row = match rows.next() { Ok(Some(v)) => v, _ => break };
+                    let mut values = Vec::new();
+                    for i in 0..col_count {
+                        let text = match row.get_ref(i) {
+                            Ok(rusqlite::types::ValueRef::Null) => "null".to_string(),
+                            Ok(rusqlite::types::ValueRef::Integer(v)) => v.to_string(),
+                            Ok(rusqlite::types::ValueRef::Real(v)) => v.to_string(),
+                            Ok(rusqlite::types::ValueRef::Text(v)) => String::from_utf8_lossy(v).chars().take(500).collect(),
+                            Ok(rusqlite::types::ValueRef::Blob(v)) => format!("<blob:{} bytes>", v.len()),
+                            Err(_) => "<read_error>".to_string(),
+                        };
+                        values.push(format!(r#""{}":"{}""#, json_escape(&selected[i].0), json_escape(&text)));
+                    }
+                    story_samples.push(format!(r#"{{"table":"{}","row":{{{}}}}}"#, json_escape(name), values.join(",")));
+                }
+            }
+        }
+    }
+    format!(
+        r#"{{"ok":true,"read_only":true,"meta_path":"{}","meta_size":{},"object_limit":128,"column_limit":64,"story_sample_limit":40,"objects":[{}],"story_samples":[{}]}}"#,
+        json_escape(&meta), std::fs::metadata(&meta).map(|m| m.len()).unwrap_or(0),
+        object_json.join(","), story_samples.join(",")
+    )
+}
 fn debug_resource_storage() -> String {
     match find_resource_storage() {
         Ok((meta, dat)) => {
