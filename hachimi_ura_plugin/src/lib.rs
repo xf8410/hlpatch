@@ -6469,7 +6469,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets","/debug/resource_storage","/debug/resource_meta_dl","/debug/resource_file_dl"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -7269,6 +7269,42 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let keyword = parse_query(&full_uri, "keyword");
         let letter = parse_query(&full_uri, "letter");
         unsafe { il2cpp_search_methods(&keyword, &letter) }
+    } else if path == "/debug/resource_storage" {
+        debug_resource_storage()
+    } else if path == "/debug/resource_meta_dl" {
+        // Allow only the index and its known SQLite sidecars; never an arbitrary path.
+        let part = parse_query(&full_uri, "part");
+        let (suffix, filename) = match part.as_str() {
+            "journal" => ("-journal", "meta-journal"),
+            "wal" => ("-wal", "meta-wal"),
+            "shm" => ("-shm", "meta-shm"),
+            _ => ("", "meta"),
+        };
+        match find_resource_storage() {
+            Ok((meta, _)) => {
+                let target = format!("{}{}", meta, suffix);
+                stream_private_file(&mut stream, &target, filename);
+                return;
+            },
+            Err(e) => format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
+        }
+    } else if path == "/debug/resource_file_dl" {
+        let hash = parse_query(&full_uri, "hash").to_ascii_lowercase();
+        if !valid_resource_hash(&hash) {
+            r#"{"error":"invalid_hash","requirement":"8..128 hexadecimal characters"}"#.to_string()
+        } else {
+            match find_resource_storage() {
+                Ok((_, dat)) => {
+                    let target = std::path::Path::new(&dat).join(&hash[..2]).join(&hash);
+                    if !target.is_file() {
+                        format!(r#"{"error":"resource_not_found","hash":"{}"}"#, hash)
+                    } else {
+                        stream_private_file(&mut stream, &target.to_string_lossy(), &hash); return;
+                    }
+                },
+                Err(e) => format!(r#"{"error":"{}"}"#, json_escape(&e)),
+            }
+        }
     } else if path == "/mdb" {
         // v3.22.51: Serve raw MasterDB file for client-side processing
         // Uses marker string; binary file sent in response handler below
@@ -9792,6 +9828,111 @@ unsafe fn search_classes(_keyword: &str) -> String {
 // ============================================================
 
 /// Find MasterDB file on the device filesystem
+/// v3.24.34: locate the game's downloaded resource index and hash store.
+/// The scan is bounded (depth <= 4, directories <= 512), does not descend into
+/// `dat`, does not follow symlinks, and never writes game files.
+fn find_resource_storage() -> Result<(String, String), String> {
+    use std::collections::{HashSet, VecDeque};
+    use std::path::{Path, PathBuf};
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(bytes) = std::fs::read("/proc/self/cmdline") {
+        if let Some(pkg) = bytes.split(|&b| b == 0).find(|s| !s.is_empty())
+            .and_then(|s| std::str::from_utf8(s).ok()) {
+            let pkg = pkg.split(':').next().unwrap_or(pkg);
+            if !pkg.is_empty() && pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+                roots.push(PathBuf::from(format!("/data/user/0/{}/files", pkg)));
+                roots.push(PathBuf::from(format!("/data/data/{}/files", pkg)));
+                roots.push(PathBuf::from(format!("/storage/emulated/0/Android/data/{}/files", pkg)));
+            }
+        }
+    }
+    if let Some(mdb) = find_mdb_path() {
+        if let Some(files) = Path::new(&mdb).parent().and_then(|p| p.parent()) {
+            roots.push(files.to_path_buf());
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut queue = VecDeque::new();
+    for root in roots {
+        if root.is_dir() && seen.insert(root.clone()) { queue.push_back((root, 0usize)); }
+    }
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = queue.pop_front() {
+        visited += 1;
+        if visited > 512 { return Err("scan_limit_reached".to_string()); }
+        let meta = dir.join("meta");
+        let dat = dir.join("dat");
+        if meta.is_file() && dat.is_dir() {
+            return Ok((meta.to_string_lossy().into_owned(), dat.to_string_lossy().into_owned()));
+        }
+        if depth >= 4 { continue; }
+        let entries = match std::fs::read_dir(&dir) { Ok(v) => v, Err(_) => continue };
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() { Ok(v) => v, Err(_) => continue };
+            if !file_type.is_dir() || file_type.is_symlink() { continue; }
+            let name = entry.file_name();
+            if name == "dat" { continue; }
+            let child = entry.path();
+            if seen.insert(child.clone()) { queue.push_back((child, depth + 1)); }
+        }
+    }
+    Err("resource_storage_not_found".to_string())
+}
+
+fn debug_resource_storage() -> String {
+    match find_resource_storage() {
+        Ok((meta, dat)) => {
+            let meta_size = std::fs::metadata(&meta).map(|m| m.len()).unwrap_or(0);
+            let journal = format!("{}-journal", meta);
+            let wal = format!("{}-wal", meta);
+            let shm = format!("{}-shm", meta);
+            format!(
+                r#"{{"ok":true,"read_only":true,"scan_max_depth":4,"scan_max_directories":512,"meta":{{"path":"{}","size":{}}},"dat":{{"path":"{}"}},"sidecars":{{"journal":{},"wal":{},"shm":{}}},"downloads":{{"meta":"/debug/resource_meta_dl","resource":"/debug/resource_file_dl?hash=HEX_HASH"}}}}"#,
+                json_escape(&meta), meta_size, json_escape(&dat),
+                std::path::Path::new(&journal).is_file(),
+                std::path::Path::new(&wal).is_file(),
+                std::path::Path::new(&shm).is_file()
+            )
+        }
+        Err(error) => format!(r#"{{"ok":false,"error":"{}","read_only":true}}"#, json_escape(&error)),
+    }
+}
+
+fn valid_resource_hash(hash: &str) -> bool {
+    (8..=128).contains(&hash.len()) && hash.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Stream a private game file without loading it into memory.
+fn stream_private_file(stream: &mut std::net::TcpStream, path: &str, filename: &str) {
+    use std::io::{Read, Write};
+    let mut file = match std::fs::File::open(path) {
+        Ok(v) => v,
+        Err(e) => {
+            let body = format!(r#"{{"error":"file_open_failed","detail":"{}"}}"#, json_escape(&e.to_string()));
+            let response = format!("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+            let _ = stream.write_all(response.as_bytes());
+            return;
+        }
+    };
+    let size = match file.metadata() { Ok(v) if v.is_file() => v.len(), _ => 0 };
+    let safe_name: String = filename.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
+        .take(140).collect();
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        if safe_name.is_empty() { "download.bin" } else { &safe_name }, size
+    );
+    if stream.write_all(header.as_bytes()).is_err() { return; }
+    let mut buffer = [0u8; 65536];
+    loop {
+        let count = match file.read(&mut buffer) { Ok(0) | Err(_) => break, Ok(n) => n };
+        if stream.write_all(&buffer[..count]).is_err() { break; }
+    }
+    let _ = stream.flush();
+}
+
 fn find_mdb_path() -> Option<String> {
     let paths = [
         "/data/data/jp.pokemon.pokeuma/files/master/master.mdb",
