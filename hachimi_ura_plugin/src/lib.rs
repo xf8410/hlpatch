@@ -6455,7 +6455,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     const DL_ALLOWED: &[&str] = &[
         "/summary", "/scenario", "/data",
         "/api/sniff", "/api/sniff/diag", "/api/event/choices",
-        "/debug/event_reward_targets", "/debug/resource_meta_schema",
+        "/debug/event_reward_targets", "/debug/resource_meta_schema", "/debug/resource_meta_probe",
         "/debug/all", "/debug/params", "/debug/cmdinfo", "/debug/breeders",
         "/debug/training_partners", "/debug/rameninfo", "/debug/laststep",
         "/debug/storydata", "/debug/ramenfields", "/debug/gauge", "/debug/gauge2",
@@ -6469,7 +6469,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -7278,6 +7278,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         debug_resource_storage()
     } else if path == "/debug/resource_meta_schema" {
         debug_resource_meta_schema()
+    } else if path == "/debug/resource_meta_probe" {
+        debug_resource_meta_probe()
     } else if path == "/debug/resource_meta_dl" {
         // Allow only the index and its known SQLite sidecars; never an arbitrary path.
         let part = parse_query(&full_uri, "part");
@@ -10002,6 +10004,59 @@ fn find_resource_storage() -> Result<(String, String), String> {
 
 /// Inspect the downloaded resource index in place. This is strictly read-only,
 /// returns bounded schema data and a small set of rows containing "story".
+
+/// Return bounded binary diagnostics for non-SQLite resource indexes.
+fn debug_resource_meta_probe() -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let (meta, _) = match find_resource_storage() {
+        Ok(v) => v,
+        Err(e) => return format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
+    };
+    let mut file = match std::fs::File::open(&meta) {
+        Ok(v) => v,
+        Err(e) => return format!(r#"{{"ok":false,"error":"open_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
+    };
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut head = vec![0u8; 65536.min(size as usize)];
+    let head_read = file.read(&mut head).unwrap_or(0);
+    head.truncate(head_read);
+    let tail_len = 65536.min(size as usize);
+    let mut tail = vec![0u8; tail_len];
+    if tail_len > 0 {
+        let _ = file.seek(SeekFrom::Start(size.saturating_sub(tail_len as u64)));
+        let n = file.read(&mut tail).unwrap_or(0);
+        tail.truncate(n);
+    }
+    let hex = |data: &[u8]| -> String {
+        data.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("")
+    };
+    let ascii = |data: &[u8]| -> String {
+        data.iter().map(|b| if (0x20..=0x7e).contains(b) { *b as char } else { '.' }).collect()
+    };
+    let strings = |data: &[u8], base: u64| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        while start < data.len() && out.len() < 80 {
+            while start < data.len() && !(0x20..=0x7e).contains(&data[start]) { start += 1; }
+            let mut end = start;
+            while end < data.len() && (0x20..=0x7e).contains(&data[end]) { end += 1; }
+            if end.saturating_sub(start) >= 4 {
+                let value: String = data[start..end].iter().map(|b| *b as char).take(300).collect();
+                out.push(format!(r#"{{"offset":{},"value":"{}"}}"#, base + start as u64, json_escape(&value)));
+            }
+            start = end.saturating_add(1);
+        }
+        out
+    };
+    let mut samples = strings(&head, 0);
+    samples.extend(strings(&tail, size.saturating_sub(tail.len() as u64)));
+    format!(
+        r#"{{"ok":true,"read_only":true,"path":"{}","size":{},"sqlite_header":{},"head_hex":"{}","head_ascii":"{}","tail_hex":"{}","printable_samples":[{}]}}"#,
+        json_escape(&meta), size, head.starts_with(b"SQLite format 3\0"),
+        hex(&head[..head.len().min(256)]), json_escape(&ascii(&head[..head.len().min(256)])),
+        hex(&tail[tail.len().saturating_sub(128)..]), samples.join(",")
+    )
+}
 fn debug_resource_meta_schema() -> String {
     let (meta, _) = match find_resource_storage() {
         Ok(v) => v,
