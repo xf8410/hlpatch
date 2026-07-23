@@ -6469,7 +6469,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets","/debug/resource_storage","/debug/resource_meta_dl","/debug/resource_file_dl"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets","/debug/resource_storage","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -7269,6 +7269,11 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let keyword = parse_query(&full_uri, "keyword");
         let letter = parse_query(&full_uri, "letter");
         unsafe { il2cpp_search_methods(&keyword, &letter) }
+    } else if path == "/debug/private_file_inventory" {
+        debug_private_file_inventory(&full_uri)
+    } else if path == "/debug/private_file_dl" {
+        download_private_file_by_id(&mut stream, &full_uri);
+        return;
     } else if path == "/debug/resource_storage" {
         debug_resource_storage()
     } else if path == "/debug/resource_meta_dl" {
@@ -9831,6 +9836,117 @@ unsafe fn search_classes(_keyword: &str) -> String {
 /// v3.24.34: locate the game's downloaded resource index and hash store.
 /// The scan is bounded (depth <= 4, directories <= 512), does not descend into
 /// `dat`, does not follow symlinks, and never writes game files.
+#[derive(Clone)]
+struct PrivateFileEntry {
+    id: usize,
+    relative_path: String,
+    absolute_path: String,
+    size: u64,
+    kind: &'static str,
+}
+
+fn private_app_root() -> Result<std::path::PathBuf, String> {
+    let bytes = std::fs::read("/proc/self/cmdline").map_err(|_| "cmdline_unavailable")?;
+    let pkg = bytes.split(|&b| b == 0).find(|s| !s.is_empty())
+        .and_then(|s| std::str::from_utf8(s).ok()).ok_or("package_unknown")?;
+    let pkg = pkg.split(':').next().unwrap_or(pkg);
+    if pkg.is_empty() || !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+        return Err("invalid_package_name".to_string());
+    }
+    for root in [format!("/data/user/0/{}", pkg), format!("/data/data/{}", pkg)] {
+        let path = std::path::PathBuf::from(root);
+        if path.is_dir() { return Ok(path); }
+    }
+    Err("private_app_root_not_found".to_string())
+}
+
+fn classify_private_file(path: &std::path::Path) -> &'static str {
+    let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
+    if name == "meta" || name.starts_with("meta-") { "resource_index" }
+    else if name.ends_with(".db") || name.ends_with(".sqlite") || name.ends_with(".mdb") { "database" }
+    else if name.ends_with(".xml") { "xml" }
+    else if name.ends_with(".json") { "json" }
+    else if name.ends_with(".log") || name.ends_with(".txt") { "text" }
+    else if name.ends_with(".apk") { "apk" }
+    else if name.ends_with(".so") { "native_library" }
+    else { "binary" }
+}
+
+/// Build a deterministic, bounded snapshot of private files. `dat` is skipped
+/// because its hash objects are already available through resource_file_dl.
+fn private_file_inventory() -> Result<Vec<PrivateFileEntry>, String> {
+    use std::collections::VecDeque;
+    let root = private_app_root()?;
+    let mut queue = VecDeque::from([(root.clone(), 0usize)]);
+    let mut rows: Vec<(String, String, u64, &'static str)> = Vec::new();
+    let mut visited_dirs = 0usize;
+    while let Some((dir, depth)) = queue.pop_front() {
+        visited_dirs += 1;
+        if visited_dirs > 4096 || rows.len() >= 20000 { break; }
+        let entries = match std::fs::read_dir(&dir) { Ok(v) => v, Err(_) => continue };
+        for entry in entries.flatten() {
+            let ty = match entry.file_type() { Ok(v) => v, Err(_) => continue };
+            if ty.is_symlink() { continue; }
+            let path = entry.path();
+            if ty.is_dir() {
+                if depth < 10 && entry.file_name() != "dat" { queue.push_back((path, depth + 1)); }
+                continue;
+            }
+            if !ty.is_file() { continue; }
+            let relative = path.strip_prefix(&root).unwrap_or(&path).to_string_lossy().into_owned();
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let kind = classify_private_file(&path);
+            rows.push((relative, path.to_string_lossy().into_owned(), size, kind));
+            if rows.len() >= 20000 { break; }
+        }
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(rows.into_iter().enumerate().map(|(id, (relative_path, absolute_path, size, kind))|
+        PrivateFileEntry { id, relative_path, absolute_path, size, kind }).collect())
+}
+
+fn debug_private_file_inventory(full_uri: &str) -> String {
+    if parse_query(full_uri, "confirm") != "1" {
+        return r#"{"ok":false,"error":"explicit_confirmation_required","warning":"private files may contain account session cookie or device identifiers","retry":"/debug/private_file_inventory?confirm=1&offset=0&limit=200"}"#.to_string();
+    }
+    let offset = parse_query(full_uri, "offset").parse::<usize>().unwrap_or(0);
+    let limit = parse_query(full_uri, "limit").parse::<usize>().unwrap_or(200).clamp(1, 500);
+    match private_file_inventory() {
+        Ok(entries) => {
+            let total = entries.len();
+            let rows: Vec<String> = entries.iter().skip(offset).take(limit).map(|e| format!(
+                r#"{{"id":{},"path":"{}","size":{},"kind":"{}","download":"/debug/private_file_dl?confirm=1&id={}"}}"#,
+                e.id, json_escape(&e.relative_path), e.size, e.kind, e.id)).collect();
+            format!(
+                r#"{{"ok":true,"snapshot_rebuilt_each_request":true,"dat_skipped":true,"max_depth":10,"max_files":20000,"total":{},"offset":{},"limit":{},"files":[{}]}}"#,
+                total, offset, limit, rows.join(","))
+        }
+        Err(e) => format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
+    }
+}
+
+fn download_private_file_by_id(stream: &mut std::net::TcpStream, full_uri: &str) {
+    if parse_query(full_uri, "confirm") != "1" {
+        stream_private_file(stream, "/__explicit_confirmation_required__", "confirmation_required");
+        return;
+    }
+    let id = match parse_query(full_uri, "id").parse::<usize>() {
+        Ok(v) => v,
+        Err(_) => {
+            stream_private_file(stream, "/__invalid_private_file_id__", "invalid");
+            return;
+        }
+    };
+    match private_file_inventory().ok().and_then(|v| v.into_iter().find(|e| e.id == id)) {
+        Some(entry) => {
+            let name = std::path::Path::new(&entry.relative_path).file_name()
+                .and_then(|v| v.to_str()).unwrap_or("private_file.bin");
+            stream_private_file(stream, &entry.absolute_path, name);
+        }
+        None => stream_private_file(stream, "/__private_file_not_found__", "not_found"),
+    }
+}
+
 fn find_resource_storage() -> Result<(String, String), String> {
     use std::collections::{HashSet, VecDeque};
     use std::path::{Path, PathBuf};
