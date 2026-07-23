@@ -7302,12 +7302,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 Ok((_, dat)) => {
                     let target = std::path::Path::new(&dat).join(&hash[..2]).join(&hash);
                     if !target.is_file() {
-                        format!(r#"{"error":"resource_not_found","hash":"{}"}"#, hash)
+                        format!(r#"{{"error":"resource_not_found","hash":"{}"}}"#, hash)
                     } else {
                         stream_private_file(&mut stream, &target.to_string_lossy(), &hash); return;
                     }
                 },
-                Err(e) => format!(r#"{"error":"{}"}"#, json_escape(&e)),
+                Err(e) => format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
             }
         }
     } else if path == "/mdb" {
