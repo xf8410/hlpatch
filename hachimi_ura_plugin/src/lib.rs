@@ -4311,6 +4311,8 @@ unsafe fn read_summary_inner_impl() -> String {
     let mut ramen_selected_region_ids_json = String::new();
     // ★ v3.24.30: MDB-derived candidate pool (labeled; not a runtime-native read)
     let mut ramen_selectable_region_ids_derived_json = String::new();
+    // ★ v3.24.32: stale phase pool between selection rounds (not selectable now)
+    let mut ramen_region_pool_phase_derived_json = String::new();
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
@@ -4377,11 +4379,19 @@ unsafe fn read_summary_inner_impl() -> String {
                 if asra_off >= 0 {
                     let list_obj = read_ptr_at(dataset_obj, asra_off);
                     let all_selected = inline_obscured_int_list_vec(list_obj);
-                    let (_active, candidates, _status) =
+                    let (_active, active_round_turn, candidates, _status) =
                         ramen_derive_selectable_regions(total_turn_num as i64, &all_selected);
+                    // ★ v3.24.32: the derived pool is only "selectable" on an
+                    // exact selection round (e.g. turn 3/24/48). Between rounds
+                    // it is leftover from the last phase — report it under a
+                    // phase-pool field with currently_selectable_status=unknown.
                     if !candidates.is_empty() {
-                        ramen_selectable_region_ids_derived_json =
-                            candidates.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                        let joined = candidates.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                        if active_round_turn == Some(total_turn_num as i64) {
+                            ramen_selectable_region_ids_derived_json = joined;
+                        } else {
+                            ramen_region_pool_phase_derived_json = joined;
+                        }
                     }
                 }
                 // ActiveEffectArray (List<ActiveEffectInfo>)
@@ -5866,7 +5876,7 @@ unsafe fn read_summary_inner_impl() -> String {
             0
         };
         format!(
-            r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"acquisition_gauges":[{}],"command_feelings":[{}],"command_gauge_vectors":[{}],"selected_region_ids":[{}],"selectable_region_ids_derived":[{}],"selectable_region_ids_source":"{}","active_effects":[{}],"gauge_gains":[{}]}}"#,
+            r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"acquisition_gauges":[{}],"command_feelings":[{}],"command_gauge_vectors":[{}],"selected_region_ids":[{}],"selectable_region_ids_derived":[{}],"selectable_region_ids_source":"{}","region_pool_for_latest_selection_phase_derived":[{}],"currently_selectable_status":"{}","active_effects":[{}],"gauge_gains":[{}]}}"#,
             ramen_checkpoint_pt,
             moriagari_level,
             ramen_special_feeling_num,
@@ -5884,6 +5894,14 @@ unsafe fn read_summary_inner_impl() -> String {
                 "unknown"
             } else {
                 "mdb_pool_minus_all_selected_derivation"
+            },
+            ramen_region_pool_phase_derived_json,
+            if !ramen_selectable_region_ids_derived_json.is_empty() {
+                "selection_turn_pool_is_current_derived"
+            } else if !ramen_region_pool_phase_derived_json.is_empty() {
+                "unknown_between_selection_rounds"
+            } else {
+                "unknown"
             },
             ramen_active_effects_raw_json,
             ramen_gauge_gains_json
@@ -6134,9 +6152,14 @@ fn start_http_server() {
     HTTP_RUNNING.store(true, Ordering::Relaxed);
     std::thread::spawn(|| {
         unsafe {
-            ura_log(3, "HTTP starting on 0.0.0.0:18765");
+            // ★ v3.24.32: bind loopback only. The floating-window App talks to
+            // the plugin on the same device, and desktop/LAN debugging works
+            // via `adb forward tcp:18765 tcp:18765`. Binding 0.0.0.0 exposed
+            // /il2cpp/call, /il2cpp/read_mem, /update etc. to the whole LAN
+            // without authentication.
+            ura_log(3, "HTTP starting on 127.0.0.1:18765");
         }
-        let listener = match std::net::TcpListener::bind("0.0.0.0:18765") {
+        let listener = match std::net::TcpListener::bind("127.0.0.1:18765") {
             Ok(l) => l,
             Err(e) => {
                 unsafe {
@@ -13643,21 +13666,24 @@ unsafe fn enum_method_names_containing(class: *mut c_void, needle: &str) -> Vec<
 }
 
 /// ★ v3.24.30: derive the region candidate pool from MDB (read-only).
-/// Returns (active_region_select_type, candidate_region_ids, mdb_status).
+/// Returns (active_region_select_type, active_round_turn, candidate_region_ids, mdb_status).
 /// Active round = latest single_mode_14_region_select round with
 /// turn <= total_turn, else the first upcoming round; candidates =
 /// pool(active type) minus all_selected. This is a DERIVATION, never a
 /// runtime-native read; callers must label it as such.
-fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Option<i64>, Vec<i64>, String) {
+/// ★ v3.24.32: callers MUST check `active_round_turn == total_turn` before
+/// presenting the pool as currently selectable — between selection rounds
+/// the pool is stale ("leftover from the last phase"), not selectable now.
+fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Option<i64>, Option<i64>, Vec<i64>, String) {
     let mut round_types: Vec<(i64, i64)> = Vec::new(); // (turn, region_select_type)
     let mut pools: Vec<(i64, i64)> = Vec::new(); // (region_select_type, region_id)
     let mdb_path = match find_mdb_path() {
         Some(p) => p,
-        None => return (None, Vec::new(), "error: mdb_not_found".to_string()),
+        None => return (None, None, Vec::new(), "error: mdb_not_found".to_string()),
     };
     let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(c) => c,
-        Err(e) => return (None, Vec::new(), format!("error: mdb_open: {}", e)),
+        Err(e) => return (None, None, Vec::new(), format!("error: mdb_open: {}", e)),
     };
     if let Ok(mut stmt) = conn.prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn") {
         if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
@@ -13669,13 +13695,15 @@ fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Op
             for row in rows.flatten() { pools.push(row); }
         }
     }
-    if pools.is_empty() { return (None, Vec::new(), "error: empty_region_pools".to_string()); }
+    if pools.is_empty() { return (None, None, Vec::new(), "error: empty_region_pools".to_string()); }
     let mut active_type: Option<i64> = None;
+    let mut active_turn: Option<i64> = None;
     for (t, ty) in &round_types {
-        if *t <= total_turn { active_type = Some(*ty); }
+        if *t <= total_turn { active_type = Some(*ty); active_turn = Some(*t); }
     }
     if active_type.is_none() {
         active_type = round_types.first().map(|(_, ty)| *ty);
+        active_turn = round_types.first().map(|(t, _)| *t);
     }
     let candidates: Vec<i64> = match active_type {
         Some(ty) => pools.iter()
@@ -13685,7 +13713,7 @@ fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Op
             .collect(),
         None => Vec::new(),
     };
-    (active_type, candidates, "ok".to_string())
+    (active_type, active_turn, candidates, "ok".to_string())
 }
 
 /// ★ v3.24.30: /debug/ramen_region_select — read-only region-selection observation.
@@ -13732,8 +13760,9 @@ unsafe fn debug_ramen_region_select() -> String {
 
     // MDB part (read-only): rounds JSON for display + derived candidate pool
     // via the shared helper. This is a DERIVATION, not a runtime read.
-    let (active_type, candidates, mdb_status) =
+    let (active_type, active_round_turn, candidates, mdb_status) =
         ramen_derive_selectable_regions(total_turn_num as i64, &all_selected_vec);
+    let is_selection_turn = active_round_turn == Some(total_turn_num as i64);
     let mut rounds_json = "[]".to_string();
     if let Some(mdb_path) = find_mdb_path() {
         if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
@@ -13754,9 +13783,12 @@ unsafe fn debug_ramen_region_select() -> String {
     let methods_json = format!("[{}]", region_methods.iter().map(|m| format!("\"{}\"", json_escape(m))).collect::<Vec<_>>().join(","));
     let active_type_json = match active_type { Some(ty) => ty.to_string(), None => "null".to_string() };
 
-    format!(r#"{{"schema_version":1,"source":"runtime_observation+mdb_derivation","plugin_version":"{}","total_turn_num":{},"runtime":{{"selected_region_ids":{},"all_selected_region_ids":{}}},"region_select_rounds":{},"active_region_select_type":{},"active_rule":"latest round with turn<=total_turn_num else first upcoming round","candidate_region_ids_derived":{},"derivation":"mdb pool(region_select_type=active) minus all_selected_region_ids","runtime_candidate_list_status":"unknown_no_confirmed_runtime_getter","runtime_selectable_getter_found":{},"runtime_region_method_names":{},"mdb_status":"{}"}}"#,
+    format!(r#"{{"schema_version":1,"source":"runtime_observation+mdb_derivation","plugin_version":"{}","total_turn_num":{},"runtime":{{"selected_region_ids":{},"all_selected_region_ids":{}}},"region_select_rounds":{},"active_region_select_type":{},"active_round_turn":{},"is_selection_turn":{},"active_rule":"latest round with turn<=total_turn_num else first upcoming round","candidate_region_ids_derived":{},"derivation":"mdb pool(region_select_type=active) minus all_selected_region_ids","runtime_candidate_list_status":"unknown_no_confirmed_runtime_getter","runtime_selectable_getter_found":{},"runtime_region_method_names":{},"mdb_status":"{}"}}"#,
         PLUGIN_VERSION, total_turn_num, selected_json, all_selected_json,
-        rounds_json, active_type_json, candidates_json, selectable_getter_found,
+        rounds_json, active_type_json,
+        match active_round_turn { Some(t) => t.to_string(), None => "null".to_string() },
+        is_selection_turn,
+        candidates_json, selectable_getter_found,
         methods_json, json_escape(&mdb_status))
 }
 
