@@ -6711,6 +6711,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/ramen_planner_state" {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_planner_state() }))
             .unwrap_or_else(|_| r#"{"error":"ramen_planner_state_panic"}"#.to_string())
+    } else if path == "/debug/ramen_region_select" {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_region_select() }))
+            .unwrap_or_else(|_| r#"{"error":"ramen_region_select_panic"}"#.to_string())
     } else if path == "/debug/race_random_program_exact" {
         unsafe { debug_race_random_program_exact() }
     } else if path.starts_with("/debug/dumpclass") {
@@ -13577,6 +13580,156 @@ unsafe fn debug_ramenfields() -> String {
 /// Scenario 14 formula investigation: resolve only the five named methods from the
 /// current process. This endpoint never invokes a target method and reads at most 64
 /// executable bytes after validating /proc/self/maps.
+/// ★ v3.24.30: vector variant of inline_obscured_int_list_json for arithmetic.
+unsafe fn inline_obscured_int_list_vec(list_obj: *const c_void) -> Vec<i32> {
+    if list_obj.is_null() { return Vec::new(); }
+    let base = list_obj as *const u8;
+    let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+    if len > 200 { return Vec::new(); }
+    let mut values = Vec::with_capacity(len);
+    for i in 0..len {
+        let elem = base.add(IL2CPP_LIST_ITEMS_OFF + i * OBSCURED_INT_SIZE);
+        values.push(read_obscured_int_at(elem as *const c_void, 0));
+    }
+    values
+}
+
+/// ★ v3.24.30: enumerate method NAMES of a class containing `needle`.
+/// Read-only name enumeration only (same API pattern as
+/// debug_ramen_formula_targets); no method is called, no memory is read
+/// beyond MethodInfo name pointers.
+unsafe fn enum_method_names_containing(class: *mut c_void, needle: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    if class.is_null() { return names; }
+    let get_methods_ptr = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+    let get_name_ptr = resolve_il2cpp_symbol("il2cpp_method_get_name");
+    if get_methods_ptr.is_null() || get_name_ptr.is_null() { return names; }
+    let get_methods: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void =
+        std::mem::transmute(get_methods_ptr);
+    let get_name: unsafe extern "C" fn(*const c_void) -> *const c_char =
+        std::mem::transmute(get_name_ptr);
+    let mut iter: *mut c_void = ptr::null_mut();
+    loop {
+        let m = get_methods(class, &mut iter);
+        if m.is_null() { break; }
+        let name_ptr = get_name(m);
+        if name_ptr.is_null() { continue; }
+        let name = CStr::from_ptr(name_ptr).to_string_lossy().to_string();
+        if name.contains(needle) { names.push(name); }
+        if names.len() >= 64 { break; }
+    }
+    names
+}
+
+/// ★ v3.24.30: /debug/ramen_region_select — read-only region-selection observation.
+///
+/// Runtime part: total turn, SelectedRegionIdArray, AllSelectedRegionIdArray
+/// (same getters already used by debug_ramen_planner_state; nothing else is
+/// called and no state is mutated).
+///
+/// Candidate pool: DERIVED from MDB (single_mode_14_region_select rounds +
+/// single_mode_14_region_feeling pools) minus all_selected_region_ids. The
+/// derivation is labeled explicitly; a runtime-native "selectable regions"
+/// list is NOT asserted — Region-related method names on the DataSet class
+/// are only enumerated by name so the existence of an official getter can be
+/// confirmed on-device before any future direct read.
+unsafe fn debug_ramen_region_select() -> String {
+    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    let image = get_image();
+    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
+    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm = get_singleton(wdm_class);
+    if wdm.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
+    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
+    if sm.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
+    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    let chara = call_getter_ref(sm_class, sm, "get_Character");
+    if chara.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+    let scenario = try_get_scenario_obj(chara_class, chara, 14);
+    if scenario.is_null() { return r#"{"error":"not_in_ramen_scenario"}"#.to_string(); }
+    let scenario_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
+    if scenario_class.is_null() { return r#"{"error":"no_ramen_scenario_class"}"#.to_string(); }
+    let ds = call_getter_ref(scenario_class, scenario, "get_DataSet");
+    if ds.is_null() { return r#"{"error":"no_ramen_dataset"}"#.to_string(); }
+    let declared_dc = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
+    let dc = if declared_dc.is_null() { get_class_from_object(ds) } else { declared_dc };
+
+    // WorkSingleModeData._totalTurnNum at offset 68 (confirmed by /debug/dumpclass)
+    let total_turn_num = read_int_at(sm as *const c_void, 68);
+    let selected_vec = inline_obscured_int_list_vec(call_getter_on_instance(dc, ds, "get_SelectedRegionIdArray"));
+    let all_selected_vec = inline_obscured_int_list_vec(call_getter_on_instance(dc, ds, "get_AllSelectedRegionIdArray"));
+    let region_methods = enum_method_names_containing(dc, "Region");
+    let selectable_getter_found = region_methods.iter().any(|m| m.contains("Selectable"));
+
+    // MDB part (read-only): region-select rounds and candidate pools.
+    let mut mdb_status = "ok".to_string();
+    let mut rounds_json = "[]".to_string();
+    let mut round_types: Vec<(i64, i64)> = Vec::new(); // (turn, region_select_type)
+    let mut pools: Vec<(i64, i64)> = Vec::new(); // (region_select_type, region_id)
+    match find_mdb_path() {
+        None => { mdb_status = "error: mdb_not_found".to_string(); }
+        Some(mdb_path) => {
+            match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+                Err(e) => { mdb_status = format!("error: mdb_open: {}", e); }
+                Ok(conn) => {
+                    if let Ok(mut stmt) = conn.prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn") {
+                        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+                            let mut rounds: Vec<String> = Vec::new();
+                            for row in rows.flatten() {
+                                round_types.push(row);
+                                rounds.push(format!(r#"{{"region_select_type":{},"turn":{}}}"#, row.1, row.0));
+                            }
+                            rounds_json = format!("[{}]", rounds.join(","));
+                        }
+                    }
+                    if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT region_select_type, region_id FROM single_mode_14_region_feeling ORDER BY region_select_type, region_id") {
+                        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+                            for row in rows.flatten() {
+                                pools.push(row);
+                            }
+                        }
+                    }
+                    if pools.is_empty() { mdb_status = "error: empty_region_pools".to_string(); }
+                }
+            }
+        }
+    }
+
+    // Active round: latest round with turn <= total_turn_num, else the first
+    // upcoming round. Candidate pool = MDB pool(active type) minus
+    // all_selected_region_ids. This is a DERIVATION, not a runtime read.
+    let mut active_type: Option<i64> = None;
+    if !round_types.is_empty() {
+        let turn = total_turn_num as i64;
+        for (t, ty) in &round_types {
+            if *t <= turn { active_type = Some(*ty); }
+        }
+        if active_type.is_none() {
+            active_type = round_types.first().map(|(_, ty)| *ty);
+        }
+    }
+    let candidates: Vec<i64> = match active_type {
+        Some(ty) => pools.iter()
+            .filter(|(pty, _)| *pty == ty)
+            .map(|(_, rid)| *rid)
+            .filter(|rid| !all_selected_vec.contains(&(*rid as i32)))
+            .collect(),
+        None => Vec::new(),
+    };
+    let candidates_json = format!("[{}]", candidates.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+    let selected_json = format!("[{}]", selected_vec.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+    let all_selected_json = format!("[{}]", all_selected_vec.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+    let methods_json = format!("[{}]", region_methods.iter().map(|m| format!("\"{}\"", json_escape(m))).collect::<Vec<_>>().join(","));
+    let active_type_json = match active_type { Some(ty) => ty.to_string(), None => "null".to_string() };
+
+    format!(r#"{{"schema_version":1,"source":"runtime_observation+mdb_derivation","plugin_version":"{}","total_turn_num":{},"runtime":{{"selected_region_ids":{},"all_selected_region_ids":{}}},"region_select_rounds":{},"active_region_select_type":{},"active_rule":"latest round with turn<=total_turn_num else first upcoming round","candidate_region_ids_derived":{},"derivation":"mdb pool(region_select_type=active) minus all_selected_region_ids","runtime_candidate_list_status":"unknown_no_confirmed_runtime_getter","runtime_selectable_getter_found":{},"runtime_region_method_names":{},"mdb_status":"{}"}}"#,
+        PLUGIN_VERSION, total_turn_num, selected_json, all_selected_json,
+        rounds_json, active_type_json, candidates_json, selectable_getter_found,
+        methods_json, json_escape(&mdb_status))
+}
+
 unsafe fn debug_ramen_formula_targets() -> String {
     if API.is_null() {
         return r#"{"error":"api_null"}"#.to_string();
