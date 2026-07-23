@@ -4309,6 +4309,8 @@ unsafe fn read_summary_inner_impl() -> String {
     // ★ v3.22.39: Aggregate sozai counts while reading FeelingInfo
     let mut ramen_sozai_counts: [i32; 3] = [0, 0, 0]; // [麺=1, スープ=2, トッピング=3]
     let mut ramen_selected_region_ids_json = String::new();
+    // ★ v3.24.30: MDB-derived candidate pool (labeled; not a runtime-native read)
+    let mut ramen_selectable_region_ids_derived_json = String::new();
     let mut ramen_active_effects_raw_json = String::new();
     let mut ramen_uraf_type: i32 = -1;
     let mut ramen_uraf_state: i32 = -1;
@@ -4369,6 +4371,19 @@ unsafe fn read_summary_inner_impl() -> String {
                     }
                 }
                 log_predict_step("S:ramen regions done");
+                // ★ v3.24.30: AllSelectedRegionIdArray + MDB-derived candidate pool.
+                // Labeled as derivation; the runtime-native selectable list stays unknown.
+                let asra_off = cached_find_field_offset(ds_class, "AllSelectedRegionIdArray");
+                if asra_off >= 0 {
+                    let list_obj = read_ptr_at(dataset_obj, asra_off);
+                    let all_selected = inline_obscured_int_list_vec(list_obj);
+                    let (_active, candidates, _status) =
+                        ramen_derive_selectable_regions(total_turn_num as i64, &all_selected);
+                    if !candidates.is_empty() {
+                        ramen_selectable_region_ids_derived_json =
+                            candidates.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                    }
+                }
                 // ActiveEffectArray (List<ActiveEffectInfo>)
                 let ae_off = cached_find_field_offset(ds_class, "ActiveEffectArray");
                 if ae_off >= 0 {
@@ -5851,7 +5866,7 @@ unsafe fn read_summary_inner_impl() -> String {
             0
         };
         format!(
-            r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"acquisition_gauges":[{}],"command_feelings":[{}],"command_gauge_vectors":[{}],"selected_region_ids":[{}],"active_effects":[{}],"gauge_gains":[{}]}}"#,
+            r#","ramen":{{"checkpoint_pt":{},"moriagari_level":{},"special_feeling_num":{},"recommend_type":{},"sozai":[{},{},{}],"feeling_info":[{}],"acquisition_gauges":[{}],"command_feelings":[{}],"command_gauge_vectors":[{}],"selected_region_ids":[{}],"selectable_region_ids_derived":[{}],"selectable_region_ids_source":"{}","active_effects":[{}],"gauge_gains":[{}]}}"#,
             ramen_checkpoint_pt,
             moriagari_level,
             ramen_special_feeling_num,
@@ -5864,6 +5879,12 @@ unsafe fn read_summary_inner_impl() -> String {
             ramen_command_feelings_json,
             ramen_command_gauge_vectors_json,
             ramen_selected_region_ids_json,
+            ramen_selectable_region_ids_derived_json,
+            if ramen_selectable_region_ids_derived_json.is_empty() {
+                "unknown"
+            } else {
+                "mdb_pool_minus_all_selected_derivation"
+            },
             ramen_active_effects_raw_json,
             ramen_gauge_gains_json
         )
@@ -13621,6 +13642,52 @@ unsafe fn enum_method_names_containing(class: *mut c_void, needle: &str) -> Vec<
     names
 }
 
+/// ★ v3.24.30: derive the region candidate pool from MDB (read-only).
+/// Returns (active_region_select_type, candidate_region_ids, mdb_status).
+/// Active round = latest single_mode_14_region_select round with
+/// turn <= total_turn, else the first upcoming round; candidates =
+/// pool(active type) minus all_selected. This is a DERIVATION, never a
+/// runtime-native read; callers must label it as such.
+fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Option<i64>, Vec<i64>, String) {
+    let mut round_types: Vec<(i64, i64)> = Vec::new(); // (turn, region_select_type)
+    let mut pools: Vec<(i64, i64)> = Vec::new(); // (region_select_type, region_id)
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return (None, Vec::new(), "error: mdb_not_found".to_string()),
+    };
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return (None, Vec::new(), format!("error: mdb_open: {}", e)),
+    };
+    if let Ok(mut stmt) = conn.prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn") {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+            for row in rows.flatten() { round_types.push(row); }
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT region_select_type, region_id FROM single_mode_14_region_feeling ORDER BY region_select_type, region_id") {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+            for row in rows.flatten() { pools.push(row); }
+        }
+    }
+    if pools.is_empty() { return (None, Vec::new(), "error: empty_region_pools".to_string()); }
+    let mut active_type: Option<i64> = None;
+    for (t, ty) in &round_types {
+        if *t <= total_turn { active_type = Some(*ty); }
+    }
+    if active_type.is_none() {
+        active_type = round_types.first().map(|(_, ty)| *ty);
+    }
+    let candidates: Vec<i64> = match active_type {
+        Some(ty) => pools.iter()
+            .filter(|(pty, _)| *pty == ty)
+            .map(|(_, rid)| *rid)
+            .filter(|rid| !all_selected.contains(&(*rid as i32)))
+            .collect(),
+        None => Vec::new(),
+    };
+    (active_type, candidates, "ok".to_string())
+}
+
 /// ★ v3.24.30: /debug/ramen_region_select — read-only region-selection observation.
 ///
 /// Runtime part: total turn, SelectedRegionIdArray, AllSelectedRegionIdArray
@@ -13663,61 +13730,24 @@ unsafe fn debug_ramen_region_select() -> String {
     let region_methods = enum_method_names_containing(dc, "Region");
     let selectable_getter_found = region_methods.iter().any(|m| m.contains("Selectable"));
 
-    // MDB part (read-only): region-select rounds and candidate pools.
-    let mut mdb_status = "ok".to_string();
+    // MDB part (read-only): rounds JSON for display + derived candidate pool
+    // via the shared helper. This is a DERIVATION, not a runtime read.
+    let (active_type, candidates, mdb_status) =
+        ramen_derive_selectable_regions(total_turn_num as i64, &all_selected_vec);
     let mut rounds_json = "[]".to_string();
-    let mut round_types: Vec<(i64, i64)> = Vec::new(); // (turn, region_select_type)
-    let mut pools: Vec<(i64, i64)> = Vec::new(); // (region_select_type, region_id)
-    match find_mdb_path() {
-        None => { mdb_status = "error: mdb_not_found".to_string(); }
-        Some(mdb_path) => {
-            match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-                Err(e) => { mdb_status = format!("error: mdb_open: {}", e); }
-                Ok(conn) => {
-                    if let Ok(mut stmt) = conn.prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn") {
-                        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
-                            let mut rounds: Vec<String> = Vec::new();
-                            for row in rows.flatten() {
-                                round_types.push(row);
-                                rounds.push(format!(r#"{{"region_select_type":{},"turn":{}}}"#, row.1, row.0));
-                            }
-                            rounds_json = format!("[{}]", rounds.join(","));
-                        }
+    if let Some(mdb_path) = find_mdb_path() {
+        if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            if let Ok(mut stmt) = conn.prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn") {
+                if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+                    let mut rounds: Vec<String> = Vec::new();
+                    for row in rows.flatten() {
+                        rounds.push(format!(r#"{{"region_select_type":{},"turn":{}}}"#, row.1, row.0));
                     }
-                    if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT region_select_type, region_id FROM single_mode_14_region_feeling ORDER BY region_select_type, region_id") {
-                        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
-                            for row in rows.flatten() {
-                                pools.push(row);
-                            }
-                        }
-                    }
-                    if pools.is_empty() { mdb_status = "error: empty_region_pools".to_string(); }
+                    rounds_json = format!("[{}]", rounds.join(","));
                 }
             }
         }
     }
-
-    // Active round: latest round with turn <= total_turn_num, else the first
-    // upcoming round. Candidate pool = MDB pool(active type) minus
-    // all_selected_region_ids. This is a DERIVATION, not a runtime read.
-    let mut active_type: Option<i64> = None;
-    if !round_types.is_empty() {
-        let turn = total_turn_num as i64;
-        for (t, ty) in &round_types {
-            if *t <= turn { active_type = Some(*ty); }
-        }
-        if active_type.is_none() {
-            active_type = round_types.first().map(|(_, ty)| *ty);
-        }
-    }
-    let candidates: Vec<i64> = match active_type {
-        Some(ty) => pools.iter()
-            .filter(|(pty, _)| *pty == ty)
-            .map(|(_, rid)| *rid)
-            .filter(|rid| !all_selected_vec.contains(&(*rid as i32)))
-            .collect(),
-        None => Vec::new(),
-    };
     let candidates_json = format!("[{}]", candidates.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
     let selected_json = format!("[{}]", selected_vec.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
     let all_selected_json = format!("[{}]", all_selected_vec.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
