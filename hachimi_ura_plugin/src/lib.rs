@@ -6514,7 +6514,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6670,6 +6670,15 @@ fn handle_http(mut stream: std::net::TcpStream) {
             Err(_) => Vec::new(),
         };
         format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+    } else if path == "/debug/resource_meta_key" {
+        // ★ v3.24.44: captured SQLCipher key for the resource `meta` DB
+        let key = META_KEY_HEX.lock().map(|g| g.clone()).unwrap_or_default();
+        format!(
+            r#"{{"captured":{},"key_len":{},"key_hex":"{}","persisted_file":"files/ura_meta_key.txt"}}"#,
+            if key.is_empty() { "false" } else { "true" },
+            key.len() / 2,
+            key
+        )
     } else if path == "/debug/hookdiag" {
         // ★ v3.24.40: per-hook install status
         let items: Vec<String> = match HOOK_STATUS.lock() {
@@ -8229,6 +8238,115 @@ unsafe fn format_headers_json(headers: &[(String, String)]) -> String {
     s
 }
 
+// ============================================================
+// ★ v3.24.44: SQLCipher key capture (route B: offline meta decryption)
+// The game's resource index `meta` is a SQLCipher-encrypted SQLite DB
+// (no plain header; libnative.so exports sqlite3_key/sqlite3_key_v2).
+// Hook the keying functions at plugin init (before the game opens meta),
+// capture the key bytes, persist to the private files dir.
+static META_KEY_HEX: Mutex<String> = Mutex::new(String::new());
+static mut SQLCIPHER_KEY_HOOK_DONE: bool = false;
+
+unsafe fn resolve_module_symbol(module_substr: &str, sym: &str) -> usize {
+    let maps = std::fs::read_to_string("/proc/self/maps").unwrap_or_default();
+    let mut path = String::new();
+    for line in maps.lines() {
+        if line.contains(module_substr) && line.ends_with(".so") {
+            if let Some(p) = line.split_whitespace().last() {
+                path = p.to_string();
+                break;
+            }
+        }
+    }
+    if path.is_empty() { return 0; }
+    const RTLD_NOLOAD_ANDROID: i32 = 4;
+    let cpath = to_cstr(&path);
+    let h = libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | RTLD_NOLOAD_ANDROID);
+    if h.is_null() { return 0; }
+    let cs = to_cstr(sym);
+    let p = libc::dlsym(h, cs.as_ptr());
+    libc::dlclose(h);
+    p as usize
+}
+
+unsafe fn capture_sqlcipher_key(pkey: *const c_void, nkey: isize, source: &str) {
+    if pkey.is_null() || nkey <= 0 || nkey > 8192 { return; }
+    let already = META_KEY_HEX.lock().map(|g| !g.is_empty()).unwrap_or(false);
+    if already { return; }  // first key wins
+    let bytes = std::slice::from_raw_parts(pkey as *const u8, nkey as usize);
+    let hex = hex_encode(bytes);
+    if let Ok(mut g) = META_KEY_HEX.lock() { *g = hex.clone(); }
+    ura_log(3, &format!("sqlcipher key captured via {}: {} bytes", source, nkey));
+    set_hook_status("meta.key", &format!("captured:{}bytes", nkey));
+    // Persist so the key survives restarts.
+    let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
+    let pkg = String::from_utf8_lossy(&pkg_raw)
+        .trim_matches(char::from(0)).trim().to_string();
+    if !pkg.is_empty() {
+        let path = format!("/data/user/0/{}/files/ura_meta_key.txt", pkg);
+        let _ = std::fs::write(&path, &hex);
+        ura_log(3, &format!("sqlcipher key persisted to {}", path));
+    }
+}
+
+extern "C" fn sqlcipher_key_hook(db: *mut c_void, pkey: *const c_void, nkey: libc::c_int) -> libc::c_int {
+    unsafe {
+        capture_sqlcipher_key(pkey, nkey as isize, "sqlite3_key");
+        let tramp = interceptor_get_trampoline(sqlcipher_key_hook as usize);
+        if tramp != 0 {
+            let f: unsafe extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int =
+                std::mem::transmute(tramp);
+            return f(db, pkey, nkey);
+        }
+        0  // SQLITE_OK-ish fallback; without trampoline we must not break the game
+    }
+}
+
+extern "C" fn sqlcipher_key_v2_hook(
+    db: *mut c_void,
+    zdb_name: *const c_char,
+    pkey: *const c_void,
+    nkey: libc::c_int,
+) -> libc::c_int {
+    unsafe {
+        capture_sqlcipher_key(pkey, nkey as isize, "sqlite3_key_v2");
+        let tramp = interceptor_get_trampoline(sqlcipher_key_v2_hook as usize);
+        if tramp != 0 {
+            let f: unsafe extern "C" fn(*mut c_void, *const c_char, *const c_void, libc::c_int) -> libc::c_int =
+                std::mem::transmute(tramp);
+            return f(db, zdb_name, pkey, nkey);
+        }
+        0
+    }
+}
+
+unsafe fn install_sqlcipher_key_hook() {
+    if SQLCIPHER_KEY_HOOK_DONE { return; }
+    SQLCIPHER_KEY_HOOK_DONE = true;
+    if API.is_null() || (*API).interceptor == 0 {
+        set_hook_status("meta.key", "failed: no_interceptor");
+        return;
+    }
+    let a1 = resolve_module_symbol("libnative.so", "sqlite3_key");
+    let a2 = resolve_module_symbol("libnative.so", "sqlite3_key_v2");
+    let mut any = false;
+    if a1 != 0 {
+        let ok = interceptor_hook(a1, sqlcipher_key_hook as usize);
+        set_hook_status("meta.key_v1", if ok { "hooked" } else { "failed: interceptor_hook" });
+        any |= ok;
+    } else {
+        set_hook_status("meta.key_v1", "failed: resolve");
+    }
+    if a2 != 0 {
+        let ok = interceptor_hook(a2, sqlcipher_key_v2_hook as usize);
+        set_hook_status("meta.key_v2", if ok { "hooked" } else { "failed: interceptor_hook" });
+        any |= ok;
+    } else {
+        set_hook_status("meta.key_v2", "failed: resolve");
+    }
+    ura_log(3, &format!("sqlcipher key hook install: v1=0x{:x} v2=0x{:x} any={}", a1, a2, any));
+}
+
 /// ★ v3.24.40: fuzzy variant — first method whose name CONTAINS `substr`.
 /// Self-heals when Cygames renames methods (e.g. CompressRequest_v2).
 unsafe fn find_method_fuzzy(class: *mut c_void, substr: &str) -> usize {
@@ -9364,6 +9482,10 @@ pub unsafe extern "C" fn hachimi_init_v3(
     init_crash_handler();
     check_and_upload_crash_log();
     ura_log(3, "URA plugin v3.24.9 loaded (Interceptor API hooks)");
+
+    // ★ v3.24.44: capture SQLCipher key EARLY — the game keys `meta`
+    // during boot, possibly before on_game_initialized fires.
+    install_sqlcipher_key_hook();
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr(&format!("URA v{} Loaded!", PLUGIN_VERSION)).as_ptr());
