@@ -142,6 +142,13 @@ static mut EVENT_SELECTED_IDX: i32 = -1;
 static mut EVENT_STORY_ID: i32 = 0;
 static mut EVENT_CHARA_ID: i32 = 0;
 
+// Incremented whenever a new story_id takes over (or state is cleared).
+// Guarded by EVENT_STATE_MUTEX; never read/write outside the lock.
+static mut EVENT_GENERATION: u64 = 0;
+
+// Cap against runaway AddChoiceButton repeats in abnormal UI rebuilds.
+const EVENT_CHOICES_MAX: usize = 32;
+
 #[derive(Clone)]
 struct EventChoice {
     label: String,
@@ -6693,7 +6700,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
                     c.gain_id, c.next_block_idx, c.loop_exit_gain_id)
             }).collect();
             let result = format!(
-                r#"{{"story_id":{},"chara_id":{},"selected_idx":{},"choices":[{}]}}"#,
+                r#"{{"generation":{},"story_id":{},"chara_id":{},"selected_idx":{},"choices":[{}]}}"#,
+                EVENT_GENERATION,
                 EVENT_STORY_ID,
                 EVENT_CHARA_ID,
                 EVENT_SELECTED_IDX,
@@ -6709,6 +6717,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             EVENT_SELECTED_IDX = -1;
             EVENT_STORY_ID = 0;
             EVENT_CHARA_ID = 0;
+            EVENT_GENERATION = EVENT_GENERATION.wrapping_add(1);
         }
         drop(_lock);
         r#"{"ok":true}"#.to_string()
@@ -8298,13 +8307,18 @@ extern "C" fn event_choice_hook_handler(
     _param2: *mut c_void,
 ) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        EVENT_SELECTED_IDX = choice_index;
+        let choices_count = {
+            let _lock = EVENT_STATE_MUTEX.lock();
+            EVENT_SELECTED_IDX = choice_index;
+            EVENT_CHOICES.len()
+        };
+
         ura_log(
             3,
             &format!(
                 "Event choice: index={} choices_count={}",
                 choice_index,
-                EVENT_CHOICES.len()
+                choices_count
             ),
         );
 
@@ -8342,21 +8356,36 @@ extern "C" fn event_add_choice_hook_handler(this: *mut c_void, param: *mut c_voi
             ),
         );
 
+        let normalized_next = if next_block_idx > 0 {
+            next_block_idx
+        } else {
+            -1
+        };
+        let normalized_loop_exit = if loop_exit_gain_id > 0 {
+            loop_exit_gain_id
+        } else {
+            -1
+        };
+
         let _lock = EVENT_STATE_MUTEX.lock();
-        EVENT_CHOICES.push(EventChoice {
-            label,
-            gain_id,
-            next_block_idx: if next_block_idx > 0 {
-                next_block_idx
-            } else {
-                -1
-            },
-            loop_exit_gain_id: if loop_exit_gain_id > 0 {
-                loop_exit_gain_id
-            } else {
-                -1
-            },
+
+        // UI rebuilds can re-invoke AddChoiceButton with identical params;
+        // dedupe so the same option never appears twice in one batch.
+        let duplicate = EVENT_CHOICES.iter().any(|choice| {
+            choice.label == label
+                && choice.gain_id == gain_id
+                && choice.next_block_idx == normalized_next
+                && choice.loop_exit_gain_id == normalized_loop_exit
         });
+
+        if !duplicate && EVENT_CHOICES.len() < EVENT_CHOICES_MAX {
+            EVENT_CHOICES.push(EventChoice {
+                label,
+                gain_id,
+                next_block_idx: normalized_next,
+                loop_exit_gain_id: normalized_loop_exit,
+            });
+        }
 
         drop(_lock);
 
@@ -8489,6 +8518,16 @@ extern "C" fn story_set_hook_handler(this: *mut c_void, story_id: i32, p2: i64, 
     unsafe {
         if !this.is_null() {
             let _lock = EVENT_STATE_MUTEX.lock();
+
+            if EVENT_STORY_ID != story_id {
+                // New event batch: drop stale choices from the previous one.
+                // Same story_id re-entry does NOT clear.
+                EVENT_CHOICES.clear();
+                EVENT_SELECTED_IDX = -1;
+                EVENT_CHARA_ID = 0;
+                EVENT_GENERATION = EVENT_GENERATION.wrapping_add(1);
+            }
+
             EVENT_STORY_ID = story_id;
             drop(_lock);
         }
