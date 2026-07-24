@@ -8480,6 +8480,97 @@ extern "C" fn event_choice_hook_handler(
     }));
 }
 
+// ★ v3.24.41: runtime class of an object via il2cpp_object_get_class
+unsafe fn obj_class(obj: *const c_void) -> *mut c_void {
+    if obj.is_null() { return ptr::null_mut(); }
+    let f: Option<unsafe extern "C" fn(*const c_void) -> *mut c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_object_get_class");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    match f { Some(g) => g(obj), None => ptr::null_mut() }
+}
+
+/// ★ v3.24.41: name of an IL2CPP class pointer
+unsafe fn class_name_of(class: *const c_void) -> String {
+    if class.is_null() { return "null".to_string(); }
+    let f: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    match f {
+        Some(g) => {
+            let n = g(class);
+            if n.is_null() { "?".to_string() } else { CStr::from_ptr(n).to_string_lossy().into_owned() }
+        }
+        None => "?".to_string(),
+    }
+}
+
+/// ★ v3.24.41: fuzzy MethodInfo* search (substring, with exclusions)
+unsafe fn find_method_info_fuzzy(class: *mut c_void, substr: &str, exclude: &[&str]) -> *const c_void {
+    if class.is_null() { return ptr::null(); }
+    let get_methods_fn: Option<
+        unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void,
+    > = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
+        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if get_methods_fn.is_none() || name_fn.is_none() { return ptr::null(); }
+    let mut iter: *mut c_void = std::ptr::null_mut();
+    loop {
+        let mi = get_methods_fn.unwrap()(class, &mut iter);
+        if mi.is_null() { break; }
+        let np = name_fn.unwrap()(mi);
+        if np.is_null() { continue; }
+        let name = CStr::from_ptr(np).to_string_lossy();
+        if name.contains(substr) && !exclude.iter().any(|e| name.contains(e)) {
+            return mi;
+        }
+    }
+    ptr::null()
+}
+
+/// ★ v3.24.41: invoke 0-arg method by MethodInfo*, boxed int at +16
+unsafe fn invoke0_int(mi: *const c_void, instance: *const c_void) -> i32 {
+    if mi.is_null() || instance.is_null() { return -1; }
+    let invoke_fn: Option<FnRuntimeInvoke> = {
+        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if invoke_fn.is_none() { return -1; }
+    let mut exc: *mut c_void = ptr::null_mut();
+    let r = invoke_fn.unwrap()(mi, instance as *mut c_void, ptr::null_mut(), &mut exc);
+    if !exc.is_null() || r.is_null() { return -1; }
+    std::ptr::read_unaligned::<i32>((r as *const u8).add(16) as *const i32)
+}
+
+/// ★ v3.24.41: fuzzy int getter with sanity clamp (delegate/garbage -> -1)
+unsafe fn call_fuzzy_int(class: *mut c_void, instance: *const c_void, substr: &str, exclude: &[&str]) -> i32 {
+    let mi = find_method_info_fuzzy(class, substr, exclude);
+    if mi.is_null() { return -1; }
+    let v = invoke0_int(mi, instance);
+    if v <= 0 || v > 1_000_000 { -1 } else { v }
+}
+
+/// ★ v3.24.41: fuzzy string getter
+unsafe fn call_fuzzy_string(class: *mut c_void, instance: *const c_void, substr: &str) -> String {
+    let mi = find_method_info_fuzzy(class, substr, &[]);
+    if mi.is_null() { return String::new(); }
+    let invoke_fn: Option<FnRuntimeInvoke> = {
+        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if invoke_fn.is_none() { return String::new(); }
+    let mut exc: *mut c_void = ptr::null_mut();
+    let r = invoke_fn.unwrap()(mi, instance as *mut c_void, ptr::null_mut(), &mut exc);
+    if !exc.is_null() || r.is_null() { return String::new(); }
+    read_il2cpp_string(r)
+}
+
 // StoryChoiceController.AddChoiceButton(StoryChoiceParam param)
 // ARM64: X0=this, X1=param
 // Read StoryChoiceParam fields: LabelText, GainId, NextBlockIndex, LoopExitGainId
@@ -8489,17 +8580,35 @@ extern "C" fn event_add_choice_hook_handler(this: *mut c_void, param: *mut c_voi
             return;
         }
 
-        // Read StoryChoiceParam fields via IL2CPP getter methods
-        let label = read_il2cpp_string_from_obj(param, "get_LabelText");
-        let gain_id = call_getter_int_raw(param, "get_GainId");
-        let next_block_idx = call_getter_int_raw(param, "get_GetNextBlockIndex");
-        let loop_exit_gain_id = call_getter_int_raw(param, "get_LoopExitGainId");
+        // Read StoryChoiceParam fields via IL2CPP getter methods.
+        // ★ v3.24.41: log the RUNTIME class of param — the v3.24.2 code
+        // assumed StoryChoiceParam, but on newer clients AddChoiceButton may
+        // receive a different param type whose getters we must find fuzzily.
+        let pclass = obj_class(param);
+        let pclass_name = class_name_of(pclass);
+
+        let mut label = read_il2cpp_string_from_obj(param, "get_LabelText");
+        if label.is_empty() {
+            label = call_fuzzy_string(pclass, param, "LabelText");
+        }
+        let mut gain_id = call_getter_int_raw(param, "get_GainId");
+        if gain_id <= 0 {
+            gain_id = call_fuzzy_int(pclass, param, "GainId", &["LoopExit", "Analyze", "OnSelect"]);
+        }
+        let mut next_block_idx = call_getter_int_raw(param, "get_GetNextBlockIndex");
+        if next_block_idx <= 0 {
+            next_block_idx = call_fuzzy_int(pclass, param, "NextBlockIndex", &[]);
+        }
+        let mut loop_exit_gain_id = call_getter_int_raw(param, "get_LoopExitGainId");
+        if loop_exit_gain_id <= 0 {
+            loop_exit_gain_id = call_fuzzy_int(pclass, param, "LoopExitGainId", &[]);
+        }
 
         ura_log(
             3,
             &format!(
-                "Event choice added: label='{}' gain={} next={} loop_exit={}",
-                label, gain_id, next_block_idx, loop_exit_gain_id
+                "Event choice added: param_class='{}' label='{}' gain={} next={} loop_exit={}",
+                pclass_name, label, gain_id, next_block_idx, loop_exit_gain_id
             ),
         );
 
