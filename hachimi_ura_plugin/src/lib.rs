@@ -141,8 +141,18 @@ static EVENT_STATE_MUTEX: Mutex<()> = Mutex::new(());
 // ★ v3.24.40: mirror every ura_log line into a queryable ring buffer
 // (Hachimi logcat was the only outlet before; /debug/hooklog exposes it).
 static HOOK_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
-const HOOK_LOG_MAX: usize = 64;
+const HOOK_LOG_MAX: usize = 256;
+
+// ★ v3.24.42: high-frequency read_summary/push spam is excluded from the
+// ring (still goes to logcat) so event/sniff diagnostics survive.
+const HOOK_LOG_NOISE: &[&str] = &[
+    "★ read_summary", "ramen scalar", "ramen arrays", "evaluation_list",
+    "sc: ", "skill_eval=", "v3.22.51 ramen", "★ Scenario 14", "Push:",
+    "call_getter: 'get_Skill", "call_getter: 'get_PossessSkill",
+    "find_field_offset: 'RemainTurn'",
+];
 fn hook_log(msg: &str) {
+    if HOOK_LOG_NOISE.iter().any(|n| msg.contains(n)) { return; }
     if let Ok(mut g) = HOOK_LOG.lock() {
         if g.len() >= HOOK_LOG_MAX { g.remove(0); }
         g.push(msg.to_string());
@@ -6650,10 +6660,13 @@ fn handle_http(mut stream: std::net::TcpStream) {
             SNIFF_RESPONSES.clear();
         }
         r#"{"ok":true}"#.to_string()
-    } else if path == "/debug/hooklog" {
-        // ★ v3.24.40: last HOOK_LOG_MAX ura_log lines
+    } else if path.starts_with("/debug/hooklog") {
+        // ★ v3.24.40/42: last HOOK_LOG_MAX lines, optional ?filter=substr
+        let filter = parse_query(&full_uri, "filter");
         let entries: Vec<String> = match HOOK_LOG.lock() {
-            Ok(g) => g.iter().map(|l| json_escape(l)).collect(),
+            Ok(g) => g.iter()
+                .filter(|l| filter.is_empty() || l.contains(&filter))
+                .map(|l| json_escape(l)).collect(),
             Err(_) => Vec::new(),
         };
         format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
@@ -8786,6 +8799,7 @@ extern "C" fn story_set_hook_handler(this: *mut c_void, story_id: i32, p2: i64, 
 
             EVENT_STORY_ID = story_id;
             drop(_lock);
+            ura_log(3, &format!("story_set: story_id={}", story_id));
         }
 
         if !STORY_SET_HOOK_INSTALLED || STORY_SET_ADDR == 0 {
