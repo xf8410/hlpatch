@@ -8316,6 +8316,14 @@ static mut SQLCIPHER_KEY_HOOK_DONE: bool = false;
 // (v3.24.44's "first key wins" caught the WRONG database's key.)
 static DB_HANDLES: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
 static DB_KEY_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+// ★ v3.24.48b: allocation-free case-insensitive substring scan over raw bytes.
+// SQL hooks run on EVERY statement at boot — never allocate just to filter.
+fn bytes_contains_ci(hay: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || hay.len() < needle.len() { return false; }
+    hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 fn db_track(entry: String) {
     hook_log(&entry);
     if let Ok(mut g) = DB_KEY_LOG.lock() {
@@ -8420,9 +8428,19 @@ extern "C" fn sqlite3_prepare_v2_hook(
 ) -> libc::c_int {
     unsafe {
         if !zsql.is_null() {
-            let sql = CStr::from_ptr(zsql).to_string_lossy().into_owned();
-            let low = sql.to_lowercase();
-            if low.contains("key") || low.contains("cipher") || low.contains("pragma") {
+            // ★ v3.24.48: bounded read — zsql is only guaranteed nbyte long when
+            // nbyte > 0; CStr::from_ptr could overread past the mapping.
+            // ★ v3.24.48b: zero-alloc prefilter — scan raw bytes first, only
+            // build a String for the rare key/cipher/pragma statement.
+            let raw: &[u8] = if nbyte > 0 && nbyte <= 8192 {
+                std::slice::from_raw_parts(zsql as *const u8, nbyte as usize)
+            } else {
+                let c = CStr::from_ptr(zsql);
+                let b = c.to_bytes();
+                &b[..b.len().min(8192)]
+            };
+            if bytes_contains_ci(raw, b"pragma") || bytes_contains_ci(raw, b"cipher") {
+                let sql = String::from_utf8_lossy(raw);
                 db_track(format!(
                     "sql: {} sql='{}'",
                     db_file_of(db as usize),
@@ -8450,9 +8468,11 @@ extern "C" fn sqlite3_exec_hook(
 ) -> libc::c_int {
     unsafe {
         if !sql.is_null() {
-            let q = CStr::from_ptr(sql).to_string_lossy().into_owned();
-            let low = q.to_lowercase();
-            if low.contains("key") || low.contains("cipher") || low.contains("pragma") {
+            // ★ v3.24.48b: zero-alloc prefilter (see prepare hook).
+            let raw0 = CStr::from_ptr(sql).to_bytes();
+            let raw = &raw0[..raw0.len().min(8192)];
+            if bytes_contains_ci(raw, b"pragma") || bytes_contains_ci(raw, b"cipher") {
+                let q = String::from_utf8_lossy(raw);
                 db_track(format!(
                     "exec: {} sql='{}'",
                     db_file_of(db as usize),
@@ -8495,6 +8515,7 @@ unsafe fn res_track_open(path: *const c_char, fd: libc::c_int) {
     }
 }
 
+#[allow(dead_code)]
 extern "C" fn libc_open_hook(path: *const c_char, flags: libc::c_int, mode: libc::c_int) -> libc::c_int {
     unsafe {
         let tramp = interceptor_get_trampoline(libc_open_hook as usize);
@@ -8506,6 +8527,7 @@ extern "C" fn libc_open_hook(path: *const c_char, flags: libc::c_int, mode: libc
     }
 }
 
+#[allow(dead_code)]
 extern "C" fn libc_openat_hook(dirfd: libc::c_int, path: *const c_char, flags: libc::c_int, mode: libc::c_int) -> libc::c_int {
     unsafe {
         let tramp = interceptor_get_trampoline(libc_openat_hook as usize);
@@ -8517,6 +8539,7 @@ extern "C" fn libc_openat_hook(dirfd: libc::c_int, path: *const c_char, flags: l
     }
 }
 
+#[allow(dead_code)]
 extern "C" fn libc_pread_hook(fd: libc::c_int, buf: *mut c_void, count: usize, offset: i64) -> isize {
     unsafe {
         let tramp = interceptor_get_trampoline(libc_pread_hook as usize);
@@ -8645,6 +8668,78 @@ extern "C" fn sqlcipher_key_v2_hook(
     }
 }
 
+
+// ★ v3.24.48: hook-free resource read watcher. Enumerates /proc/self/fd for
+// links into /meta or /dat and polls /proc/self/fdinfo for the read position.
+// Gives the same "when/what/where" as the removed libc tracer without touching
+// a single instruction of the process.
+static RES_WATCHER_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+fn start_res_fd_watcher() {
+    if RES_WATCHER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        // (fd, path, last_pos)
+        let mut seen: Vec<(i32, String, i64)> = Vec::new();
+        loop {
+            if let Ok(rd) = std::fs::read_dir("/proc/self/fd") {
+                for e in rd.flatten() {
+                    let fd: i32 = match e.file_name().to_string_lossy().parse() {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let link = match std::fs::read_link(e.path()) {
+                        Ok(l) => l.to_string_lossy().into_owned(),
+                        Err(_) => continue,
+                    };
+                    if !(link.contains("/meta") || link.contains("/dat/")) {
+                        continue;
+                    }
+                    let pos = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd))
+                        .ok()
+                        .and_then(|s| {
+                            s.lines()
+                                .find(|l| l.starts_with("pos:"))
+                                .and_then(|l| l[4..].trim().parse::<i64>().ok())
+                        })
+                        .unwrap_or(-1);
+                    match seen.iter_mut().find(|(f, _, _)| *f == fd) {
+                        None => {
+                            if seen.len() < 64 {
+                                seen.push((fd, link.clone(), pos));
+                            }
+                            res_read_track(format!(
+                                "fd_open: fd={} path={} pos=0x{:x}", fd, link, pos
+                            ));
+                        }
+                        Some((_, p, last)) => {
+                            if *p != link {
+                                *p = link.clone();
+                                *last = pos;
+                                res_read_track(format!(
+                                    "fd_reopen: fd={} path={} pos=0x{:x}", fd, link, pos
+                                ));
+                            } else if pos >= 0 && pos != *last {
+                                let old = *last;
+                                *last = pos;
+                                if old >= 0 {
+                                    res_read_track(format!(
+                                        "fd_read: fd={} pos=0x{:x}->0x{:x} ({})",
+                                        fd, old, pos, link
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    });
+    set_hook_status("res.fd_watcher", "started");
+}
+
 unsafe fn install_sqlcipher_key_hook() {
     if SQLCIPHER_KEY_HOOK_DONE { return; }
     SQLCIPHER_KEY_HOOK_DONE = true;
@@ -8667,20 +8762,12 @@ unsafe fn install_sqlcipher_key_hook() {
     } else {
         set_hook_status("meta.exec", "failed: resolve");
     }
-    // ★ v3.24.47: resource file-read tracer (libc, via system lib)
-    for (sym, handler, name) in [
-        ("open", libc_open_hook as usize, "res.open"),
-        ("openat", libc_openat_hook as usize, "res.openat"),
-        ("pread", libc_pread_hook as usize, "res.pread"),
-    ] {
-        let a = resolve_module_symbol("libc.so", sym);
-        if a != 0 {
-            let ok = interceptor_hook(a, handler);
-            set_hook_status(name, if ok { "hooked" } else { "failed: interceptor_hook" });
-        } else {
-            set_hook_status(name, "failed: resolve");
-        }
-    }
+    // ★ v3.24.48: libc open/openat/pread hooks REMOVED — bionic's open/openat
+    // are 2-3 instruction wrappers; inline-hooking them overwrites the adjacent
+    // function and crashed the game at boot. Replaced by a /proc/self/fd watcher
+    // thread (zero hooks, zero crash risk). Hook fns kept below for reference.
+    set_hook_status("res.libc_hooks", "disabled_v3.24.48");
+    start_res_fd_watcher();
 
     let a0 = resolve_module_symbol("libnative.so", "sqlite3_open_v2");
     let a0b = resolve_module_symbol("libnative.so", "sqlite3_open");
