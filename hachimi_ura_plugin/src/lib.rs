@@ -8271,6 +8271,32 @@ fn db_file_of(handle: usize) -> String {
         .unwrap_or_else(|| "?".to_string())
 }
 
+/// ★ v3.24.46: read a C string at a raw address ONLY if it lies inside a
+/// readable mapped region (mc_config varargs may or may not be pointers).
+unsafe fn safe_read_cstr(addr: usize, max: usize) -> String {
+    if addr < 0x10000 { return String::new(); }
+    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+        for line in maps.lines() {
+            let mut parts = line.split_whitespace();
+            let range = match parts.next() { Some(r) => r, None => continue };
+            let (a, b) = match range.split_once('-') { Some(x) => x, None => continue };
+            let sa = match usize::from_str_radix(a, 16) { Ok(v) => v, Err(_) => continue };
+            let ea = match usize::from_str_radix(b, 16) { Ok(v) => v, Err(_) => continue };
+            if addr >= sa && addr + max <= ea && line.contains('r') {
+                let s = std::slice::from_raw_parts(addr as *const u8, max);
+                let end = s.iter().position(|&c| c == 0).unwrap_or(max);
+                if end == 0 { return String::new(); }
+                // printable ASCII only, else treat as non-string
+                if s[..end].iter().all(|&c| (0x20..0x7f).contains(&c)) {
+                    return String::from_utf8_lossy(&s[..end]).into_owned();
+                }
+                return String::new();
+            }
+        }
+    }
+    String::new()
+}
+
 extern "C" fn sqlite3_open_v2_hook(
     filename: *const c_char,
     ppdb: *mut *mut c_void,
@@ -8300,6 +8326,33 @@ extern "C" fn sqlite3_open_v2_hook(
     }
 }
 
+extern "C" fn sqlite3_open_hook(
+    filename: *const c_char,
+    ppdb: *mut *mut c_void,
+) -> libc::c_int {
+    unsafe {
+        let tramp = interceptor_get_trampoline(sqlite3_open_hook as usize);
+        if tramp == 0 { return 1; }
+        let f: unsafe extern "C" fn(*const c_char, *mut *mut c_void) -> libc::c_int =
+            std::mem::transmute(tramp);
+        let rc = f(filename, ppdb);
+        let fstr = if filename.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(filename).to_string_lossy().into_owned()
+        };
+        let handle = if !ppdb.is_null() { *ppdb as usize } else { 0 };
+        if !fstr.is_empty() {
+            db_track(format!("open: {} handle=0x{:x} rc={}", fstr, handle, rc));
+            if let Ok(mut g) = DB_HANDLES.lock() {
+                if g.len() >= 64 { g.remove(0); }
+                g.push((handle, fstr));
+            }
+        }
+        rc
+    }
+}
+
 extern "C" fn sqlite3mc_config_hook(
     db: *mut c_void,
     param: *const c_char,
@@ -8312,9 +8365,13 @@ extern "C" fn sqlite3mc_config_hook(
         } else {
             CStr::from_ptr(param).to_string_lossy().into_owned()
         };
+        // ★ v3.24.46: resolve varargs that are actually string pointers
+        // (e.g. cipher NAME passed to sqlite3mc_config(db,"cipher","...")).
+        let a2s = safe_read_cstr(a2 as usize, 64);
+        let a3s = safe_read_cstr(a3 as usize, 64);
         db_track(format!(
-            "mc_config: {} param={} a2=0x{:x} a3=0x{:x}",
-            db_file_of(db as usize), pstr, a2, a3
+            "mc_config: {} param={} a2=0x{:x} a3=0x{:x} a2_str='{}' a3_str='{}'",
+            db_file_of(db as usize), pstr, a2, a3, a2s, a3s
         ));
         let tramp = interceptor_get_trampoline(sqlite3mc_config_hook as usize);
         if tramp != 0 {
@@ -8413,6 +8470,13 @@ unsafe fn install_sqlcipher_key_hook() {
         return;
     }
     let a0 = resolve_module_symbol("libnative.so", "sqlite3_open_v2");
+    let a0b = resolve_module_symbol("libnative.so", "sqlite3_open");
+    if a0b != 0 {
+        let ok = interceptor_hook(a0b, sqlite3_open_hook as usize);
+        set_hook_status("meta.open_v1", if ok { "hooked" } else { "failed: interceptor_hook" });
+    } else {
+        set_hook_status("meta.open_v1", "failed: resolve");
+    }
     let a1 = resolve_module_symbol("libnative.so", "sqlite3_key");
     let a2 = resolve_module_symbol("libnative.so", "sqlite3_key_v2");
     let a3 = resolve_module_symbol("libnative.so", "sqlite3mc_config");
