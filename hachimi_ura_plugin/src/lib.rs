@@ -137,6 +137,30 @@ static mut STORY_SET_ADDR: usize = 0;
 static mut ORIG_STORY_SET_PROLOGUE: [u8; 16] = [0; 16];
 // Event state: accumulated choices for current event
 static EVENT_STATE_MUTEX: Mutex<()> = Mutex::new(());
+
+// ★ v3.24.40: mirror every ura_log line into a queryable ring buffer
+// (Hachimi logcat was the only outlet before; /debug/hooklog exposes it).
+static HOOK_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+const HOOK_LOG_MAX: usize = 64;
+fn hook_log(msg: &str) {
+    if let Ok(mut g) = HOOK_LOG.lock() {
+        if g.len() >= HOOK_LOG_MAX { g.remove(0); }
+        g.push(msg.to_string());
+    }
+}
+
+// ★ v3.24.40: per-hook install status for /debug/hookdiag
+static HOOK_STATUS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+fn set_hook_status(name: &str, status: &str) {
+    hook_log(&format!("hook[{}] = {}", name, status));
+    if let Ok(mut g) = HOOK_STATUS.lock() {
+        if let Some(e) = g.iter_mut().find(|(n, _)| n == name) {
+            e.1 = status.to_string();
+        } else {
+            g.push((name.to_string(), status.to_string()));
+        }
+    }
+}
 static mut EVENT_CHOICES: Vec<EventChoice> = Vec::new();
 static mut EVENT_SELECTED_IDX: i32 = -1;
 static mut EVENT_STORY_ID: i32 = 0;
@@ -363,6 +387,7 @@ fn to_cstr(s: &str) -> CString {
 }
 
 unsafe fn ura_log(level: i32, msg: &str) {
+    hook_log(msg);
     if API.is_null() {
         return;
     }
@@ -6069,6 +6094,9 @@ fn push_loop() {
                 install_exec_training_hook();
                 install_failure_rate_hook();
                 install_event_choice_hook();
+                // ★ v3.24.40: sniff hooks were missing here — fallback mode
+                // left /api/sniff permanently unhooked.
+                install_api_sniff_hooks();
             }
             break;
         }
@@ -6476,7 +6504,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6602,6 +6630,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
             }
         )
     } else if path == "/api/sniff/toggle" {
+        // ★ v3.24.40: lazy retry for fallback-mode installs.
+        unsafe {
+            install_api_sniff_hooks();
+        }
         let new_val = !SNIFF_ENABLED.load(Ordering::Relaxed);
         SNIFF_ENABLED.store(new_val, Ordering::Relaxed);
         let req_hooked = unsafe { COMPRESS_REQUEST_ADDR != 0 };
@@ -6618,6 +6650,24 @@ fn handle_http(mut stream: std::net::TcpStream) {
             SNIFF_RESPONSES.clear();
         }
         r#"{"ok":true}"#.to_string()
+    } else if path == "/debug/hooklog" {
+        // ★ v3.24.40: last HOOK_LOG_MAX ura_log lines
+        let entries: Vec<String> = match HOOK_LOG.lock() {
+            Ok(g) => g.iter().map(|l| json_escape(l)).collect(),
+            Err(_) => Vec::new(),
+        };
+        format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+    } else if path == "/debug/hookdiag" {
+        // ★ v3.24.40: per-hook install status
+        let items: Vec<String> = match HOOK_STATUS.lock() {
+            Ok(g) => g.iter().map(|(n, st)| format!(r#"{{"hook":"{}","status":"{}"}}"#, json_escape(n), json_escape(st))).collect(),
+            Err(_) => Vec::new(),
+        };
+        format!(
+            r#"{{"game_initialized":{},"hooks":[{}]}}"#,
+            GAME_INITIALIZED.load(Ordering::Relaxed),
+            items.join(",")
+        )
     } else if path == "/api/sniff/diag" {
         // v3.23.3: Diagnostic endpoint for hook installation (Interceptor API)
         let req_hooked = unsafe { COMPRESS_REQUEST_ADDR != 0 };
@@ -6691,6 +6741,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
             )
         }
     } else if path == "/api/event/choices" {
+        // ★ v3.24.40: lazy retry — early-boot install may have missed.
+        unsafe {
+            if !EVENT_CHOICE_HOOK_INSTALLED || !STORY_SET_HOOK_INSTALLED {
+                install_event_choice_hook();
+            }
+        }
         // v3.24.2: Return captured event choices
         let _lock = EVENT_STATE_MUTEX.lock();
         unsafe {
@@ -8160,6 +8216,71 @@ unsafe fn format_headers_json(headers: &[(String, String)]) -> String {
     s
 }
 
+/// ★ v3.24.40: fuzzy variant — first method whose name CONTAINS `substr`.
+/// Self-heals when Cygames renames methods (e.g. CompressRequest_v2).
+unsafe fn find_method_fuzzy(class: *mut c_void, substr: &str) -> usize {
+    if class.is_null() { return 0; }
+    let get_methods_fn: Option<
+        unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void,
+    > = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let method_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
+        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    let method_get_ptr_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> = {
+        let p = resolve_il2cpp_symbol("il2cpp_method_get_pointer");
+        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    };
+    if get_methods_fn.is_none() || method_get_name_fn.is_none() { return 0; }
+    let mut iter: *mut c_void = std::ptr::null_mut();
+    loop {
+        let mi = get_methods_fn.unwrap()(class, &mut iter);
+        if mi.is_null() { break; }
+        let name_ptr = method_get_name_fn.unwrap()(mi);
+        if name_ptr.is_null() { continue; }
+        let name = CStr::from_ptr(name_ptr).to_string_lossy();
+        if name.contains(substr) {
+            if let Some(get_ptr) = method_get_ptr_fn {
+                let ptr = get_ptr(mi);
+                if !ptr.is_null() {
+                    ura_log(3, &format!("find_method_fuzzy: {}~{} -> 0x{:x}", substr, name, ptr as usize));
+                    return ptr as usize;
+                }
+            }
+        }
+    }
+    0
+}
+
+/// ★ v3.24.40: fuzzy variant — first class whose name CONTAINS `substr`.
+unsafe fn find_class_fuzzy(image: *const c_void, substr: &str) -> *mut c_void {
+    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
+    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
+    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
+    if get_count_fn.is_null() || get_class_fn.is_null() || get_name_fn.is_null() {
+        return ptr::null_mut();
+    }
+    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
+    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
+    let get_name: unsafe extern "C" fn(*const c_void) -> *const c_char = std::mem::transmute(get_name_fn);
+    let count = get_count(image);
+    for i in 0..count {
+        let cls = get_class(image, i);
+        if cls.is_null() { continue; }
+        let np = get_name(cls);
+        if np.is_null() { continue; }
+        let name = CStr::from_ptr(np).to_string_lossy();
+        if name.contains(substr) {
+            ura_log(3, &format!("find_class_fuzzy: {}~{}", substr, name));
+            return cls as *mut c_void;
+        }
+    }
+    ptr::null_mut()
+}
+
 unsafe fn install_api_sniff_hooks() {
     let all_hooked = COMPRESS_REQUEST_ADDR != 0 && DECOMPRESS_RESPONSE_ADDR != 0 && POST_ADDR != 0;
     if all_hooked {
@@ -8167,11 +8288,13 @@ unsafe fn install_api_sniff_hooks() {
     }
     if API.is_null() {
         ura_log(3, "API sniff: API is null");
+        set_hook_status("sniff", "failed: api_null");
         return;
     }
     let api = &*API;
     if api.interceptor == 0 {
         ura_log(3, "API sniff: interceptor not available");
+        set_hook_status("sniff", "failed: interceptor_unavailable");
         return;
     }
 
@@ -8201,24 +8324,32 @@ unsafe fn install_api_sniff_hooks() {
     let umamusume = get_asm(to_cstr("umamusume.dll").as_ptr());
     if umamusume.is_null() {
         ura_log(3, "API sniff: umamusume.dll image not found");
+        set_hook_status("sniff", "failed: image_not_found");
         return;
     }
 
-    // HttpHelper class
-    let http_helper = get_class(
+    // HttpHelper class (exact, then fuzzy fallback — v3.24.40)
+    let mut http_helper = get_class(
         umamusume,
         to_cstr("Gallop").as_ptr(),
         to_cstr("HttpHelper").as_ptr(),
     );
     if http_helper.is_null() {
+        http_helper = find_class_fuzzy(umamusume, "HttpHelper");
+    }
+    if http_helper.is_null() {
         ura_log(3, "API sniff: HttpHelper class not found");
+        set_hook_status("sniff", "failed: httphelper_class_not_found");
         return;
     }
     ura_log(3, "API sniff: HttpHelper class found");
 
     // Hook CompressRequest
     if COMPRESS_REQUEST_ADDR == 0 {
-        let addr = get_method_addr(http_helper as usize, to_cstr("CompressRequest").as_ptr(), 1);
+        let mut addr = get_method_addr(http_helper as usize, to_cstr("CompressRequest").as_ptr(), 1);
+        if addr == 0 {
+            addr = find_method_fuzzy(http_helper, "CompressRequest");
+        }
         if addr != 0 {
             if interceptor_hook(addr, compress_request_hook_handler as usize) {
                 COMPRESS_REQUEST_ADDR = addr;
@@ -8226,14 +8357,17 @@ unsafe fn install_api_sniff_hooks() {
                     3,
                     &format!("API sniff: CompressRequest hooked at 0x{:x}", addr),
                 );
+                set_hook_status("sniff.compress", &format!("hooked@0x{:x}", addr));
             } else {
                 ura_log(
                     3,
                     &format!("API sniff: CompressRequest hook FAILED at 0x{:x}", addr),
                 );
+                set_hook_status("sniff.compress", "failed: interceptor_hook");
             }
         } else {
             ura_log(3, "API sniff: CompressRequest NOT FOUND");
+            set_hook_status("sniff.compress", "failed: method_not_found");
         }
     }
 
@@ -8251,14 +8385,17 @@ unsafe fn install_api_sniff_hooks() {
                     3,
                     &format!("API sniff: DecompressResponse hooked at 0x{:x}", addr),
                 );
+                set_hook_status("sniff.decompress", &format!("hooked@0x{:x}", addr));
             } else {
                 ura_log(
                     3,
                     &format!("API sniff: DecompressResponse hook FAILED at 0x{:x}", addr),
                 );
+                set_hook_status("sniff.decompress", "failed: interceptor_hook");
             }
         } else {
             ura_log(3, "API sniff: DecompressResponse NOT FOUND");
+            set_hook_status("sniff.decompress", "failed: method_not_found");
         }
     }
 
@@ -8266,13 +8403,19 @@ unsafe fn install_api_sniff_hooks() {
     if POST_ADDR == 0 {
         let cute_http = get_asm(to_cstr("Cute.Http.Assembly.dll").as_ptr());
         if !cute_http.is_null() {
-            let www_request = get_class(
+            let mut www_request = get_class(
                 cute_http,
                 to_cstr("Cute.Http").as_ptr(),
                 to_cstr("WWWRequest").as_ptr(),
             );
+            if www_request.is_null() {
+                www_request = find_class_fuzzy(cute_http, "WWWRequest");
+            }
             if !www_request.is_null() {
-                let addr = get_method_addr(www_request as usize, to_cstr("Post").as_ptr(), 3);
+                let mut addr = get_method_addr(www_request as usize, to_cstr("Post").as_ptr(), 3);
+                if addr == 0 {
+                    addr = find_method_fuzzy(www_request, "Post");
+                }
                 if addr != 0 {
                     if interceptor_hook(addr, post_hook_handler as usize) {
                         POST_ADDR = addr;
@@ -8280,17 +8423,21 @@ unsafe fn install_api_sniff_hooks() {
                             3,
                             &format!("API sniff: WWWRequest.Post hooked at 0x{:x}", addr),
                         );
+                        set_hook_status("sniff.post", &format!("hooked@0x{:x}", addr));
                     } else {
                         ura_log(
                             3,
                             &format!("API sniff: WWWRequest.Post hook FAILED at 0x{:x}", addr),
                         );
+                        set_hook_status("sniff.post", "failed: interceptor_hook");
                     }
                 } else {
                     ura_log(3, "API sniff: WWWRequest.Post NOT FOUND");
+                    set_hook_status("sniff.post", "failed: method_not_found");
                 }
             } else {
                 ura_log(3, "API sniff: Cute.Http.WWWRequest class not found");
+                set_hook_status("sniff.post", "failed: class_not_found");
             }
         } else {
             ura_log(3, "API sniff: Cute.Http.Assembly.dll image not found");
@@ -8561,18 +8708,25 @@ unsafe fn install_event_choice_hook() {
         _ => return,
     };
 
-    let class = find_class(
+    let mut class = find_class(
         image,
         to_cstr("Gallop").as_ptr(),
         to_cstr("StoryChoiceController").as_ptr(),
     );
     if class.is_null() {
+        class = find_class_fuzzy(image, "StoryChoiceController");
+    }
+    if class.is_null() {
         ura_log(3, "Event hook: StoryChoiceController class not found");
+        set_hook_status("event", "failed: controller_class_not_found");
         return;
     }
 
     // Hook AddChoiceButton (1 param: StoryChoiceParam)
-    let add_btn_addr = find_method_addr(class, "AddChoiceButton", 1);
+    let mut add_btn_addr = find_method_addr(class, "AddChoiceButton", 1);
+    if add_btn_addr == 0 {
+        add_btn_addr = find_method_fuzzy(class, "AddChoiceButton");
+    }
     if add_btn_addr != 0 {
         EVENT_ADD_BTN_ADDR = add_btn_addr;
         install_hook_safe(
@@ -8581,8 +8735,10 @@ unsafe fn install_event_choice_hook() {
             event_add_choice_hook_handler as usize,
             &mut ORIG_EVENT_ADD_BTN_PROLOGUE,
         );
+        set_hook_status("event.add_btn", &format!("resolved@0x{:x}", add_btn_addr));
     } else {
         ura_log(3, "Event hook: AddChoiceButton NOT FOUND");
+        set_hook_status("event.add_btn", "failed: method_not_found");
     }
 
     // Hook Choice (2 params: index, ???)
@@ -8595,16 +8751,21 @@ unsafe fn install_event_choice_hook() {
             event_choice_hook_handler as usize,
             &mut ORIG_EVENT_CHOICE_PROLOGUE,
         );
+        set_hook_status("event.choice", &format!("resolved@0x{:x}", choice_addr));
     } else {
         ura_log(3, "Event hook: Choice NOT FOUND");
+        set_hook_status("event.choice", "failed: method_not_found");
     }
 
     // ★ v3.24.2: Hook StoryManager.SetStory to capture story_id and chara_id
-    let story_mgr_class = find_class(
+    let mut story_mgr_class = find_class(
         image,
         to_cstr("Gallop").as_ptr(),
         to_cstr("StoryManager").as_ptr(),
     );
+    if story_mgr_class.is_null() {
+        story_mgr_class = find_class_fuzzy(image, "StoryManager");
+    }
     if !story_mgr_class.is_null() {
         let set_story_addr = find_method_addr(story_mgr_class, "SetStory", 4);
         if set_story_addr != 0 {
@@ -8616,6 +8777,7 @@ unsafe fn install_event_choice_hook() {
                 story_set_hook_handler as usize,
                 &mut ORIG_STORY_SET_PROLOGUE,
             );
+            set_hook_status("event.story_set", &format!("resolved@0x{:x}", set_story_addr));
             ura_log(
                 3,
                 &format!(
@@ -8625,12 +8787,17 @@ unsafe fn install_event_choice_hook() {
             );
         } else {
             ura_log(3, "Event hook: StoryManager.SetStory NOT FOUND");
+            set_hook_status("event.story_set", "failed: method_not_found");
         }
     } else {
         ura_log(3, "Event hook: StoryManager class NOT FOUND");
+        set_hook_status("event.story_set", "failed: class_not_found");
     }
 
-    EVENT_CHOICE_HOOK_INSTALLED = true;
+    // ★ v3.24.40: only mark installed when at least one hook landed, so the
+    // lazy retry in /api/event/choices can re-attempt after early-boot misses.
+    EVENT_CHOICE_HOOK_INSTALLED =
+        EVENT_ADD_BTN_ADDR != 0 || EVENT_CHOICE_ADDR != 0 || STORY_SET_HOOK_INSTALLED;
 }
 
 extern "C" fn on_game_initialized(_userdata: *mut c_void) {
