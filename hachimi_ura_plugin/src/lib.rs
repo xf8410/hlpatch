@@ -8593,35 +8593,52 @@ extern "C" fn event_add_choice_hook_handler(this: *mut c_void, param: *mut c_voi
             return;
         }
 
-        // Read StoryChoiceParam fields via IL2CPP getter methods.
-        // ★ v3.24.41: log the RUNTIME class of param — the v3.24.2 code
-        // assumed StoryChoiceParam, but on newer clients AddChoiceButton may
-        // receive a different param type whose getters we must find fuzzily.
+        // Read choice data via IL2CPP getter methods.
+        // ★ v3.24.41: log the RUNTIME class of param.
+        // ★ v3.24.43: on current clients AddChoiceButton receives a
+        // StoryChoiceButton (UI object), NOT a StoryChoiceParam. The button
+        // holds the data object at field _choiceParam (offset 64, verified
+        // via /debug/dumpclass). Unwrap it first, then read getters from
+        // the StoryChoiceParam as before.
         let pclass = obj_class(param);
         let pclass_name = class_name_of(pclass);
 
-        let mut label = read_il2cpp_string_from_obj(param, "get_LabelText");
+        let mut data_obj = param;
+        let mut data_class = pclass;
+        let mut data_class_name = pclass_name.clone();
+        if pclass_name == "StoryChoiceButton" {
+            let inner = std::ptr::read_unaligned(
+                (param as *const u8).add(64) as *const *mut c_void,
+            );
+            if !inner.is_null() {
+                data_obj = inner;
+                data_class = obj_class(inner);
+                data_class_name = class_name_of(data_class);
+            }
+        }
+
+        let mut label = read_il2cpp_string_from_obj(data_obj, "get_LabelText");
         if label.is_empty() {
-            label = call_fuzzy_string(pclass, param, "LabelText");
+            label = call_fuzzy_string(data_class, data_obj, "LabelText");
         }
-        let mut gain_id = call_getter_int_raw(param, "get_GainId");
+        let mut gain_id = call_getter_int_raw(data_obj, "get_GainId");
         if gain_id <= 0 {
-            gain_id = call_fuzzy_int(pclass, param, "GainId", &["LoopExit", "Analyze", "OnSelect"]);
+            gain_id = call_fuzzy_int(data_class, data_obj, "GainId", &["LoopExit", "Analyze", "OnSelect"]);
         }
-        let mut next_block_idx = call_getter_int_raw(param, "get_GetNextBlockIndex");
+        let mut next_block_idx = call_getter_int_raw(data_obj, "get_GetNextBlockIndex");
         if next_block_idx <= 0 {
-            next_block_idx = call_fuzzy_int(pclass, param, "NextBlockIndex", &[]);
+            next_block_idx = call_fuzzy_int(data_class, data_obj, "NextBlockIndex", &[]);
         }
-        let mut loop_exit_gain_id = call_getter_int_raw(param, "get_LoopExitGainId");
+        let mut loop_exit_gain_id = call_getter_int_raw(data_obj, "get_LoopExitGainId");
         if loop_exit_gain_id <= 0 {
-            loop_exit_gain_id = call_fuzzy_int(pclass, param, "LoopExitGainId", &[]);
+            loop_exit_gain_id = call_fuzzy_int(data_class, data_obj, "LoopExitGainId", &[]);
         }
 
         ura_log(
             3,
             &format!(
-                "Event choice added: param_class='{}' label='{}' gain={} next={} loop_exit={}",
-                pclass_name, label, gain_id, next_block_idx, loop_exit_gain_id
+                "Event choice added: param_class='{}' data_class='{}' label='{}' gain={} next={} loop_exit={}",
+                pclass_name, data_class_name, label, gain_id, next_block_idx, loop_exit_gain_id
             ),
         );
 
