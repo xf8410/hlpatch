@@ -6672,6 +6672,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
     } else if path == "/debug/resource_reads" {
         // ★ v3.24.47: meta/dat file-read trace (ring 256)
+        // ★ v3.24.50: lazy-start the watcher now (safe: game fully booted).
+        start_res_fd_watcher();
         let entries: Vec<String> = match RES_READ_LOG.lock() {
             Ok(g) => g.iter().map(|l| format!("\"{}\"", json_escape(l))).collect(),
             Err(_) => Vec::new(),
@@ -8759,7 +8761,10 @@ unsafe fn install_sqlcipher_key_hook() {
     // function and crashed the game at boot. Replaced by a /proc/self/fd watcher
     // thread (zero hooks, zero crash risk). Hook fns kept below for reference.
     set_hook_status("res.libc_hooks", "disabled_v3.24.48");
-    start_res_fd_watcher();
+    // ★ v3.24.50: watcher NOT started here — v3.24.49 bisect showed starting a
+    // thread this early (loader init context) blocks the game boot. It now
+    // lazy-starts on the first /debug/resource_reads request.
+    set_hook_status("res.fd_watcher", "lazy_v3.24.50");
 
     let a0 = resolve_module_symbol("libnative.so", "sqlite3_open_v2");
     let a0b = resolve_module_symbol("libnative.so", "sqlite3_open");
