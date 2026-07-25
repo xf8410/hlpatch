@@ -8810,6 +8810,42 @@ fn start_res_fd_watcher() {
     set_hook_status("res.fd_watcher", "started");
 }
 
+
+/// ★ v3.24.59: SAFE subset — NEVER touch sqlite3_open_v2 / sqlite3_key
+/// (Hachimi owns them; a failed double-hook corrupts the function body).
+unsafe fn install_sqlcipher_safe_hooks() {
+    if SQLCIPHER_KEY_HOOK_DONE { return; }
+    SQLCIPHER_KEY_HOOK_DONE = true;
+    if API.is_null() || (*API).interceptor == 0 {
+        set_hook_status("meta.key", "failed: no_interceptor");
+        return;
+    }
+    let a0b = resolve_module_symbol("libnative.so", "sqlite3_open");
+    if a0b != 0 {
+        let ok = interceptor_hook(a0b, sqlite3_open_hook as usize);
+        set_hook_status("meta.open_v1", if ok { "hooked" } else { "failed: interceptor_hook" });
+    } else {
+        set_hook_status("meta.open_v1", "failed: resolve");
+    }
+    let a3 = resolve_module_symbol("libnative.so", "sqlite3mc_config");
+    if a3 != 0 {
+        let ok = interceptor_hook(a3, sqlite3mc_config_hook as usize);
+        set_hook_status("meta.mc_config", if ok { "hooked" } else { "failed: interceptor_hook" });
+    } else {
+        set_hook_status("meta.mc_config", "failed: resolve");
+    }
+    let a2 = resolve_module_symbol("libnative.so", "sqlite3_key_v2");
+    if a2 != 0 {
+        let ok = interceptor_hook(a2, sqlcipher_key_v2_hook as usize);
+        set_hook_status("meta.key_v2", if ok { "hooked" } else { "failed: interceptor_hook" });
+    } else {
+        set_hook_status("meta.key_v2", "failed: resolve");
+    }
+    set_hook_status("meta.open_v2", "skipped_hachimi_owns");
+    set_hook_status("meta.key_v1", "skipped_hachimi_owns");
+    ura_log(3, "sqlcipher SAFE hooks installed (open_v2/key skipped, Hachimi owns them)");
+}
+
 unsafe fn install_sqlcipher_key_hook() {
     if SQLCIPHER_KEY_HOOK_DONE { return; }
     SQLCIPHER_KEY_HOOK_DONE = true;
@@ -10013,7 +10049,7 @@ pub unsafe extern "C" fn hachimi_init_v3(
     // does not hook those two, so no conflict).
     let flag = format!("/sdcard/Android/media/{}/hachimi/ura_sqlcipher_hooks.flag", pkg);
     if std::path::Path::new(&flag).exists() {
-        install_sqlcipher_key_hook();
+        install_sqlcipher_safe_hooks();
         let ap = resolve_module_symbol("libnative.so", "sqlite3_prepare_v2");
         if ap != 0 {
             let ok = interceptor_hook(ap, sqlite3_prepare_v2_hook as usize);
