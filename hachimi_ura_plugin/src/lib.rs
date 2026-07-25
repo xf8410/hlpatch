@@ -6743,7 +6743,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/debug/mdb_all_tables", "/debug/mdb_schema_dump",
         ];
         const BOOT_SAFE_PREFIX: &[&str] = &[
-            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite",
+            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex",
         ];
         let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
             || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
@@ -6987,6 +6987,127 @@ fn handle_http(mut stream: std::net::TcpStream) {
             r#"{{"needle":"SQLite format 3","hits":{},"locations":[{}]}}"#,
             hits.len(),
             hits.iter().map(|h| format!("\"{}\"", h)).collect::<Vec<_>>().join(",")
+        )
+    } else if path == "/debug/mem_scan_zdict" {
+        // ★ v3.24.63: hunt zstd dictionary magic (37 A4 30 EC) in ALL readable
+        // memory regions (incl. r-- rodata of .so files). Each hit dumps 256KB
+        // of context to the media dir for offline inspection.
+        let needle = [0x37u8, 0xa4, 0x30, 0xec];
+        let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(4);
+        let mut hits: Vec<String> = Vec::new();
+        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            if let Ok(mem) = std::fs::File::open("/proc/self/mem") {
+                use std::os::unix::fs::FileExt;
+                'outer: for line in maps.lines() {
+                    let cols: Vec<&str> = line.split_whitespace().collect();
+                    if cols.len() < 2 { continue; }
+                    if !cols[1].starts_with('r') { continue; }
+                    let range: Vec<&str> = cols[0].split('-').collect();
+                    if range.len() != 2 { continue; }
+                    let (Ok(sa), Ok(ea)) = (
+                        usize::from_str_radix(range[0], 16),
+                        usize::from_str_radix(range[1], 16),
+                    ) else { continue };
+                    let len = ea - sa;
+                    if len < 4096 || len > 1024 * 1024 * 1024 { continue; }
+                    let mut off = 0usize;
+                    while off < len {
+                        let chunk = (8 * 1024 * 1024usize).min(len - off);
+                        let mut buf = vec![0u8; chunk];
+                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() { break; }
+                        for (i, w) in buf.windows(4).enumerate() {
+                            if w == needle {
+                                let abs = sa + off + i;
+                                // dump 256KB context starting at hit
+                                let dump_len = 256 * 1024usize;
+                                let mut dbuf = vec![0u8; dump_len];
+                                let got = mem.read_at(&mut dbuf, abs as u64).unwrap_or(0);
+                                dbuf.truncate(got);
+                                let fname = format!(
+                                    "/sdcard/Android/media/jp.co.cygames.umamusume/hachimi/zdict_{:x}.bin",
+                                    abs
+                                );
+                                let saved = std::fs::write(&fname, &dbuf).is_ok();
+                                let map_name = cols.get(5).copied().unwrap_or("");
+                                hits.push(format!(
+                                    "0x{:x} saved={} bytes={} map={}",
+                                    abs, saved, got, map_name
+                                ));
+                                if hits.len() >= max_hits { break 'outer; }
+                            }
+                        }
+                        off += chunk;
+                    }
+                }
+            }
+        }
+        format!(
+            r#"{{"needle":"37a430ec","hits":{},"locations":[{}],"note":"raw-content dicts have no magic; if 0 hits use /debug/mem_scan_hex"}}"#,
+            hits.len(),
+            hits.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
+        )
+    } else if path.starts_with("/debug/mem_scan_hex") {
+        // ★ v3.24.63: arbitrary <=32B hex pattern scan across readable maps
+        let hexq = parse_query(&full_uri, "hex");
+        let mut needle: Vec<u8> = Vec::new();
+        let hb = hexq.as_bytes();
+        let mut i = 0;
+        while i + 1 < hb.len() && needle.len() < 32 {
+            if let Ok(b) = u8::from_str_radix(&hexq[i..i + 2], 16) {
+                needle.push(b);
+            }
+            i += 2;
+        }
+        let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(8);
+        let mut hits: Vec<String> = Vec::new();
+        if needle.is_empty() {
+            let body = r#"{"error":"empty_needle","usage":"/debug/mem_scan_hex?hex=37a430ec"}"#.to_string();
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+            let _ = stream.write_all(resp.as_bytes());
+            return;
+        }
+        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            if let Ok(mem) = std::fs::File::open("/proc/self/mem") {
+                use std::os::unix::fs::FileExt;
+                'outer: for line in maps.lines() {
+                    let cols: Vec<&str> = line.split_whitespace().collect();
+                    if cols.len() < 2 || !cols[1].starts_with('r') { continue; }
+                    let range: Vec<&str> = cols[0].split('-').collect();
+                    if range.len() != 2 { continue; }
+                    let (Ok(sa), Ok(ea)) = (
+                        usize::from_str_radix(range[0], 16),
+                        usize::from_str_radix(range[1], 16),
+                    ) else { continue };
+                    let len = ea - sa;
+                    if len < 4096 || len > 1024 * 1024 * 1024 { continue; }
+                    let mut off = 0usize;
+                    while off < len {
+                        let chunk = (8 * 1024 * 1024usize).min(len - off);
+                        let mut buf = vec![0u8; chunk];
+                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() { break; }
+                        for (i, w) in buf.windows(needle.len()).enumerate() {
+                            if w == needle.as_slice() {
+                                let abs = sa + off + i;
+                                let tail_s = i + needle.len();
+                                let tail_e = (tail_s + 24).min(buf.len());
+                                hits.push(format!(
+                                    "0x{:x} {} {}",
+                                    abs,
+                                    hex_encode(&buf[tail_s..tail_e]),
+                                    cols.get(5).copied().unwrap_or("")
+                                ));
+                                if hits.len() >= max_hits { break 'outer; }
+                            }
+                        }
+                        off += chunk;
+                    }
+                }
+            }
+        }
+        format!(
+            r#"{{"hits":{},"locations":[{}]}}"#,
+            hits.len(),
+            hits.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
         )
     } else if path == "/debug/meta_dump" {
         // ★ v3.24.61: in-process meta dump (libnative sqlite + captured key)
