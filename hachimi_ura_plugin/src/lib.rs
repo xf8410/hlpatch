@@ -6743,7 +6743,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/debug/mdb_all_tables", "/debug/mdb_schema_dump",
         ];
         const BOOT_SAFE_PREFIX: &[&str] = &[
-            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex", "/debug/file_scan_hex",
+            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex", "/debug/file_scan_hex", "/debug/maps_list",
         ];
         let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
             || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
@@ -7163,6 +7163,26 @@ fn handle_http(mut stream: std::net::TcpStream) {
             targets.len(),
             hits.len(),
             hits.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
+        )
+    } else if path == "/debug/maps_list" {
+        // ★ v3.24.65: list file-backed memory maps (find libzstd / codec hosts)
+        let filter = parse_query(&full_uri, "filter");
+        let mut out: Vec<String> = Vec::new();
+        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            for line in maps.lines() {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if let Some(name) = cols.get(5) {
+                    if name.starts_with('/') && (filter.is_empty() || name.contains(&filter)) {
+                        let e = format!("{} {}", cols[0], name);
+                        if !out.contains(&e) { out.push(e); }
+                    }
+                }
+            }
+        }
+        format!(
+            r#"{{"count":{},"maps":[{}]}}"#,
+            out.len(),
+            out.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
         )
     } else if path == "/debug/meta_dump" {
         // ★ v3.24.61: in-process meta dump (libnative sqlite + captured key)
