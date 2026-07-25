@@ -8820,13 +8820,11 @@ unsafe fn install_sqlcipher_safe_hooks() {
         set_hook_status("meta.key", "failed: no_interceptor");
         return;
     }
-    let a0b = resolve_module_symbol("libnative.so", "sqlite3_open");
-    if a0b != 0 {
-        let ok = interceptor_hook(a0b, sqlite3_open_hook as usize);
-        set_hook_status("meta.open_v1", if ok { "hooked" } else { "failed: interceptor_hook" });
-    } else {
-        set_hook_status("meta.open_v1", "failed: resolve");
-    }
+    // ★ v3.24.60: open_v1 REMOVED — sqlite3_open is a 2-instruction thin
+    // wrapper; inline-hooking it corrupts the adjacent function (same bug as
+    // v3.24.47 libc hooks). mc_config/key_v2/prepare/exec remain (none of them
+    // is hooked by Hachimi and all are full-size functions).
+    set_hook_status("meta.open_v1", "skipped_thin_wrapper");
     let a3 = resolve_module_symbol("libnative.so", "sqlite3mc_config");
     if a3 != 0 {
         let ok = interceptor_hook(a3, sqlite3mc_config_hook as usize);
