@@ -9771,9 +9771,23 @@ pub unsafe extern "C" fn hachimi_init_v3(
 
     // ★ v3.24.44: capture SQLCipher key EARLY — the game keys `meta`
     // during boot, possibly before on_game_initialized fires.
+    // ★ v3.24.57: DEFAULT OFF — Hachimi 0.26.4 hooks sqlite3_open_v2 and
+    // sqlite3_key itself; our double hook corrupted the trampoline chain and
+    // killed the process the moment the game opened its DBs (5/5 boots died
+    // right after init_done in ura_boot.log). The key was captured long ago
+    // and persisted. Create files/ura_sqlcipher_hooks.flag to re-enable.
     boot_trace("before_key_hooks");
-    install_sqlcipher_key_hook();
-    boot_trace("key_hooks_done");
+    let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
+    let pkg = String::from_utf8_lossy(&pkg_raw)
+        .trim_matches(char::from(0)).trim().to_string();
+    let flag = format!("/data/user/0/{}/files/ura_sqlcipher_hooks.flag", pkg);
+    if std::path::Path::new(&flag).exists() {
+        install_sqlcipher_key_hook();
+        boot_trace("key_hooks_done");
+    } else {
+        set_hook_status("meta.sqlcipher", "disabled_v3.24.57");
+        boot_trace("key_hooks_skipped");
+    }
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr(&format!("URA v{} Loaded!", PLUGIN_VERSION)).as_ptr());
