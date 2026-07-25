@@ -6743,7 +6743,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/debug/mdb_all_tables", "/debug/mdb_schema_dump",
         ];
         const BOOT_SAFE_PREFIX: &[&str] = &[
-            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex",
+            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex", "/debug/file_scan_hex",
         ];
         let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
             || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
@@ -7106,6 +7106,61 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
         format!(
             r#"{{"hits":{},"locations":[{}]}}"#,
+            hits.len(),
+            hits.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
+        )
+    } else if path.starts_with("/debug/file_scan_hex") {
+        // ★ v3.24.64: scan device files for a hex pattern.
+        // path= empty -> scan every file-backed .so/.dat region listed in maps (dedup).
+        // Reports file offset hits with 24 bytes of trailing context.
+        let hexq = parse_query(&full_uri, "hex");
+        let mut needle: Vec<u8> = Vec::new();
+        let hb = hexq.as_bytes();
+        let mut i = 0;
+        while i + 1 < hb.len() && needle.len() < 64 {
+            if let Ok(b) = u8::from_str_radix(&hexq[i..i + 2], 16) { needle.push(b); }
+            i += 2;
+        }
+        let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(8);
+        let pathq = parse_query(&full_uri, "path");
+        let mut targets: Vec<String> = Vec::new();
+        if !pathq.is_empty() {
+            targets.push(pathq);
+        } else if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            for line in maps.lines() {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if let Some(name) = cols.get(5) {
+                    if (name.ends_with(".so") || name.ends_with(".apk") || name.contains("/dat/"))
+                        && !targets.iter().any(|t| t == name)
+                    {
+                        targets.push(name.to_string());
+                    }
+                }
+            }
+        }
+        let mut hits: Vec<String> = Vec::new();
+        if needle.is_empty() {
+            hits.push("error: empty needle, use ?hex=37a430ec".to_string());
+        } else {
+            use std::io::Read;
+            'files: for t in &targets {
+                if let Ok(mut f) = std::fs::File::open(t) {
+                    let mut fbuf: Vec<u8> = Vec::new();
+                    if f.read_to_end(&mut fbuf).is_err() { continue; }
+                    for (i, w) in fbuf.windows(needle.len()).enumerate() {
+                        if w == needle.as_slice() {
+                            let ts = i + needle.len();
+                            let te = (ts + 24).min(fbuf.len());
+                            hits.push(format!("{}@0x{:x} {}", t, i, hex_encode(&fbuf[ts..te])));
+                            if hits.len() >= max_hits { break 'files; }
+                        }
+                    }
+                }
+            }
+        }
+        format!(
+            r#"{{"targets":{},"hits":{},"locations":[{}]}}"#,
+            targets.len(),
             hits.len(),
             hits.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
         )
