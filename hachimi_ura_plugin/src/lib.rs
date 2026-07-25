@@ -6634,7 +6634,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6790,6 +6790,60 @@ fn handle_http(mut stream: std::net::TcpStream) {
             Err(_) => Vec::new(),
         };
         format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+    } else if path == "/debug/resource_reads" {
+        // ★ v3.24.58: meta/dat file-read trace. Lazy-starts the /proc watcher
+        // on first request (never at init — thread spawn in init context).
+        start_res_fd_watcher();
+        let entries: Vec<String> = match RES_READ_LOG.lock() {
+            Ok(g) => g.iter().map(|l| format!("\"{}\"", json_escape(l))).collect(),
+            Err(_) => Vec::new(),
+        };
+        format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+    } else if path.starts_with("/debug/mem_scan_sqlite") {
+        // ★ v3.24.58: hunt plaintext "SQLite format 3" pages in process memory
+        // — any custom decryption MUST materialize this in RAM.
+        let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(8);
+        let mut hits: Vec<String> = Vec::new();
+        let needle = b"SQLite format 3 ";
+        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            let mem = std::fs::File::open("/proc/self/mem");
+            use std::os::unix::fs::FileExt;
+            if let Ok(mem) = mem {
+                'outer: for line in maps.lines() {
+                    let cols: Vec<&str> = line.split_whitespace().collect();
+                    if cols.len() < 6 { continue; }
+                    if !cols[1].contains("rw") { continue; }
+                    let range: Vec<&str> = cols[0].split('-').collect();
+                    if range.len() != 2 { continue; }
+                    let (Ok(sa), Ok(ea)) = (
+                        usize::from_str_radix(range[0], 16),
+                        usize::from_str_radix(range[1], 16),
+                    ) else { continue };
+                    let len = ea - sa;
+                    if len < 4096 || len > 512 * 1024 * 1024 { continue; }
+                    let mut off = 0usize;
+                    while off < len {
+                        let chunk = (4 * 1024 * 1024usize).min(len - off);
+                        let mut buf = vec![0u8; chunk];
+                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() { break; }
+                        for (i, w) in buf.windows(needle.len()).enumerate() {
+                            if w == needle {
+                                let abs = sa + off + i;
+                                let after = &buf[i + needle.len()..(i + needle.len() + 16).min(buf.len())];
+                                hits.push(format!("0x{:x} {}", abs, hex_encode(after)));
+                                if hits.len() >= max_hits { break 'outer; }
+                            }
+                        }
+                        off += chunk;
+                    }
+                }
+            }
+        }
+        format!(
+            r#"{{"needle":"SQLite format 3","hits":{},"locations":[{}]}}"#,
+            hits.len(),
+            hits.iter().map(|h| format!("\"{}\"", h)).collect::<Vec<_>>().join(",")
+        )
     } else if path == "/debug/resource_db_keys" {
         // ★ v3.24.45: full db open/key/mc_config pairing log
         let entries: Vec<String> = match DB_KEY_LOG.lock() {
@@ -8582,6 +8636,180 @@ extern "C" fn sqlcipher_key_v2_hook(
     }
 }
 
+// ★ v3.24.48b: allocation-free case-insensitive substring scan over raw bytes.
+// SQL hooks run on EVERY statement at boot — never allocate just to filter.
+fn bytes_contains_ci(hay: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || hay.len() < needle.len() { return false; }
+    hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+extern "C" fn sqlite3_prepare_v2_hook(
+    db: *mut c_void,
+    zsql: *const c_char,
+    nbyte: libc::c_int,
+    ppstmt: *mut *mut c_void,
+    pztail: *mut *const c_char,
+) -> libc::c_int {
+    unsafe {
+        if !zsql.is_null() {
+            // ★ v3.24.48: bounded read — zsql is only guaranteed nbyte long when
+            // nbyte > 0; CStr::from_ptr could overread past the mapping.
+            // ★ v3.24.48b: zero-alloc prefilter — scan raw bytes first, only
+            // build a String for the rare key/cipher/pragma statement.
+            let raw: &[u8] = if nbyte > 0 && nbyte <= 8192 {
+                std::slice::from_raw_parts(zsql as *const u8, nbyte as usize)
+            } else {
+                let c = CStr::from_ptr(zsql);
+                let b = c.to_bytes();
+                &b[..b.len().min(8192)]
+            };
+            if bytes_contains_ci(raw, b"pragma") || bytes_contains_ci(raw, b"cipher") {
+                let sql = String::from_utf8_lossy(raw);
+                db_track(format!(
+                    "sql: {} sql='{}'",
+                    db_file_of(db as usize),
+                    sql.chars().take(200).collect::<String>()
+                ));
+            }
+        }
+        let tramp = interceptor_get_trampoline(sqlite3_prepare_v2_hook as usize);
+        if tramp != 0 {
+            let f: unsafe extern "C" fn(
+                *mut c_void, *const c_char, libc::c_int, *mut *mut c_void, *mut *const c_char,
+            ) -> libc::c_int = std::mem::transmute(tramp);
+            return f(db, zsql, nbyte, ppstmt, pztail);
+        }
+        1
+    }
+}
+
+extern "C" fn sqlite3_exec_hook(
+    db: *mut c_void,
+    sql: *const c_char,
+    cb: *mut c_void,
+    arg: *mut c_void,
+    errmsg: *mut *mut c_char,
+) -> libc::c_int {
+    unsafe {
+        if !sql.is_null() {
+            // ★ v3.24.48b: zero-alloc prefilter (see prepare hook).
+            let raw0 = CStr::from_ptr(sql).to_bytes();
+            let raw = &raw0[..raw0.len().min(8192)];
+            if bytes_contains_ci(raw, b"pragma") || bytes_contains_ci(raw, b"cipher") {
+                let q = String::from_utf8_lossy(raw);
+                db_track(format!(
+                    "exec: {} sql='{}'",
+                    db_file_of(db as usize),
+                    q.chars().take(200).collect::<String>()
+                ));
+            }
+        }
+        let tramp = interceptor_get_trampoline(sqlite3_exec_hook as usize);
+        if tramp != 0 {
+            let f: unsafe extern "C" fn(
+                *mut c_void, *const c_char, *mut c_void, *mut c_void, *mut *mut c_char,
+            ) -> libc::c_int = std::mem::transmute(tramp);
+            return f(db, sql, cb, arg, errmsg);
+        }
+        1
+    }
+}
+
+// fd -> path map for resource reads (meta / dat only)
+static RES_FDS: Mutex<Vec<(libc::c_int, String)>> = Mutex::new(Vec::new());
+static RES_READ_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+fn res_read_track(entry: String) {
+    hook_log(&entry);
+    if let Ok(mut g) = RES_READ_LOG.lock() {
+        if g.len() >= 256 { g.remove(0); }
+        g.push(entry);
+    }
+}
+fn res_path_of_fd(fd: libc::c_int) -> Option<String> {
+    RES_FDS.lock().ok()?.iter().find(|(f, _)| *f == fd).map(|(_, p)| p.clone())
+}
+unsafe fn res_track_open(path: *const c_char, fd: libc::c_int) {
+    if path.is_null() || fd < 0 { return; }
+    let p = CStr::from_ptr(path).to_string_lossy().into_owned();
+    if !(p.contains("/meta") || p.contains("/dat/")) { return; }
+    res_read_track(format!("open: fd={} path={}", fd, p));
+    if let Ok(mut g) = RES_FDS.lock() {
+        if g.len() >= 128 { g.remove(0); }
+        g.push((fd, p));
+    }
+}
+
+// ★ v3.24.48: hook-free resource read watcher. Enumerates /proc/self/fd for
+// links into /meta or /dat and polls /proc/self/fdinfo for the read position.
+// Gives the same "when/what/where" as the removed libc tracer without touching
+// a single instruction of the process.
+static RES_WATCHER_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+fn start_res_fd_watcher() {
+    if RES_WATCHER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        // (fd, path, last_pos)
+        let mut seen: Vec<(i32, String, i64)> = Vec::new();
+        loop {
+            if let Ok(rd) = std::fs::read_dir("/proc/self/fd") {
+                for e in rd.flatten() {
+                    let fd: i32 = match e.file_name().to_string_lossy().parse() {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let link = match std::fs::read_link(e.path()) {
+                        Ok(l) => l.to_string_lossy().into_owned(),
+                        Err(_) => continue,
+                    };
+                    if !(link.contains("/meta") || link.contains("/dat/")) {
+                        continue;
+                    }
+                    let pos = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd))
+                        .ok()
+                        .and_then(|s| {
+                            s.lines()
+                                .find(|l| l.starts_with("pos:"))
+                                .and_then(|l| l[4..].trim().parse::<i64>().ok())
+                        })
+                        .unwrap_or(-1);
+                    match seen.iter_mut().find(|(f, _, _)| *f == fd) {
+                        None => {
+                            if seen.len() < 64 {
+                                seen.push((fd, link.clone(), pos));
+                            }
+                            res_read_track(format!(
+                                "fd_open: fd={} path={} pos=0x{:x}", fd, link, pos
+                            ));
+                        }
+                        Some((_, p, last)) => {
+                            if *p != link {
+                                *p = link.clone();
+                                *last = pos;
+                                res_read_track(format!(
+                                    "fd_reopen: fd={} path={} pos=0x{:x}", fd, link, pos
+                                ));
+                            } else if pos >= 0 && pos != *last {
+                                let old = *last;
+                                *last = pos;
+                                if old >= 0 {
+                                    res_read_track(format!(
+                                        "fd_read: fd={} pos=0x{:x}->0x{:x} ({})",
+                                        fd, old, pos, link
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    });
+    set_hook_status("res.fd_watcher", "started");
+}
+
 unsafe fn install_sqlcipher_key_hook() {
     if SQLCIPHER_KEY_HOOK_DONE { return; }
     SQLCIPHER_KEY_HOOK_DONE = true;
@@ -9780,9 +10008,26 @@ pub unsafe extern "C" fn hachimi_init_v3(
     let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
     let pkg = String::from_utf8_lossy(&pkg_raw)
         .trim_matches(char::from(0)).trim().to_string();
-    let flag = format!("/data/user/0/{}/files/ura_sqlcipher_hooks.flag", pkg);
+    // ★ v3.24.58: flag moved to the user-accessible media dir. When set, also
+    // install the prepare/exec SQL-text interception (libnative-only, Hachimi
+    // does not hook those two, so no conflict).
+    let flag = format!("/sdcard/Android/media/{}/hachimi/ura_sqlcipher_hooks.flag", pkg);
     if std::path::Path::new(&flag).exists() {
         install_sqlcipher_key_hook();
+        let ap = resolve_module_symbol("libnative.so", "sqlite3_prepare_v2");
+        if ap != 0 {
+            let ok = interceptor_hook(ap, sqlite3_prepare_v2_hook as usize);
+            set_hook_status("meta.prepare", if ok { "hooked" } else { "failed: interceptor_hook" });
+        } else {
+            set_hook_status("meta.prepare", "failed: resolve");
+        }
+        let ae = resolve_module_symbol("libnative.so", "sqlite3_exec");
+        if ae != 0 {
+            let ok = interceptor_hook(ae, sqlite3_exec_hook as usize);
+            set_hook_status("meta.exec", if ok { "hooked" } else { "failed: interceptor_hook" });
+        } else {
+            set_hook_status("meta.exec", "failed: resolve");
+        }
         boot_trace("key_hooks_done");
     } else {
         set_hook_status("meta.sqlcipher", "disabled_v3.24.57");
