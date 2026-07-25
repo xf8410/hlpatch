@@ -7715,8 +7715,20 @@ fn handle_http(mut stream: std::net::TcpStream) {
             Err(e) => format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
         }
     } else if path == "/debug/resource_file_dl" {
-        let hash = parse_query(&full_uri, "hash").to_ascii_lowercase();
-        if !valid_resource_hash(&hash) {
+        // v3.24.62: meta `a` 表的 h 是 Base32(A-Z2-7,32字符) 且就是 dat 文件名原文，
+        // 与 hex 哈希一并接受；Base32 需保持原样（不做 lowercase）。
+        let raw_hash = parse_query(&full_uri, "hash");
+        let hash = if raw_hash.len() == 32
+            && raw_hash.bytes().all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'2'..=b'7'))
+            && !raw_hash.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            raw_hash.to_ascii_uppercase()
+        } else {
+            raw_hash.to_ascii_lowercase()
+        };
+        let hash_ok = valid_resource_hash(&hash)
+            || (hash.len() == 32 && hash.bytes().all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7')));
+        if !hash_ok {
             r#"{"error":"invalid_hash","requirement":"8..128 hexadecimal characters"}"#.to_string()
         } else {
             match find_resource_storage() {
