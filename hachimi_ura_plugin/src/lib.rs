@@ -665,6 +665,13 @@ fn boot_trace(step: &str) {
     let log_path = format!("{}/ura_boot.log", so_dir);
     if step == "BEGIN" {
         let _ = std::fs::write(&log_path, "ura boot trace\n");
+        let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
+        let pkg = String::from_utf8_lossy(&pkg_raw)
+            .trim_matches(char::from(0)).trim().to_string();
+        if !pkg.is_empty() {
+            let alt = format!("/sdcard/Android/media/{}/hachimi/ura_boot.log", pkg);
+            let _ = std::fs::write(&alt, "ura boot trace\n");
+        }
         return;
     }
     let line = format!("{}\n", step);
@@ -673,12 +680,13 @@ fn boot_trace(step: &str) {
         .append(true)
         .open(&log_path)
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
-    // ★ v3.24.53: best-effort secondary copy on shared storage.
+    // ★ v3.24.56: unbuffered black box in the ACCESSIBLE media dir
+    // (/sdcard/Android/data is root-only on modern Android).
     let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
     let pkg = String::from_utf8_lossy(&pkg_raw)
         .trim_matches(char::from(0)).trim().to_string();
     if !pkg.is_empty() {
-        let alt = format!("/sdcard/Android/data/{}/files/ura_boot.log", pkg);
+        let alt = format!("/sdcard/Android/media/{}/hachimi/ura_boot.log", pkg);
         let _ = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -4222,6 +4230,7 @@ unsafe fn read_summary_inner_impl() -> String {
     };
 
     // --- Chara stats ---
+    boot_trace("summary_p1");
     ura_log(3, "★ read_summary phase1: chara stats");
     let wdm_class = find_class(
         image,
@@ -4358,6 +4367,7 @@ unsafe fn read_summary_inner_impl() -> String {
     log_predict_step(&format!("S:stats sid={}", sid));
 
     // ★ v3.22.0: Read learned skills and compute skill evaluation
+    boot_trace("summary_p1b");
     ura_log(3, "★ read_summary phase1b: skill eval");
     let (skill_eval, skill_count, skills_json) = {
         let learned_skills = read_chara_skills(chara_class, chara_obj, image);
@@ -5150,6 +5160,7 @@ unsafe fn read_summary_inner_impl() -> String {
     log_predict_step("S:support mdb done");
     // --- Training data via HomeInfoData (ALL scenarios) ---
     log_predict_step("S:ramen end");
+    boot_trace("summary_p2");
     ura_log(3, "★ read_summary phase2: training data");
     log_predict_step("S:p2 training");
     let mut tr_json = "[]".to_string();
@@ -5605,6 +5616,7 @@ unsafe fn read_summary_inner_impl() -> String {
     log_predict_step("S:training partners done");
     // --- Support cards (graceful fallback) ---
     log_predict_step("S:p2 done");
+    boot_trace("summary_p3");
     ura_log(3, "★ read_summary phase3: support cards");
     log_predict_step("S:p3 cards");
     let mut sc_json = "[]".to_string();
@@ -5678,6 +5690,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     // --- Partner evaluation/bond (confirmed Evaluation layout) ---
     log_predict_step("S:p3 done");
+    boot_trace("summary_p4");
     ura_log(3, "★ read_summary phase4: partner evaluation");
     log_predict_step("S:p4 eval");
 
@@ -5706,6 +5719,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     // --- Training levels (graceful fallback) ---
     log_predict_step("S:p4 done");
+    boot_trace("summary_p5");
     ura_log(3, "★ read_summary phase5: training_levels");
     log_predict_step("S:p5 levels");
     let mut tl_json = "[]".to_string();
@@ -5768,6 +5782,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     // --- Buffs: chara_effect_ids → readable names (ALL scenarios) + EnhanceGroup (Breeders) ---
     log_predict_step("S:p5 done");
+    boot_trace("summary_p6");
     ura_log(3, "★ read_summary phase6: buffs");
     log_predict_step("S:p6 buffs");
     // ★ v3.14.2: Always generate buffs from chara_effect_ids first
@@ -6163,6 +6178,7 @@ fn push_loop() {
         if GAME_INITIALIZED.load(Ordering::Relaxed) {
             break;
         }
+        boot_trace("push_probe_begin");
         // Try a probe read — if it doesn't error, game is ready
         let probe = read_summary();
         if !probe.contains("\"error\"") {
@@ -6185,6 +6201,7 @@ fn push_loop() {
                 ura_log(
                     3,
                     &format!("Push: waiting for game... round={}", wait_round),
+    
                 );
             }
         }
@@ -9326,6 +9343,7 @@ unsafe fn install_event_choice_hook() {
 
 extern "C" fn on_game_initialized(_userdata: *mut c_void) {
     GAME_INITIALIZED.store(true, Ordering::Relaxed);
+    boot_trace("game_init_cb");
     unsafe {
         ura_log(3, "Game initialized");
         ura_notify("URA: Game ready!");
@@ -9337,6 +9355,7 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
         install_event_choice_hook();
         // v3.22.51: Pre-cache all IL2CPP metadata on game thread
         precache_metadata();
+        boot_trace("game_init_done");
     }
 }
 
