@@ -8419,6 +8419,7 @@ extern "C" fn sqlite3_open_hook(
     }
 }
 
+#[allow(dead_code)]
 extern "C" fn sqlite3_prepare_v2_hook(
     db: *mut c_void,
     zsql: *const c_char,
@@ -8459,6 +8460,7 @@ extern "C" fn sqlite3_prepare_v2_hook(
     }
 }
 
+#[allow(dead_code)]
 extern "C" fn sqlite3_exec_hook(
     db: *mut c_void,
     sql: *const c_char,
@@ -8747,21 +8749,11 @@ unsafe fn install_sqlcipher_key_hook() {
         set_hook_status("meta.key", "failed: no_interceptor");
         return;
     }
-    // ★ v3.24.47: SQL text interception (PRAGMA key/cipher forms)
-    let ap = resolve_module_symbol("libnative.so", "sqlite3_prepare_v2");
-    if ap != 0 {
-        let ok = interceptor_hook(ap, sqlite3_prepare_v2_hook as usize);
-        set_hook_status("meta.prepare", if ok { "hooked" } else { "failed: interceptor_hook" });
-    } else {
-        set_hook_status("meta.prepare", "failed: resolve");
-    }
-    let ae = resolve_module_symbol("libnative.so", "sqlite3_exec");
-    if ae != 0 {
-        let ok = interceptor_hook(ae, sqlite3_exec_hook as usize);
-        set_hook_status("meta.exec", if ok { "hooked" } else { "failed: interceptor_hook" });
-    } else {
-        set_hook_status("meta.exec", "failed: resolve");
-    }
+    // ★ v3.24.49: prepare_v2/exec hooks DISABLED — bisecting the boot crash.
+    // v3.24.46 (no SQL hooks) boots fine; v3.24.48 (SQL hooks on) crashes.
+    // Functions kept for reference; re-enable only behind a runtime gate.
+    set_hook_status("meta.prepare", "disabled_v3.24.49");
+    set_hook_status("meta.exec", "disabled_v3.24.49");
     // ★ v3.24.48: libc open/openat/pread hooks REMOVED — bionic's open/openat
     // are 2-3 instruction wrappers; inline-hooking them overwrites the adjacent
     // function and crashed the game at boot. Replaced by a /proc/self/fd watcher
