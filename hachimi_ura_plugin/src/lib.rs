@@ -6564,6 +6564,39 @@ fn handle_http(mut stream: std::net::TcpStream) {
         .nth(1)
         .unwrap_or("/");
 
+    // ★ v3.24.55: boot gate. Crash autopsy via hachimi.log: the floating app
+    // polls /summary during game boot; IL2CPP reads on the HTTP thread against
+    // transitional objects SIGSEGV the process (sigjmp recovery only exists on
+    // the push thread). Until the game is initialized, refuse every endpoint
+    // that touches game memory; static/self-state endpoints stay available.
+    if !GAME_INITIALIZED.load(Ordering::Relaxed) {
+        const BOOT_SAFE_EXACT: &[&str] = &[
+            "/", "/health", "/status", "/config", "/config.html",
+            "/update", "/update/status",
+            "/debug/hookdiag", "/debug/hooklog", "/debug/crashlog", "/debug/upload",
+            "/api/sniff", "/api/sniff/diag", "/api/sniff/toggle", "/api/sniff/clear",
+            "/api/event/choices", "/api/event/clear",
+            "/action/latest", "/seed/history", "/seed/stats",
+            "/log", "/carddb", "/skilldata",
+            "/debug/table", "/debug/push_table", "/debug/download_table",
+            "/debug/mdb_all_tables", "/debug/mdb_schema_dump",
+        ];
+        const BOOT_SAFE_PREFIX: &[&str] = &[
+            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite",
+        ];
+        let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
+            || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
+        if !safe {
+            let b = r#"{"status":"booting","game_initialized":false}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                b.len(), b
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            return;
+        }
+    }
+
     // ★ 白名单下载开关：名单内端点追加 ?dl=1 即以附件形式返回（解决手机复制长度上限）
     //    ?dl=1&name=xxx 可自定义文件名（仅保留字母数字和下划线/连字符）
     //    大文件仍走各专用流式 _dl 端点，避免此路径内存翻倍
