@@ -670,6 +670,48 @@ fn boot_trace(step: &str) {
         .append(true)
         .open(&log_path)
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    // ★ v3.24.53: best-effort secondary copy on shared storage.
+    let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
+    let pkg = String::from_utf8_lossy(&pkg_raw)
+        .trim_matches(char::from(0)).trim().to_string();
+    if !pkg.is_empty() {
+        let alt = format!("/sdcard/Android/data/{}/files/ura_boot.log", pkg);
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&alt)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    }
+}
+
+
+// ★ v3.24.53: upload an arbitrary local file to the repo (contents API).
+// Used for crash log and boot trace so the user can read them on GitHub web
+// even when the game dies before HTTP is reachable.
+fn upload_file_to_repo(local_path: &str, repo_name: &str) {
+    let content = match std::fs::read(local_path) {
+        Ok(c) if !c.is_empty() => c,
+        _ => return,
+    };
+    let gh_token = read_github_token();
+    if gh_token.is_empty() {
+        return;
+    }
+    let b64 = base64_encode(&content);
+    let json = format!(
+        r#"{{"message":"auto-upload {}","content":"{}"}}"#,
+        repo_name, b64
+    );
+    let tmp = "/data/data/jp.pokemon.pokeuma/files/uma_upload.json";
+    let _ = std::fs::write(tmp, &json);
+    let cmd = format!(
+        "curl -s --max-time 15 -X PUT -H 'Authorization: token {}' -H 'Content-Type: application/json' -d @{} https://api.github.com/repos/xf8410/hlpatch/contents/{} >/dev/null 2>&1",
+        gh_token, tmp, repo_name
+    );
+    if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
+        unsafe { sys_system(cmd_c.as_ptr() as *const i8); }
+    }
+    let _ = std::fs::remove_file(tmp);
 }
 
 fn check_and_upload_crash_log() {
@@ -9709,6 +9751,18 @@ pub unsafe extern "C" fn hachimi_init_v3(
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(5));
         check_and_upload_crash_log();
+        // ★ v3.24.53: also push the boot trace so init deaths are visible on
+        // GitHub without any file-manager access.
+        let so_dir = find_own_so_path()
+            .and_then(|p| {
+                let mut v: Vec<&str> = p.rsplitn(2, '/').collect();
+                v.pop();
+                v.pop().map(|s| s.to_string())
+            })
+            .unwrap_or_default();
+        if !so_dir.is_empty() {
+            upload_file_to_repo(&format!("{}/ura_boot.log", so_dir), "boot_log.txt");
+        }
     });
 
     boot_trace("init_done");
