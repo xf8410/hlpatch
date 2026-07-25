@@ -652,6 +652,9 @@ fn read_github_token() -> String {
 // .so (a path the user can reach with a file manager), so boot crashes are
 // diagnosable even when the HTTP server never comes up.
 fn boot_trace(step: &str) {
+    // ★ v3.24.54: mirror into Hachimi's log (hachimi.log when the user enables
+    // enable_file_logging) — no file access to the plugin dir needed.
+    unsafe { ura_log(3, &format!("boot: {}", step)); }
     let so_dir = find_own_so_path()
         .and_then(|p| {
             let mut v: Vec<&str> = p.rsplitn(2, '/').collect();
