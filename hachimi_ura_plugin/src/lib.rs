@@ -6743,7 +6743,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/debug/mdb_all_tables", "/debug/mdb_schema_dump",
         ];
         const BOOT_SAFE_PREFIX: &[&str] = &[
-            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex", "/debug/file_scan_hex", "/debug/maps_list",
+            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex", "/debug/file_scan_hex", "/debug/maps_list", "/debug/file_dl",
         ];
         let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
             || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
@@ -7885,6 +7885,33 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/private_file_dl" {
         download_private_file_by_id(&mut stream, &full_uri);
         return;
+    } else if path.starts_with("/debug/file_dl") {
+        // ★ v3.24.66: download an arbitrary file ONLY if its path currently appears
+        // in /proc/self/maps (i.e. a loaded game library) — no free-form path reads.
+        let want = parse_query(&full_uri, "path");
+        let mut allowed = false;
+        if !want.is_empty() {
+            if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+                for line in maps.lines() {
+                    let cols: Vec<&str> = line.split_whitespace().collect();
+                    if cols.get(5).copied() == Some(want.as_str()) {
+                        allowed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !allowed {
+            format!(r#"{{"error":"not_in_maps","hint":"path must appear in /proc/self/maps (see /debug/maps_list)"}}"#)
+        } else {
+            let fname = std::path::Path::new(&want)
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("file.bin")
+                .to_string();
+            stream_private_file(&mut stream, &want, &fname);
+            return;
+        }
     } else if path == "/debug/resource_storage" {
         debug_resource_storage()
     } else if path == "/debug/resource_meta_schema" {
