@@ -647,6 +647,31 @@ fn read_github_token() -> String {
     }
 }
 
+
+// ★ v3.24.52: boot step tracer — appends to ura_boot.log NEXT TO the plugin
+// .so (a path the user can reach with a file manager), so boot crashes are
+// diagnosable even when the HTTP server never comes up.
+fn boot_trace(step: &str) {
+    let so_dir = find_own_so_path()
+        .and_then(|p| {
+            let mut v: Vec<&str> = p.rsplitn(2, '/').collect();
+            v.pop();
+            v.pop().map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "/data/data/jp.pokemon.pokeuma/files".to_string());
+    let log_path = format!("{}/ura_boot.log", so_dir);
+    if step == "BEGIN" {
+        let _ = std::fs::write(&log_path, "ura boot trace\n");
+        return;
+    }
+    let line = format!("{}\n", step);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
 fn check_and_upload_crash_log() {
     let path = "/data/data/jp.pokemon.pokeuma/files/uma_predict.log";
     if !std::path::Path::new(path).exists() {
@@ -674,7 +699,7 @@ fn check_and_upload_crash_log() {
     if gh_token.is_empty() {
         return;
     }
-    let cmd = format!("curl -s -X PUT -H 'Authorization: token {}' -H 'Content-Type: application/json' -d @/data/data/jp.pokemon.pokeuma/files/uma_upload.json https://api.github.com/repos/xf8410/hlpatch/contents/crash_log.txt >/dev/null 2>&1", gh_token);
+    let cmd = format!("curl -s --max-time 15 -X PUT -H 'Authorization: token {}' -H 'Content-Type: application/json' -d @/data/data/jp.pokemon.pokeuma/files/uma_upload.json https://api.github.com/repos/xf8410/hlpatch/contents/crash_log.txt >/dev/null 2>&1", gh_token);
     if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
         unsafe {
             sys_system(cmd_c.as_ptr() as *const i8);
@@ -9643,12 +9668,15 @@ pub unsafe extern "C" fn hachimi_init_v3(
         }
     }
     init_crash_handler();
-    check_and_upload_crash_log();
+    boot_trace("BEGIN");
+    boot_trace("crash_handler_ok");
     ura_log(3, "URA plugin v3.24.9 loaded (Interceptor API hooks)");
 
     // ★ v3.24.44: capture SQLCipher key EARLY — the game keys `meta`
     // during boot, possibly before on_game_initialized fires.
+    boot_trace("before_key_hooks");
     install_sqlcipher_key_hook();
+    boot_trace("key_hooks_done");
 
     if let Some(f) = (*API).gui_show_notification_fn {
         f(to_cstr(&format!("URA v{} Loaded!", PLUGIN_VERSION)).as_ptr());
@@ -9670,9 +9698,20 @@ pub unsafe extern "C" fn hachimi_init_v3(
         f(Some(on_game_initialized), ptr::null_mut());
     }
 
+    boot_trace("before_http");
     start_http_server();
+    boot_trace("http_started");
     start_auto_update_thread();
 
+    // ★ v3.24.52: crash-log upload moved OFF the init path — it used to run
+    // system(curl api.github.com) synchronously here with no timeout; after
+    // any crash, every subsequent boot hung on GitHub and got ANR-killed.
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        check_and_upload_crash_log();
+    });
+
+    boot_trace("init_done");
     ura_log(3, &format!("hachimi_init_v3 done, api_version={}", version));
     InitResult::Ok as i32
 }
@@ -17529,6 +17568,19 @@ unsafe fn install_exec_training_hook() {
 fn start_auto_update_thread() {
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(30));
+        // ★ v3.24.52: auto-update is OPT-IN — silently swapping the .so 30s
+        // after boot polluted every manual version test. Create
+        // files/ura_auto_update.flag to enable; /update stays manual.
+        let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
+        let pkg = String::from_utf8_lossy(&pkg_raw)
+            .trim_matches(char::from(0)).trim().to_string();
+        let flag = format!("/data/user/0/{}/files/ura_auto_update.flag", pkg);
+        if !std::path::Path::new(&flag).exists() {
+            if let Ok(mut status) = AUTO_UPDATE_STATUS.lock() {
+                *status = Some(r#"{"status":"disabled_v3.24.52"}"#.to_string());
+            }
+            return;
+        }
         let result = update_so();
         if let Ok(mut status) = AUTO_UPDATE_STATUS.lock() {
             *status = Some(result);
