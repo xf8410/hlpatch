@@ -6564,6 +6564,150 @@ unsafe fn debug_ramengains() -> String {
     format!("{{{}}}", parts.join(","))
 }
 
+
+// ★ v3.24.61: in-process meta dump via libnative's own sqlite3.
+// The game reads meta with these exact functions + the captured passphrase,
+// so this works regardless of how customized the cipher/KDF is.
+fn hex_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len() / 2);
+    let v = |c: u8| -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => 0,
+        }
+    };
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push((v(b[i]) << 4) | v(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn meta_dump_endpoint() -> String {
+    unsafe {
+        type OpenV2 = extern "C" fn(*const i8, *mut *mut c_void, libc::c_int, *const i8) -> libc::c_int;
+        type KeyFn = extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int;
+        type PrepV2 = extern "C" fn(*mut c_void, *const i8, libc::c_int, *mut *mut c_void, *mut *const i8) -> libc::c_int;
+        type StepFn = extern "C" fn(*mut c_void) -> libc::c_int;
+        type ColText = extern "C" fn(*mut c_void, libc::c_int) -> *const u8;
+        type FinFn = extern "C" fn(*mut c_void) -> libc::c_int;
+
+        let p_open = resolve_module_symbol("libnative.so", "sqlite3_open_v2");
+        let p_key = resolve_module_symbol("libnative.so", "sqlite3_key");
+        let p_prep = resolve_module_symbol("libnative.so", "sqlite3_prepare_v2");
+        let p_step = resolve_module_symbol("libnative.so", "sqlite3_step");
+        let p_coltext = resolve_module_symbol("libnative.so", "sqlite3_column_text");
+        let p_fin = resolve_module_symbol("libnative.so", "sqlite3_finalize");
+        let p_close = resolve_module_symbol("libnative.so", "sqlite3_close");
+        if p_open == 0 || p_key == 0 || p_prep == 0 || p_step == 0 || p_coltext == 0 || p_fin == 0 || p_close == 0 {
+            return r#"{"ok":false,"error":"symbol_resolve_failed"}"#.to_string();
+        }
+        let open_v2: OpenV2 = std::mem::transmute(p_open);
+        let key_fn: KeyFn = std::mem::transmute(p_key);
+        let prep: PrepV2 = std::mem::transmute(p_prep);
+        let step: StepFn = std::mem::transmute(p_step);
+        let coltext: ColText = std::mem::transmute(p_coltext);
+        let fin: FinFn = std::mem::transmute(p_fin);
+        let close: FinFn = std::mem::transmute(p_close);
+
+        let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
+        let pkg = String::from_utf8_lossy(&pkg_raw).trim_matches(char::from(0)).trim().to_string();
+        if pkg.is_empty() { return r#"{"ok":false,"error":"pkg"}"#.to_string(); }
+        let db_path = format!("/data/user/0/{}/files/meta", pkg);
+        // key: prefer persisted file, fall back to in-memory capture
+        let key_hex = std::fs::read_to_string(format!("/data/user/0/{}/files/ura_meta_key.txt", pkg))
+            .ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+            .or_else(|| META_KEY_HEX.lock().ok().map(|g| g.clone()).filter(|v| !v.is_empty()));
+        let key_hex = match key_hex {
+            Some(h) => h,
+            None => return r#"{"ok":false,"error":"no_key_captured"}"#.to_string(),
+        };
+        let key_bytes = hex_decode(&key_hex);
+        if key_bytes.is_empty() { return r#"{"ok":false,"error":"bad_key_hex"}"#.to_string(); }
+
+        let c_path = std::ffi::CString::new(db_path.clone()).unwrap();
+        let c_path_ptr = c_path.as_ptr() as *const i8;
+        let mut db: *mut c_void = std::ptr::null_mut();
+        // SQLITE_OPEN_READONLY (0x1) — never create journals on the live meta
+        let rc = open_v2(c_path_ptr, &mut db, 0x1, std::ptr::null());
+        if rc != 0 || db.is_null() {
+            return format!(r#"{{"ok":false,"error":"open_rc={}"}}"#, rc);
+        }
+        let krc = key_fn(db, key_bytes.as_ptr() as *const c_void, key_bytes.len() as libc::c_int);
+        if krc != 0 {
+            close(db);
+            return format!(r#"{{"ok":false,"error":"key_rc={}"}}"#, krc);
+        }
+
+        let run_query = |sql: &str, mut on_row: &mut dyn FnMut(&[*const u8])| -> i32 {
+            let c_sql = std::ffi::CString::new(sql).unwrap();
+            let mut st: *mut c_void = std::ptr::null_mut();
+            let rc = prep(db, c_sql.as_ptr() as *const i8, -1, &mut st, std::ptr::null_mut());
+            if rc != 0 { return rc; }
+            let mut rows = 0;
+            loop {
+                let s = step(st);
+                if s == 100 { // SQLITE_ROW
+                    on_row(&[coltext(st, 0), coltext(st, 1)]);
+                    rows += 1;
+                } else {
+                    if s != 101 { rows = -(s as i32); } // SQLITE_DONE=101 else error
+                    break;
+                }
+            }
+            fin(st);
+            rows
+        };
+
+        // table list
+        let mut tables: Vec<String> = Vec::new();
+        {
+            let mut collect = |cols: &[*const u8]| {
+                if !cols[0].is_null() {
+                    tables.push(CStr::from_ptr(cols[0]).to_string_lossy().into_owned());
+                }
+            };
+            run_query("SELECT name, NULL FROM sqlite_master WHERE type='table'", &mut collect);
+        }
+
+        // dump `a` table to accessible media dir
+        let out_path = format!("/sdcard/Android/media/{}/hachimi/meta_dump.txt", pkg);
+        let mut rows_written: i64 = 0;
+        let mut err = String::new();
+        match std::fs::File::create(&out_path) {
+            Ok(f) => {
+                let mut w = std::io::BufWriter::new(f);
+                use std::io::Write;
+                let mut writer = |cols: &[*const u8]| {
+                    let a = if cols[0].is_null() { String::new() } else {
+                        CStr::from_ptr(cols[0]).to_string_lossy().into_owned()
+                    };
+                    let b = if cols[1].is_null() { String::new() } else {
+                        CStr::from_ptr(cols[1]).to_string_lossy().into_owned()
+                    };
+                    let _ = writeln!(w, "{}\t{}", a, b);
+                    rows_written += 1;
+                };
+                let r = run_query("SELECT n, h FROM a", &mut writer);
+                let _ = w.flush();
+                if r < 0 { err = format!("step_rc={}", -r); }
+            }
+            Err(e) => { err = format!("file_create: {}", e); }
+        }
+        close(db);
+
+        let tables_json: Vec<String> = tables.iter().map(|t| format!("\"{}\"", json_escape(t))).collect();
+        format!(
+            r#"{{"ok":{},"tables":[{}],"a_rows":{},"out":"{}","err":"{}"}}"#,
+            err.is_empty(), tables_json.join(","), rows_written, out_path, err
+        )
+    }
+}
+
 fn handle_http(mut stream: std::net::TcpStream) {
     use std::io::{Read, Write};
     let mut buf = [0u8; 8192];
@@ -6634,7 +6778,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
+        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -6844,6 +6988,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             hits.len(),
             hits.iter().map(|h| format!("\"{}\"", h)).collect::<Vec<_>>().join(",")
         )
+    } else if path == "/debug/meta_dump" {
+        // ★ v3.24.61: in-process meta dump (libnative sqlite + captured key)
+        meta_dump_endpoint()
     } else if path == "/debug/resource_db_keys" {
         // ★ v3.24.45: full db open/key/mc_config pairing log
         let entries: Vec<String> = match DB_KEY_LOG.lock() {
