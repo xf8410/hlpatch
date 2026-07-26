@@ -6743,7 +6743,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/debug/mdb_all_tables", "/debug/mdb_schema_dump",
         ];
         const BOOT_SAFE_PREFIX: &[&str] = &[
-            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex", "/debug/file_scan_hex", "/debug/maps_list", "/debug/file_dl",
+            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex", "/debug/file_scan_hex", "/debug/maps_list", "/debug/file_dl", "/debug/file_range_hex",
         ];
         let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
             || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
@@ -7184,6 +7184,41 @@ fn handle_http(mut stream: std::net::TcpStream) {
             out.len(),
             out.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
         )
+    } else if path.starts_with("/debug/file_range_hex") {
+        // ★ v3.24.67: read a byte range of a maps-listed file, return hex (chunked RE)
+        let want = parse_query(&full_uri, "path");
+        let off_str = parse_query(&full_uri, "offset");
+        let len_str = parse_query(&full_uri, "len");
+        let off = usize::from_str_radix(off_str.trim_start_matches("0x"), 16).unwrap_or(0);
+        let max_len: usize = len_str.parse().unwrap_or(65536).min(4 * 1024 * 1024);
+        let mut allowed = false;
+        if !want.is_empty() {
+            if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+                for line in maps.lines() {
+                    let cols: Vec<&str> = line.split_whitespace().collect();
+                    if cols.get(5).copied() == Some(want.as_str()) { allowed = true; break; }
+                }
+            }
+        }
+        if !allowed {
+            format!(r#"{{"error":"not_in_maps"}}"#)
+        } else {
+            use std::io::{Read, Seek, SeekFrom};
+            match std::fs::File::open(&want) {
+                Ok(mut f) => {
+                    let mut buf = vec![0u8; max_len];
+                    let got = f.seek(SeekFrom::Start(off as u64))
+                        .and_then(|_| f.read(&mut buf))
+                        .unwrap_or(0);
+                    buf.truncate(got);
+                    format!(
+                        r#"{{"path":"{}","offset":"0x{:x}","len":{},"hex":"{}"}}"#,
+                        json_escape(&want), off, got, hex_encode(&buf)
+                    )
+                }
+                Err(e) => format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
+            }
+        }
     } else if path == "/debug/meta_dump" {
         // ★ v3.24.61: in-process meta dump (libnative sqlite + captured key)
         meta_dump_endpoint()
