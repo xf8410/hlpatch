@@ -2,6 +2,10 @@
 
 基于 [Hachimi](https://github.com/akemiko/hachimi) 框架的赛马娘育成辅助插件，通过注入游戏进程读取 IL2CPP 内存数据，提供 HTTP 端点查询与自动推送能力。
 
+> **2026-07-26（v3.24.68）**
+> - 新增 `GET /ramen` 轻量端点：拉面杯数据（回合+盛況度/素材/隠し味/地区），浮窗轮询专用
+> - 修正盛況度档位为 MDB `check_point_pt_effect` 真实 11 档（250/500/1000/1500/2000/2500/3000/3500/4000/5000），旧阈值为猜测值
+>
 > **2026-07-23（v3.24.32）**
 > - HTTP 服务仅绑定 `127.0.0.1:18765`；局域网/电脑调试请用 `adb forward tcp:18765 tcp:18765`
 > - 拉面杯候选地区池只在选择回合（3/24/48）以 `selectable_region_ids_derived` 输出；其余回合移至 `region_pool_for_latest_selection_phase_derived` 并标 `currently_selectable_status`
@@ -27,6 +31,7 @@
 | 端点 | 用途 |
 |------|------|
 | `GET /summary` | 完整育成状态（属性/训练/Buff/支援卡/評価点/技能评分） |
+| `GET /ramen` | 拉面杯轻量数据（回合/盛況度11档/素材槽/隠し味/已选地区） |
 | `GET /data` | 原始训练数据 |
 | `GET /scenario` | 剧本详情（Ramen等特殊剧本字段） |
 | `GET /log` | 训练日志 |
