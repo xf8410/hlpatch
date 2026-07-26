@@ -4132,6 +4132,44 @@ fn compute_skill_eval(skills: &[(i32, i32)]) -> (i32, i32, String) {
 static CACHED_SUMMARY: std::sync::Mutex<Option<(String, u64)>> = std::sync::Mutex::new(None);
 const SUMMARY_CACHE_TTL_SECS: u64 = 3;
 
+/// 从JSON文本中抽取指定键的对象值（brace匹配，仅用于本文件生成的规整JSON）
+fn extract_json_object(s: &str, key: &str) -> Option<String> {
+    let kpos = s.find(key)?;
+    let bpos = s[kpos + key.len()..].find('{')? + kpos + key.len();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut esc = false;
+    for (i, c) in s[bpos..].char_indices() {
+        if esc { esc = false; continue; }
+        match c {
+            '\\' if in_str => esc = true,
+            '"' => in_str = !in_str,
+            '{' if !in_str => depth += 1,
+            '}' if !in_str => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(s[bpos..bpos + i + 1].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 从JSON文本中抽取指定键的整数值
+fn extract_json_int(s: &str, key: &str) -> Option<i64> {
+    let kpos = s.find(key)?;
+    let rest = &s[kpos + key.len()..];
+    let colon = rest.find(':')?;
+    let num: String = rest[colon + 1..]
+        .chars()
+        .skip_while(|c| c.is_whitespace())
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    num.parse().ok()
+}
+
 fn read_summary() -> String {
     // ★ v3.22.35: SIGSEGV cooldown — if we recently recovered from a crash, skip reads
     let now = std::time::SystemTime::now()
@@ -5988,16 +6026,29 @@ unsafe fn read_summary_inner_impl() -> String {
 
     // ★ v3.22.39: Ramen scenario data — sozai counts aggregated during read
     let ramen_json = if sid == 14 && ramen_checkpoint_pt >= 0 {
-        // Compute moriagari_level from checkpoint_pt thresholds
-        let moriagari_level = if ramen_checkpoint_pt >= 480 {
+        // ★ v3.24.68: moriagari_level 改用 MDB check_point_pt_effect 真实11档
+        // (旧阈值480/330/210/120/50为猜测值，错误)
+        // [MDB] 0-249=0, 250-499=1, 500-999=2, 1000-1499=3, 1500-1999=4,
+        //       2000-2499=5, 2500-2999=6, 3000-3499=7, 3500-3999=8, 4000-4999=9, 5000+=10
+        let moriagari_level = if ramen_checkpoint_pt >= 5000 {
+            10
+        } else if ramen_checkpoint_pt >= 4000 {
+            9
+        } else if ramen_checkpoint_pt >= 3500 {
+            8
+        } else if ramen_checkpoint_pt >= 3000 {
+            7
+        } else if ramen_checkpoint_pt >= 2500 {
+            6
+        } else if ramen_checkpoint_pt >= 2000 {
             5
-        } else if ramen_checkpoint_pt >= 330 {
+        } else if ramen_checkpoint_pt >= 1500 {
             4
-        } else if ramen_checkpoint_pt >= 210 {
+        } else if ramen_checkpoint_pt >= 1000 {
             3
-        } else if ramen_checkpoint_pt >= 120 {
+        } else if ramen_checkpoint_pt >= 500 {
             2
-        } else if ramen_checkpoint_pt >= 50 {
+        } else if ramen_checkpoint_pt >= 250 {
             1
         } else {
             0
@@ -6762,7 +6813,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     //    ?dl=1&name=xxx 可自定义文件名（仅保留字母数字和下划线/连字符）
     //    大文件仍走各专用流式 _dl 端点，避免此路径内存翻倍
     const DL_ALLOWED: &[&str] = &[
-        "/summary", "/scenario", "/data",
+        "/summary", "/scenario", "/data", "/ramen",
         "/api/sniff", "/api/sniff/diag", "/api/event/choices",
         "/debug/event_reward_targets", "/debug/resource_meta_schema", "/debug/resource_meta_probe", "/debug/resource_crypto_symbols",
         "/debug/all", "/debug/params", "/debug/cmdinfo", "/debug/breeders",
@@ -6843,6 +6894,16 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else if path == "/summary" {
         read_summary()
+    } else if path == "/ramen" {
+        // ★ v3.24.68: 轻量拉面杯端点（jueceapp轮询用），从summary抽取ramen+turn
+        let s = read_summary();
+        let ramen = extract_json_object(&s, "\"ramen\"");
+        let turn = extract_json_int(&s, "\"turn\"");
+        format!(
+            r#"{{"status":"ok","turn":{},"ramen":{}}}"#,
+            turn.unwrap_or(-1),
+            ramen.unwrap_or_else(|| "null".to_string())
+        )
     } else if path == "/scenario" {
         let result = unsafe { read_scenario_detail() };
         unsafe {
