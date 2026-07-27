@@ -3518,8 +3518,8 @@ const URA_TOTAL_TURNS: i32 = 78; // URA scenario has 78 training turns
 const RAMEN_TOTAL_TURNS: i32 = 78; // 拉面杯(scenario 14): 24×3+决赛6=78 [MDB+截图确认]
 const DEFAULT_TOTAL_TURNS: i32 = 72; // Standard scenarios have 72 turns
 
-// ★ v3.24.69: 拉面杯评分参数 [候选权重, 待实测校准]
-const GAUGE_VALUE_PER_POINT: f64 = 15.0; // 每点素材进度价值(满7=1素材→吃面300pt+当回合buff) [候选]
+// ★ v3.24.69/70: 拉面杯评分参数 [候选权重, 待实测校准]
+const RAMEN_GAUGE_HEAD_VALUE: f64 = 25.0; // 拉面杯每个人头的素材边际价值(人头→3种素材各+1) [候选]
 const RAMEN_KAKUSHIMI_CAP: i32 = 4; // 隠し味上限 [截图]
 const RAMEN_OUTING_KAKUSHIMI_VALUE: f64 = 60.0; // 外出给隠し味的单价 [MDB outing_effect + 候选权重]
 const NEXT_RACE_OUTING_FACTOR: f64 = 0.3; // 下回合比赛时外出价值折扣(体力溢出) [用户规则]
@@ -3867,13 +3867,11 @@ fn evaluate_ai(
             let heads_bonus = HEADS_BONUS_PER * (heads - 1) as f64;
             value += heads_bonus;
         }
-        // ★ v3.24.69: 拉面杯素材进度价值（旧评分器完全不算素材→总推荐智力）
-        // gauge满7=1素材→试吃会300pt+当回合大buff [MDB acquisition_rules/check_point_pt]
-        if scenario_id == 14 {
-            let gauge_gain = ramen_gauge_gains.get(&cmd_id).copied().unwrap_or(0);
-            if gauge_gain > 0 {
-                value += GAUGE_VALUE_PER_POINT * gauge_gain as f64;
-            }
+        // ★ v3.24.70: 拉面杯素材价值改按"人头边际进度"算（用户反馈：总推荐1人头力量）
+        // 训练自带的基础进度（+7图标类）谁都有，不该加分；
+        // 每个人头给三种素材各+1=3点边际进度 [候选公式]，这才是人头价值
+        if scenario_id == 14 && heads > 0 {
+            value += RAMEN_GAUGE_HEAD_VALUE * heads as f64;
         }
         train_values.push((name.to_string(), value));
 
@@ -6966,6 +6964,15 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else if path == "/summary" {
         read_summary()
+    } else if path == "/debug/turn_probe" {
+        // ★ v3.24.70: 回合数诊断（对照游戏内"截止到RMJ X回合"，真实turn=24/48/72-X）
+        let s = read_summary();
+        format!(
+            r#"{{"status":"ok","turn":{},"month":{},"half":{},"hint":"real_turn = 24/48/72 - 游戏内RMJ倒计时"}}"#,
+            extract_json_int(&s, "\"turn\"").unwrap_or(-1),
+            extract_json_int(&s, "\"month\"").unwrap_or(-1),
+            extract_json_int(&s, "\"half\"").unwrap_or(-1)
+        )
     } else if path == "/ramen" {
         // ★ v3.24.68: 轻量拉面杯端点（jueceapp轮询用），从summary抽取ramen+turn
         let s = read_summary();
