@@ -3515,7 +3515,14 @@ const OUTGOING_BONUS_MOT4: f64 = 10.0; // 好調→絶好調: minor
 
 // Game scenario total turns
 const URA_TOTAL_TURNS: i32 = 78; // URA scenario has 78 training turns
+const RAMEN_TOTAL_TURNS: i32 = 78; // 拉面杯(scenario 14): 24×3+决赛6=78 [MDB+截图确认]
 const DEFAULT_TOTAL_TURNS: i32 = 72; // Standard scenarios have 72 turns
+
+// ★ v3.24.69: 拉面杯评分参数 [候选权重, 待实测校准]
+const GAUGE_VALUE_PER_POINT: f64 = 15.0; // 每点素材进度价值(满7=1素材→吃面300pt+当回合buff) [候选]
+const RAMEN_KAKUSHIMI_CAP: i32 = 4; // 隠し味上限 [截图]
+const RAMEN_OUTING_KAKUSHIMI_VALUE: f64 = 60.0; // 外出给隠し味的单价 [MDB outing_effect + 候选权重]
+const NEXT_RACE_OUTING_FACTOR: f64 = 0.3; // 下回合比赛时外出价值折扣(体力溢出) [用户规则]
 
 // Game CommandId constants (IL2CPP method identifiers)
 // 2026-07-17 修正: 102=力量(Power), 105=耐力(Stamina) — 游戏内ID与UI顺序速耐力根智相反
@@ -3717,10 +3724,15 @@ fn evaluate_ai(
     _has_renshou_jouzu: bool, // 練習上手 buff (TODO: implement buff effect)
     skill_eval: i32,          // ★ v3.22.0: skill evaluation value
     skill_count: i32,         // ★ v3.22.0: learned skill count
+    // ★ v3.24.69: 拉面杯剧本感知参数
+    ramen_gauge_gains: &std::collections::HashMap<i32, i32>, // 各训练素材进度增益
+    kakushimi_num: i32,       // 当前隠し味持有数
+    next_turn_race: bool,     // 下回合是否比赛回合 [MDB single_mode_turn]
 ) -> AiResult {
     // Total turns per scenario
     let total_turn: i32 = match scenario_id {
         1 => URA_TOTAL_TURNS,
+        14 => RAMEN_TOTAL_TURNS,
         _ => DEFAULT_TOTAL_TURNS,
     };
 
@@ -3855,6 +3867,14 @@ fn evaluate_ai(
             let heads_bonus = HEADS_BONUS_PER * (heads - 1) as f64;
             value += heads_bonus;
         }
+        // ★ v3.24.69: 拉面杯素材进度价值（旧评分器完全不算素材→总推荐智力）
+        // gauge满7=1素材→试吃会300pt+当回合大buff [MDB acquisition_rules/check_point_pt]
+        if scenario_id == 14 {
+            let gauge_gain = ramen_gauge_gains.get(&cmd_id).copied().unwrap_or(0);
+            if gauge_gain > 0 {
+                value += GAUGE_VALUE_PER_POINT * gauge_gain as f64;
+            }
+        }
         train_values.push((name.to_string(), value));
 
         if value > best_value {
@@ -3886,9 +3906,24 @@ fn evaluate_ai(
     };
     let outgoing_vital_gain = OUTGOING_VITAL_GAIN;
     let vital_after_outgoing = std::cmp::min(max_vital_eq, vital + outgoing_vital_gain);
-    let outgoing_value = vital_factor
+    let mut outgoing_value = vital_factor
         * (vital_evaluation(vital_after_outgoing, max_vital) - vital_before)
         + outgoing_bonus;
+
+    // ★ v3.24.69: 拉面杯外出思考逻辑 [用户规则]
+    // 1) 隠し味缺口价值: 外出给隠し味 [MDB outing_effect]，库存越少越值，满4=0（防溢出/防过度外出）
+    // 2) 年度节奏: 第1年少外出(系数0.6)，第2/3年正常（用户口径: 1年1次/2年2次/3年2次，
+    //    无状态计数，用库存缺口×年度系数近似）
+    // 3) 下回合比赛: 外出体力溢出，价值×0.3 [MDB single_mode_turn.race_entry_type]
+    if scenario_id == 14 {
+        let deficit = std::cmp::max(0, RAMEN_KAKUSHIMI_CAP - kakushimi_num) as f64;
+        let year = if turn < 24 { 1 } else if turn < 48 { 2 } else { 3 };
+        let year_factor = if year == 1 { 0.6 } else { 1.0 }; // [候选]
+        outgoing_value += RAMEN_OUTING_KAKUSHIMI_VALUE * deficit * year_factor;
+        if next_turn_race {
+            outgoing_value *= NEXT_RACE_OUTING_FACTOR;
+        }
+    }
 
     if outgoing_value > best_value {
         best_value = outgoing_value;
@@ -4168,6 +4203,27 @@ fn extract_json_int(s: &str, key: &str) -> Option<i64> {
         .take_while(|c| c.is_ascii_digit() || *c == '-')
         .collect();
     num.parse().ok()
+}
+
+/// ★ v3.24.69: 查询指定回合是否比赛回合（带缓存）[MDB single_mode_turn.race_entry_type]
+static mut NEXT_RACE_CACHE: (i32, bool) = (-1, false);
+unsafe fn query_next_turn_race_entry(next_turn: i32) -> bool {
+    if NEXT_RACE_CACHE.0 == next_turn {
+        return NEXT_RACE_CACHE.1;
+    }
+    let entry: Option<i32> = (|| {
+        let mdb = find_mdb_path()?;
+        let conn = Connection::open_with_flags(&mdb, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        conn.query_row(
+            "SELECT race_entry_type FROM single_mode_turn WHERE turn=?1 LIMIT 1",
+            [next_turn],
+            |r| r.get::<_, i32>(0),
+        )
+        .ok()
+    })();
+    let is_race = entry == Some(1);
+    NEXT_RACE_CACHE = (next_turn, is_race);
+    is_race
 }
 
 fn read_summary() -> String {
@@ -5989,12 +6045,25 @@ unsafe fn read_summary_inner_impl() -> String {
     // FIXED: no more double-read of CommandInfoArray — eval_trainings collected in phase2
     log_predict_step("S:buffs done");
     let ai_json = {
-        let turn = std::cmp::min((mon - 1) * 2 + (half - 1), 71);
+        // ★ v3.24.69: 用权威 _totalTurnNum（1-based累计回合）替代 mon/half 推算
+        // 旧公式 (mon-1)*2+(half-1) 在拉面杯第一年特殊日历(4/5/6月双份)下错位
+        let turn = if cumulative_turn > 0 {
+            std::cmp::min(cumulative_turn - 1, RAMEN_TOTAL_TURNS - 1)
+        } else {
+            std::cmp::min((mon - 1) * 2 + (half - 1), 71)
+        };
         let stats = [spd, sta, pow_, gut, wiz];
 
         // Detect buffs from chara_effect_ids
         let has_ai_jiao = chara_effect_ids.iter().any(|&id| id == 8);
         let has_renshou_jouzu = chara_effect_ids.iter().any(|&id| id == 10 || id == 11);
+
+        // ★ v3.24.69: 下回合是否比赛（仅拉面杯查询）[MDB single_mode_turn.race_entry_type]
+        let next_race = if sid == 14 && cumulative_turn > 0 {
+            unsafe { query_next_turn_race_entry(cumulative_turn + 1) }
+        } else {
+            false
+        };
 
         let result = evaluate_ai(
             turn,
@@ -6008,6 +6077,9 @@ unsafe fn read_summary_inner_impl() -> String {
             has_renshou_jouzu,
             skill_eval,
             skill_count, // ★ v3.22.0
+            &ramen_gauge_gains_map,
+            ramen_special_feeling_num,
+            next_race,
         );
         ai_result_to_json(&result)
     };
