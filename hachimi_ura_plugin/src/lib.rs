@@ -204,6 +204,7 @@ struct PendingEventSelection {
 }
 static EVENT_PENDING_RESULT: Mutex<Option<PendingEventSelection>> = Mutex::new(None);
 static EVENT_OBSERVATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static EVENT_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
 const EVENT_OBSERVATIONS_MAX: usize = 16;
 const EVENT_RESPONSE_PREVIEW_MAX: usize = 16 * 1024;
 
@@ -6978,7 +6979,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/update", "/update/status",
             "/debug/hookdiag", "/debug/hooklog", "/debug/crashlog", "/debug/upload",
             "/api/sniff", "/api/sniff/diag", "/api/sniff/toggle", "/api/sniff/clear",
-            "/api/event/choices", "/api/event/observations", "/api/event/clear",
+            "/api/event/choices", "/api/event/observations", "/api/event/observations/clear", "/api/event/clear",
             "/action/latest", "/seed/history", "/seed/stats",
             "/log", "/carddb", "/skilldata",
             "/debug/table", "/debug/push_table", "/debug/download_table",
@@ -7614,10 +7615,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
             result
         }
     } else if path == "/api/event/observations" {
+        let after_id = parse_query(&full_uri, "after_id").parse::<i64>().unwrap_or(0);
         match EVENT_OBSERVATIONS.lock() {
-            Ok(v) => format!(r#"{{"schema_version":1,"source":"runtime_observation","count":{},"observations":[{}]}}"#, v.len(), v.join(",")),
+            Ok(v) => {
+                let selected: Vec<String> = v.iter()
+                    .filter(|item| extract_json_int(item, "\"observation_id\"").unwrap_or(0) > after_id)
+                    .cloned().collect();
+                format!(r#"{{"schema_version":2,"source":"runtime_observation","count":{},"observations":[{}]}}"#, selected.len(), selected.join(","))
+            },
             Err(_) => r#"{"error":"lock_error","observations":[]}"#.to_string(),
         }
+    } else if path == "/api/event/observations/clear" {
+        if let Ok(mut v) = EVENT_OBSERVATIONS.lock() { v.clear(); }
+        r#"{"ok":true,"cleared":"observations"}"#.to_string()
     } else if path == "/api/event/clear" {
         let _lock = EVENT_STATE_MUTEX.lock();
         unsafe {
@@ -7628,7 +7638,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             EVENT_GENERATION = EVENT_GENERATION.wrapping_add(1);
         }
         if let Ok(mut p) = EVENT_PENDING_RESULT.lock() { *p = None; }
-        if let Ok(mut v) = EVENT_OBSERVATIONS.lock() { v.clear(); }
+        // Preserve completed observations. They have a separate explicit clear endpoint.
         drop(_lock);
         r#"{"ok":true}"#.to_string()
     } else if path == "/action/latest" {
@@ -8988,8 +8998,9 @@ extern "C" fn decompress_response_hook_handler(data: *mut c_void) -> *mut c_void
                         Some(c) => (c.label, c.gain_id, c.next_block_idx, c.loop_exit_gain_id),
                         None => (String::new(), -1, -1, -1),
                     };
-                    let record = format!(r#"{{"schema_version":1,"source":"runtime_observation","causality":"unknown","result_label":"unknown","captured_at":{},"generation":{},"story_id":{},"chara_id":{},"selected_idx_raw":{},"choice":{{"label":"{}","gain_id":{},"next_block_idx":{},"loop_exit_gain_id":{}}},"response":{{"request_id":{},"url":"{}","size_captured":{},"preview_truncated":{},"hex_prefix":"{}","text_preview":"{}"}}}}"#,
-                        sel.captured_at, sel.generation, sel.story_id, sel.chara_id,
+                    let observation_id = EVENT_OBSERVATION_ID.fetch_add(1, Ordering::Relaxed);
+                    let record = format!(r#"{{"schema_version":2,"observation_id":{},"source":"runtime_observation","causality":"unknown","result_label":"unknown","captured_at":{},"generation":{},"story_id":{},"chara_id":{},"selected_idx_raw":{},"choice":{{"label":"{}","gain_id":{},"next_block_idx":{},"loop_exit_gain_id":{}}},"response":{{"request_id":{},"url":"{}","size_captured":{},"preview_truncated":{},"hex_prefix":"{}","text_preview":"{}"}}}}"#,
+                        observation_id, sel.captured_at, sel.generation, sel.story_id, sel.chara_id,
                         sel.selected_idx_raw, json_escape(&label), gain_id, next_block_idx,
                         loop_exit_gain_id, PENDING_REQ_ID, json_escape(&PENDING_URL), bytes.len(),
                         bytes.len() > preview_len, hex_encode(&bytes[..bytes.len().min(64)]),
