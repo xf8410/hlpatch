@@ -191,6 +191,22 @@ struct EventChoice {
     loop_exit_gain_id: i32,
 }
 
+// v3.24.73: bounded cache-only pairing. This is temporal co-occurrence,
+// never a success/failure classification or a causality claim.
+#[derive(Clone)]
+struct PendingEventSelection {
+    captured_at: u64,
+    generation: u64,
+    story_id: i32,
+    chara_id: i32,
+    selected_idx_raw: i32,
+    choice: Option<EventChoice>,
+}
+static EVENT_PENDING_RESULT: Mutex<Option<PendingEventSelection>> = Mutex::new(None);
+static EVENT_OBSERVATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+const EVENT_OBSERVATIONS_MAX: usize = 16;
+const EVENT_RESPONSE_PREVIEW_MAX: usize = 16 * 1024;
+
 // ★ v3.24.2: Read C# string from IL2CPP String object
 unsafe fn read_il2cpp_string(s: *const c_void) -> String {
     if s.is_null() {
@@ -924,7 +940,7 @@ unsafe fn get_class_name_from_pointer(klass: *mut c_void) -> String {
     if name_ptr.is_null() {
         return String::new();
     }
-    std::ffi::CStr::from_ptr(name_ptr)
+    std::ffi::CStr::from_ptr(name_ptr as *const c_char)
         .to_string_lossy()
         .into_owned()
 }
@@ -2730,7 +2746,7 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
         let class_name = if let Some(ref get_name) = get_class_name_fn {
             let name_ptr = get_name(current_class);
             if !name_ptr.is_null() {
-                let s = std::ffi::CStr::from_ptr(name_ptr);
+                let s = std::ffi::CStr::from_ptr(name_ptr as *const c_char);
                 s.to_string_lossy().to_string()
             } else {
                 format!("depth{}", depth)
@@ -3073,7 +3089,7 @@ unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
         let class_name = if let Some(ref get_name) = get_class_name_fn {
             let name_ptr = get_name(current_class);
             if !name_ptr.is_null() {
-                let s = std::ffi::CStr::from_ptr(name_ptr);
+                let s = std::ffi::CStr::from_ptr(name_ptr as *const c_char);
                 s.to_string_lossy().to_string()
             } else {
                 format!("depth{}", depth)
@@ -3095,7 +3111,7 @@ unsafe fn enumerate_class_methods(class: *mut c_void) -> String {
             let method_name = if let Some(ref get_name) = get_method_name_fn {
                 let name_ptr = get_name(method_info);
                 if !name_ptr.is_null() {
-                    let s = std::ffi::CStr::from_ptr(name_ptr);
+                    let s = std::ffi::CStr::from_ptr(name_ptr as *const c_char);
                     s.to_string_lossy().to_string()
                 } else {
                     String::from("?")
@@ -3515,7 +3531,8 @@ const OUTGOING_BONUS_MOT4: f64 = 10.0; // 好調→絶好調: minor
 
 // Game scenario total turns
 const URA_TOTAL_TURNS: i32 = 78; // URA scenario has 78 training turns
-const RAMEN_TOTAL_TURNS: i32 = 78; // 拉面杯(scenario 14): 24×3+决赛6=78 [MDB+截图确认]
+// Scenario 14 UI is countdown-based and _totalTurnNum mapping is unverified.
+// Do not assign a total-turn constant or derive a year/remaining turn from it.
 const DEFAULT_TOTAL_TURNS: i32 = 72; // Standard scenarios have 72 turns
 
 // ★ v3.24.69/70: 拉面杯评分参数 [候选权重, 待实测校准]
@@ -3730,14 +3747,17 @@ fn evaluate_ai(
     next_turn_race: bool,     // 下回合是否比赛回合 [MDB single_mode_turn]
 ) -> AiResult {
     // Total turns per scenario
+    let temporal_turn_verified = scenario_id != 14;
     let total_turn: i32 = match scenario_id {
         1 => URA_TOTAL_TURNS,
-        14 => RAMEN_TOTAL_TURNS,
         _ => DEFAULT_TOTAL_TURNS,
     };
 
-    let remain_turn = total_turn - turn - 1;
-    let remain_turn = if remain_turn < 0 { 0 } else { remain_turn };
+    // Ramen: disable projections that require mapping the raw field to an
+    // increasing career turn. Immediate observed gains remain usable.
+    let remain_turn = if temporal_turn_verified {
+        (total_turn - turn - 1).max(0)
+    } else { 0 };
 
     // === Current Score ===
     let attr_score = compute_score(stats[0], stats[1], stats[2], stats[3], stats[4]);
@@ -3757,7 +3777,11 @@ fn evaluate_ai(
     let pt_score_rate = PT_SCORE_RATE;
 
     // Vital factor: increases from 3.5 to 7.0 as game progresses
-    let vital_factor = VITAL_FACTOR_BASE + (turn as f64 / total_turn as f64) * VITAL_FACTOR_RANGE;
+    let vital_factor = if temporal_turn_verified {
+        VITAL_FACTOR_BASE + (turn as f64 / total_turn as f64) * VITAL_FACTOR_RANGE
+    } else {
+        VITAL_FACTOR_BASE
+    };
 
     // Reserve for soft constraint: controls stat overflow penalty
     let reserve = RESERVE_MULTIPLIER
@@ -3915,12 +3939,10 @@ fn evaluate_ai(
     // 3) 下回合比赛: 外出体力溢出，价值×0.3 [MDB single_mode_turn.race_entry_type]
     if scenario_id == 14 {
         let deficit = std::cmp::max(0, RAMEN_KAKUSHIMI_CAP - kakushimi_num) as f64;
-        let year = if turn < 24 { 1 } else if turn < 48 { 2 } else { 3 };
-        let year_factor = if year == 1 { 0.6 } else { 1.0 }; // [候选]
-        outgoing_value += RAMEN_OUTING_KAKUSHIMI_VALUE * deficit * year_factor;
-        if next_turn_race {
-            outgoing_value *= NEXT_RACE_OUTING_FACTOR;
-        }
+        // Runtime turn mapping is unverified for Ramen. Do not apply the old
+        // 24/48 year thresholds or next-turn race discount. Only the immediate
+        // observed Kakushimi deficit term remains enabled.
+        outgoing_value += RAMEN_OUTING_KAKUSHIMI_VALUE * deficit;
     }
 
     if outgoing_value > best_value {
@@ -4176,7 +4198,8 @@ struct RamenObservedFrame {
     trainings: String,
 }
 static RAMEN_OBS_PREV: std::sync::Mutex<Option<RamenObservedFrame>> = std::sync::Mutex::new(None);
-static RAMEN_OBS_LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static RAMEN_OBS_HISTORY: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+const RAMEN_OBS_HISTORY_MAX: usize = 16;
 
 /// 从JSON文本中抽取指定键的对象值（brace匹配，仅用于本文件生成的规整JSON）
 fn extract_json_object(s: &str, key: &str) -> Option<String> {
@@ -4299,7 +4322,10 @@ fn observe_ramen_transition(summary: &str, captured_at: u64) {
                         frame.checkpoint_pt - before.checkpoint_pt
                     } else { 0 }
                 );
-                if let Ok(mut last) = RAMEN_OBS_LAST.lock() { *last = Some(transition); }
+                if let Ok(mut history) = RAMEN_OBS_HISTORY.lock() {
+                    if history.len() >= RAMEN_OBS_HISTORY_MAX { history.remove(0); }
+                    history.push(transition);
+                }
             }
         }
         *prev = Some(frame);
@@ -4307,8 +4333,10 @@ fn observe_ramen_transition(summary: &str, captured_at: u64) {
 }
 
 fn ramen_transition_probe() -> String {
-    RAMEN_OBS_LAST.lock().ok().and_then(|v| v.clone()).unwrap_or_else(||
-        r#"{"schema_version":1,"source":"runtime_observation","status":"waiting_for_change","causality":"unknown"}"#.to_string())
+    match RAMEN_OBS_HISTORY.lock() {
+        Ok(v) => format!(r#"{{"schema_version":3,"source":"runtime_observation","causality":"unknown","ui_turn_semantics":"countdown","raw_field_mapping":"unverified","count":{},"observations":[{}]}}"#, v.len(), v.join(",")),
+        Err(_) => r#"{"schema_version":3,"source":"runtime_observation","status":"lock_error","causality":"unknown","observations":[]}"#.to_string(),
+    }
 }
 
 /// ★ v3.24.69: 查询指定回合是否比赛回合（带缓存）[MDB single_mode_turn.race_entry_type]
@@ -6882,7 +6910,7 @@ fn meta_dump_endpoint() -> String {
         {
             let mut collect = |cols: &[*const u8]| {
                 if !cols[0].is_null() {
-                    tables.push(CStr::from_ptr(cols[0]).to_string_lossy().into_owned());
+                    tables.push(CStr::from_ptr(cols[0] as *const c_char).to_string_lossy().into_owned());
                 }
             };
             run_query("SELECT name, NULL FROM sqlite_master WHERE type='table'", &mut collect);
@@ -6898,10 +6926,10 @@ fn meta_dump_endpoint() -> String {
                 use std::io::Write;
                 let mut writer = |cols: &[*const u8]| {
                     let a = if cols[0].is_null() { String::new() } else {
-                        CStr::from_ptr(cols[0]).to_string_lossy().into_owned()
+                        CStr::from_ptr(cols[0] as *const c_char).to_string_lossy().into_owned()
                     };
                     let b = if cols[1].is_null() { String::new() } else {
-                        CStr::from_ptr(cols[1]).to_string_lossy().into_owned()
+                        CStr::from_ptr(cols[1] as *const c_char).to_string_lossy().into_owned()
                     };
                     let _ = writeln!(w, "{}\t{}", a, b);
                     rows_written += 1;
@@ -6950,7 +6978,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/update", "/update/status",
             "/debug/hookdiag", "/debug/hooklog", "/debug/crashlog", "/debug/upload",
             "/api/sniff", "/api/sniff/diag", "/api/sniff/toggle", "/api/sniff/clear",
-            "/api/event/choices", "/api/event/clear",
+            "/api/event/choices", "/api/event/observations", "/api/event/clear",
             "/action/latest", "/seed/history", "/seed/stats",
             "/log", "/carddb", "/skilldata",
             "/debug/table", "/debug/push_table", "/debug/download_table",
@@ -6977,7 +7005,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     //    大文件仍走各专用流式 _dl 端点，避免此路径内存翻倍
     const DL_ALLOWED: &[&str] = &[
         "/summary", "/scenario", "/data", "/ramen", "/debug/ramen_transition",
-        "/api/sniff", "/api/sniff/diag", "/api/event/choices",
+        "/api/sniff", "/api/sniff/diag", "/api/event/choices", "/api/event/observations",
         "/debug/event_reward_targets", "/debug/resource_meta_schema", "/debug/resource_meta_probe", "/debug/resource_crypto_symbols",
         "/debug/all", "/debug/params", "/debug/cmdinfo", "/debug/breeders",
         "/debug/training_partners", "/debug/rameninfo", "/debug/laststep",
@@ -7105,7 +7133,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let msg = if len > 0 && len < 128 {
             unsafe {
                 let buf_ptr = LAST_STEP_BUF.as_ptr();
-                std::ffi::CStr::from_ptr(buf_ptr)
+                std::ffi::CStr::from_ptr(buf_ptr as *const c_char)
                     .to_string_lossy()
                     .into_owned()
             }
@@ -7585,6 +7613,11 @@ fn handle_http(mut stream: std::net::TcpStream) {
             drop(_lock);
             result
         }
+    } else if path == "/api/event/observations" {
+        match EVENT_OBSERVATIONS.lock() {
+            Ok(v) => format!(r#"{{"schema_version":1,"source":"runtime_observation","count":{},"observations":[{}]}}"#, v.len(), v.join(",")),
+            Err(_) => r#"{"error":"lock_error","observations":[]}"#.to_string(),
+        }
     } else if path == "/api/event/clear" {
         let _lock = EVENT_STATE_MUTEX.lock();
         unsafe {
@@ -7594,6 +7627,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
             EVENT_CHARA_ID = 0;
             EVENT_GENERATION = EVENT_GENERATION.wrapping_add(1);
         }
+        if let Ok(mut p) = EVENT_PENDING_RESULT.lock() { *p = None; }
+        if let Ok(mut v) = EVENT_OBSERVATIONS.lock() { v.clear(); }
         drop(_lock);
         r#"{"ok":true}"#.to_string()
     } else if path == "/action/latest" {
@@ -8943,8 +8978,30 @@ extern "C" fn decompress_response_hook_handler(data: *mut c_void) -> *mut c_void
         type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
         let original: FnType = std::mem::transmute(trampoline);
         let decompressed = original(data);
+        let bytes = read_il2cpp_byte_array(decompressed);
+        if !bytes.is_empty() {
+            if let Ok(mut pending) = EVENT_PENDING_RESULT.lock() {
+                if let Some(sel) = pending.take() {
+                    let preview_len = bytes.len().min(EVENT_RESPONSE_PREVIEW_MAX);
+                    let preview = String::from_utf8_lossy(&bytes[..preview_len]);
+                    let (label, gain_id, next_block_idx, loop_exit_gain_id) = match sel.choice {
+                        Some(c) => (c.label, c.gain_id, c.next_block_idx, c.loop_exit_gain_id),
+                        None => (String::new(), -1, -1, -1),
+                    };
+                    let record = format!(r#"{{"schema_version":1,"source":"runtime_observation","causality":"unknown","result_label":"unknown","captured_at":{},"generation":{},"story_id":{},"chara_id":{},"selected_idx_raw":{},"choice":{{"label":"{}","gain_id":{},"next_block_idx":{},"loop_exit_gain_id":{}}},"response":{{"request_id":{},"url":"{}","size_captured":{},"preview_truncated":{},"hex_prefix":"{}","text_preview":"{}"}}}}"#,
+                        sel.captured_at, sel.generation, sel.story_id, sel.chara_id,
+                        sel.selected_idx_raw, json_escape(&label), gain_id, next_block_idx,
+                        loop_exit_gain_id, PENDING_REQ_ID, json_escape(&PENDING_URL), bytes.len(),
+                        bytes.len() > preview_len, hex_encode(&bytes[..bytes.len().min(64)]),
+                        json_escape(&preview));
+                    if let Ok(mut obs) = EVENT_OBSERVATIONS.lock() {
+                        if obs.len() >= EVENT_OBSERVATIONS_MAX { obs.remove(0); }
+                        obs.push(record);
+                    }
+                }
+            }
+        }
         if SNIFF_ENABLED.load(Ordering::Relaxed) {
-            let bytes = read_il2cpp_byte_array(decompressed);
             if !bytes.is_empty() {
                 let _lock = SNIFF_MUTEX.lock();
                 let rid = PENDING_REQ_ID;
@@ -9788,6 +9845,19 @@ extern "C" fn event_choice_hook_handler(
         let choices_count = {
             let _lock = EVENT_STATE_MUTEX.lock();
             EVENT_SELECTED_IDX = choice_index;
+            let choice = if choice_index >= 0 {
+                EVENT_CHOICES.get(choice_index as usize).cloned()
+            } else { None };
+            if let Ok(mut pending) = EVENT_PENDING_RESULT.lock() {
+                *pending = Some(PendingEventSelection {
+                    captured_at: sniff_timestamp(),
+                    generation: EVENT_GENERATION,
+                    story_id: EVENT_STORY_ID,
+                    chara_id: EVENT_CHARA_ID,
+                    selected_idx_raw: choice_index,
+                    choice,
+                });
+            }
             EVENT_CHOICES.len()
         };
 
@@ -10480,7 +10550,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
                 f(ui, to_cstr("Push Host:").as_ptr());
             }
             if let Some(f) = api.gui_ui_text_edit_singleline_fn {
-                let changed = f(ui, unsafe { GUI_HOST_BUF.as_mut_ptr() }, 64);
+                let changed = f(ui, unsafe { GUI_HOST_BUF.as_mut_ptr() as *mut c_char }, 64);
                 if changed {
                     unsafe {
                         // Find null terminator
@@ -10507,7 +10577,7 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
                 f(ui, to_cstr("Push Port:").as_ptr());
             }
             if let Some(f) = api.gui_ui_text_edit_singleline_fn {
-                let changed = f(ui, unsafe { GUI_PORT_BUF.as_mut_ptr() }, 8);
+                let changed = f(ui, unsafe { GUI_PORT_BUF.as_mut_ptr() as *mut c_char }, 8);
                 if changed {
                     unsafe {
                         let mut len = 0;
@@ -14636,7 +14706,7 @@ unsafe fn debug_dumpclass(class_name: &str) -> String {
         let get_name: FnClassGetName = std::mem::transmute(get_name_fn);
         let name_ptr = get_name(class);
         if !name_ptr.is_null() {
-            std::ffi::CStr::from_ptr(name_ptr)
+            std::ffi::CStr::from_ptr(name_ptr as *const c_char)
                 .to_string_lossy()
                 .to_string()
         } else {
@@ -16882,7 +16952,7 @@ unsafe fn read_ramen_info() -> String {
                 std::mem::transmute(get_name_fn);
             let name_ptr = fn_ptr(ds_class_ptr);
             if !name_ptr.is_null() {
-                let cstr = std::ffi::CStr::from_ptr(name_ptr);
+                let cstr = std::ffi::CStr::from_ptr(name_ptr as *const c_char);
                 class_name = cstr.to_string_lossy().into_owned();
             }
         }
