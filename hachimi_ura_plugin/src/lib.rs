@@ -4171,7 +4171,7 @@ const SUMMARY_CACHE_TTL_SECS: u64 = 3;
 #[derive(Clone)]
 struct RamenObservedFrame {
     captured_at: u64,
-    turn: i64,
+    raw_total_turn_num: i64,
     checkpoint_pt: i64,
     trainings: String,
 }
@@ -4283,18 +4283,18 @@ fn observe_ramen_transition(summary: &str, captured_at: u64) {
     let ramen = match extract_json_object(summary, "\"ramen\"") { Some(v) => v, None => return };
     let frame = RamenObservedFrame {
         captured_at,
-        turn: extract_json_int(summary, "\"turn\"").unwrap_or(-1),
+        raw_total_turn_num: extract_json_int(summary, "\"raw_total_turn_num\"").unwrap_or(-1),
         checkpoint_pt: extract_json_int(&ramen, "\"checkpoint_pt\"").unwrap_or(-1),
         trainings: compact_training_observation(summary),
     };
     if let Ok(mut prev) = RAMEN_OBS_PREV.lock() {
         if let Some(ref before) = *prev {
-            if before.turn != frame.turn || before.checkpoint_pt != frame.checkpoint_pt
+            if before.raw_total_turn_num != frame.raw_total_turn_num || before.checkpoint_pt != frame.checkpoint_pt
                     || before.trainings != frame.trainings {
                 let transition = format!(
-                    r#"{{"schema_version":1,"source":"runtime_observation","causality":"unknown","before":{{"captured_at":{},"turn":{},"checkpoint_pt":{},"trainings":{}}},"after":{{"captured_at":{},"turn":{},"checkpoint_pt":{},"trainings":{}}},"observed_checkpoint_pt_delta":{}}}"#,
-                    before.captured_at, before.turn, before.checkpoint_pt, before.trainings,
-                    frame.captured_at, frame.turn, frame.checkpoint_pt, frame.trainings,
+                    r#"{{"schema_version":2,"source":"runtime_observation","causality":"unknown","ui_turn_semantics":"countdown","raw_field_mapping":"unverified","before":{{"captured_at":{},"raw_total_turn_num":{},"checkpoint_pt":{},"trainings":{}}},"after":{{"captured_at":{},"raw_total_turn_num":{},"checkpoint_pt":{},"trainings":{}}},"observed_checkpoint_pt_delta":{}}}"#,
+                    before.captured_at, before.raw_total_turn_num, before.checkpoint_pt, before.trainings,
+                    frame.captured_at, frame.raw_total_turn_num, frame.checkpoint_pt, frame.trainings,
                     if before.checkpoint_pt >= 0 && frame.checkpoint_pt >= 0 {
                         frame.checkpoint_pt - before.checkpoint_pt
                     } else { 0 }
@@ -4507,25 +4507,25 @@ unsafe fn read_summary_inner_impl() -> String {
     } else {
         1
     }; // [INVOKE-04] get_Half — 唯一调用
-    // ★ v2.2: Read year and compute cumulative turn
-    // WorkSingleModeData._totalTurnNum at offset 68 (confirmed by /debug/dumpclass)
-    let total_turn_num = read_int_at(sm_obj as *const c_void, 68); // _totalTurnNum
-    // Year from totalTurnNum: year 1 = turn 1-18 (month 4-12), year 2 = turn 19-42, year 3 = turn 43-66
-    let year = if total_turn_num > 0 {
-        if total_turn_num <= 18 { 1 }
-        else if total_turn_num <= 42 { 2 }
-        else if total_turn_num <= 66 { 3 }
-        else { 4 }
-    } else {
-        // Fallback: estimate from month (less reliable)
-        if mon >= 4 { 1 } else { 2 }
-    };
-    let cumulative_turn = if total_turn_num > 0 {
-        total_turn_num
-    } else {
-        (year - 1) * 24 + (mon - 1) * 2 + half
-    };
+    // v3.24.72: decrypt the field, but do NOT assign cumulative/countdown semantics yet.
+    // 444444 is the ObscuredInt XOR key. The decrypted value is exposed only as raw data
+    // until it has been compared with the in-game countdown display across boundaries.
+    let raw_total_turn_num = read_obscured_int_at(sm_obj as *const c_void, 68); // _totalTurnNum
     let sid = read_obscured_int_at(chara_obj, 568); // _scenarioId
+    // Only Ramen is quarantined: its UI is countdown-based and the raw field mapping is unverified.
+    // Preserve the pre-existing behavior for other scenarios.
+    let (year, cumulative_turn) = if sid == 14 {
+        (-1, -1)
+    } else if raw_total_turn_num > 0 {
+        let y = if raw_total_turn_num <= 18 { 1 }
+            else if raw_total_turn_num <= 42 { 2 }
+            else if raw_total_turn_num <= 66 { 3 }
+            else { 4 };
+        (y, raw_total_turn_num)
+    } else {
+        let y = if mon >= 4 { 1 } else { 2 };
+        (y, (y - 1) * 24 + (mon - 1) * 2 + half)
+    };
     let chara_id = read_obscured_int_at(chara_obj, 36); // _cardId
 
     // ★ v3.24.9: New fields — attribute caps + scenario progress + running style
@@ -4702,21 +4702,9 @@ unsafe fn read_summary_inner_impl() -> String {
                 let asra_off = cached_find_field_offset(ds_class, "AllSelectedRegionIdArray");
                 if asra_off >= 0 {
                     let list_obj = read_ptr_at(dataset_obj, asra_off);
-                    let all_selected = inline_obscured_int_list_vec(list_obj);
-                    let (_active, active_round_turn, candidates, _status) =
-                        ramen_derive_selectable_regions(total_turn_num as i64, &all_selected);
-                    // ★ v3.24.32: the derived pool is only "selectable" on an
-                    // exact selection round (e.g. turn 3/24/48). Between rounds
-                    // it is leftover from the last phase — report it under a
-                    // phase-pool field with currently_selectable_status=unknown.
-                    if !candidates.is_empty() {
-                        let joined = candidates.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
-                        if active_round_turn == Some(total_turn_num as i64) {
-                            ramen_selectable_region_ids_derived_json = joined;
-                        } else {
-                            ramen_region_pool_phase_derived_json = joined;
-                        }
-                    }
+                    let _all_selected = inline_obscured_int_list_vec(list_obj);
+                    // Disabled in v3.24.72: MDB round numbers cannot be compared with
+                    // raw_total_turn_num until the latter's countdown/cumulative mapping is verified.
                 }
                 // ActiveEffectArray (List<ActiveEffectInfo>)
                 let ae_off = cached_find_field_offset(ds_class, "ActiveEffectArray");
@@ -6152,26 +6140,20 @@ unsafe fn read_summary_inner_impl() -> String {
     // ★ AI Evaluation (v3.15.1): compute score and training recommendation
     // FIXED: no more double-read of CommandInfoArray — eval_trainings collected in phase2
     log_predict_step("S:buffs done");
-    let ai_json = {
-        // ★ v3.24.69: 用权威 _totalTurnNum（1-based累计回合）替代 mon/half 推算
-        // 旧公式 (mon-1)*2+(half-1) 在拉面杯第一年特殊日历(4/5/6月双份)下错位
-        let turn = if cumulative_turn > 0 {
-            std::cmp::min(cumulative_turn - 1, RAMEN_TOTAL_TURNS - 1)
-        } else {
-            std::cmp::min((mon - 1) * 2 + (half - 1), 71)
-        };
+    let ai_json = if sid == 14 {
+        // Ramen UI uses a countdown. Until its mapping to MDB/internal progress is verified,
+        // suppress recommendations whose score changes with elapsed turn/year/next race.
+        r#"{"status":"unavailable","reason":"ramen_turn_semantics_unverified","timing_dependent_recommendation":false}"#.to_string()
+    } else {
+        let turn = std::cmp::min((mon - 1) * 2 + (half - 1), 71);
         let stats = [spd, sta, pow_, gut, wiz];
 
         // Detect buffs from chara_effect_ids
         let has_ai_jiao = chara_effect_ids.iter().any(|&id| id == 8);
         let has_renshou_jouzu = chara_effect_ids.iter().any(|&id| id == 10 || id == 11);
 
-        // ★ v3.24.69: 下回合是否比赛（仅拉面杯查询）[MDB single_mode_turn.race_entry_type]
-        let next_race = if sid == 14 && cumulative_turn > 0 {
-            unsafe { query_next_turn_race_entry(cumulative_turn + 1) }
-        } else {
-            false
-        };
+        // Non-Ramen path only. Ramen next-race lookup is disabled until turn mapping is verified.
+        let next_race = false;
 
         let result = evaluate_ai(
             turn,
@@ -6298,10 +6280,11 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"{}","year":{},"turn":{},"month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{} }}"#,
+        r#"{{"version":"{}","year":{},"turn":{},"raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"unverified","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{} }}"#,
         PLUGIN_VERSION,
         year,
         cumulative_turn,
+        raw_total_turn_num,
         mon,
         half,
         scn_s,
@@ -7075,11 +7058,11 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/summary" {
         read_summary()
     } else if path == "/debug/turn_probe" {
-        // ★ v3.24.70: 回合数诊断（对照游戏内"截止到RMJ X回合"，真实turn=24/48/72-X）
+        // v3.24.72: expose decrypted raw field only; UI is a countdown and mapping is unknown.
         let s = read_summary();
         format!(
-            r#"{{"status":"ok","turn":{},"month":{},"half":{},"hint":"real_turn = 24/48/72 - 游戏内RMJ倒计时"}}"#,
-            extract_json_int(&s, "\"turn\"").unwrap_or(-1),
+            r#"{{"status":"ok","raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"unverified","year":null,"month":{},"half":{},"derived_turn":null}}"#,
+            extract_json_int(&s, "\"raw_total_turn_num\"").unwrap_or(-1),
             extract_json_int(&s, "\"month\"").unwrap_or(-1),
             extract_json_int(&s, "\"half\"").unwrap_or(-1)
         )
@@ -7089,13 +7072,13 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let _ = read_summary();
         ramen_transition_probe()
     } else if path == "/ramen" {
-        // ★ v3.24.68: 轻量拉面杯端点（jueceapp轮询用），从summary抽取ramen+turn
+        // v3.24.72: lightweight Ramen data; raw field semantics remain unverified.
         let s = read_summary();
         let ramen = extract_json_object(&s, "\"ramen\"");
-        let turn = extract_json_int(&s, "\"turn\"");
+        let raw_total_turn_num = extract_json_int(&s, "\"raw_total_turn_num\"");
         format!(
-            r#"{{"status":"ok","turn":{},"ramen":{}}}"#,
-            turn.unwrap_or(-1),
+            r#"{{"status":"ok","raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"unverified","ramen":{}}}"#,
+            raw_total_turn_num.unwrap_or(-1),
             ramen.unwrap_or_else(|| "null".to_string())
         )
     } else if path == "/scenario" {
@@ -15982,18 +15965,12 @@ unsafe fn debug_ramen_region_select() -> String {
     let declared_dc = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
     let dc = if declared_dc.is_null() { get_class_from_object(ds) } else { declared_dc };
 
-    // WorkSingleModeData._totalTurnNum at offset 68 (confirmed by /debug/dumpclass)
-    let total_turn_num = read_int_at(sm as *const c_void, 68);
+    // Decrypt and expose raw only. Do not compare it with MDB turn columns yet.
+    let raw_total_turn_num = read_obscured_int_at(sm as *const c_void, 68);
     let selected_vec = inline_obscured_int_list_vec(call_getter_on_instance(dc, ds, "get_SelectedRegionIdArray"));
     let all_selected_vec = inline_obscured_int_list_vec(call_getter_on_instance(dc, ds, "get_AllSelectedRegionIdArray"));
     let region_methods = enum_method_names_containing(dc, "Region");
     let selectable_getter_found = region_methods.iter().any(|m| m.contains("Selectable"));
-
-    // MDB part (read-only): rounds JSON for display + derived candidate pool
-    // via the shared helper. This is a DERIVATION, not a runtime read.
-    let (active_type, active_round_turn, candidates, mdb_status) =
-        ramen_derive_selectable_regions(total_turn_num as i64, &all_selected_vec);
-    let is_selection_turn = active_round_turn == Some(total_turn_num as i64);
     let mut rounds_json = "[]".to_string();
     if let Some(mdb_path) = find_mdb_path() {
         if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
@@ -16008,19 +15985,13 @@ unsafe fn debug_ramen_region_select() -> String {
             }
         }
     }
-    let candidates_json = format!("[{}]", candidates.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
     let selected_json = format!("[{}]", selected_vec.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
     let all_selected_json = format!("[{}]", all_selected_vec.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
     let methods_json = format!("[{}]", region_methods.iter().map(|m| format!("\"{}\"", json_escape(m))).collect::<Vec<_>>().join(","));
-    let active_type_json = match active_type { Some(ty) => ty.to_string(), None => "null".to_string() };
 
-    format!(r#"{{"schema_version":1,"source":"runtime_observation+mdb_derivation","plugin_version":"{}","total_turn_num":{},"runtime":{{"selected_region_ids":{},"all_selected_region_ids":{}}},"region_select_rounds":{},"active_region_select_type":{},"active_round_turn":{},"is_selection_turn":{},"active_rule":"latest round with turn<=total_turn_num else first upcoming round","candidate_region_ids_derived":{},"derivation":"mdb pool(region_select_type=active) minus all_selected_region_ids","runtime_candidate_list_status":"unknown_no_confirmed_runtime_getter","runtime_selectable_getter_found":{},"runtime_region_method_names":{},"mdb_status":"{}"}}"#,
-        PLUGIN_VERSION, total_turn_num, selected_json, all_selected_json,
-        rounds_json, active_type_json,
-        match active_round_turn { Some(t) => t.to_string(), None => "null".to_string() },
-        is_selection_turn,
-        candidates_json, selectable_getter_found,
-        methods_json, json_escape(&mdb_status))
+    format!(r#"{{"schema_version":2,"source":"runtime_observation+mdb_records","plugin_version":"{}","raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"unverified","runtime":{{"selected_region_ids":{},"all_selected_region_ids":{}}},"region_select_rounds_mdb":{},"active_region_select_type":null,"active_round_turn":null,"is_selection_turn":null,"candidate_region_ids_derived":[],"derivation_status":"disabled_until_turn_mapping_verified","runtime_candidate_list_status":"unknown_no_confirmed_runtime_getter","runtime_selectable_getter_found":{},"runtime_region_method_names":{}}}"#,
+        PLUGIN_VERSION, raw_total_turn_num, selected_json, all_selected_json,
+        rounds_json, selectable_getter_found, methods_json)
 }
 
 /// v3.24.33: metadata-only event-choice reward target inventory.
@@ -18493,7 +18464,8 @@ unsafe fn read_training_context_inner() -> (i32, i32) {
     if wdm_inst.is_null() { return (-1, -1); }
     let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
     if sm_ptr == 0 { return (-1, -1); }
-    let turn = read_int_at(sm_ptr as *const c_void, 68);
+    // WorkSingleModeData._totalTurnNum is an ObscuredInt, not a plain i32.
+    let turn = read_obscured_int_at(sm_ptr as *const c_void, 68);
     let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
     if sm_class.is_null() { return (turn, -1); }
     let chara = call_getter_on_instance(sm_class, sm_ptr as *const c_void, "get_Character");
