@@ -1,0 +1,25 @@
+{
+  "generated_utc": "2026-07-29T01:30:11.747544+00:00",
+  "input": "APK versionCode/name marker 676; base + arm64_v8a split",
+  "unpacked_file_count": 4498,
+  "unpacked_total_bytes": 658531869,
+  "dex_class_count": 19479,
+  "native_library_count": 22,
+  "native_exported_symbol_count": 39853,
+  "canonical_il2cpp_classes": 16553,
+  "merged_il2cpp_classes": 17204,
+  "prior_report_additions": 651,
+  "unchanged_duplicate_class_records_skipped": 14598,
+  "changed_duplicate_class_records_retained": 9834,
+  "extra_variant_classes": 0,
+  "metadata_magic_hits": [],
+  "limitations": [
+    "No plaintext global-metadata.dat was present in these two APKs.",
+    "Current APK IL2CPP class-to-address regeneration is not possible without matching decrypted metadata or a safe existing runtime dump.",
+    "il2cpp_class_index combines an existing runtime method dump and a prior metadata class report; it is not claimed to be freshly decrypted from APK 676."
+  ],
+  "runtime_dump_raw_class_records": 27695,
+  "canonical_semantic_variants": 25877,
+  "changed_qualified_names_in_ALL": 510,
+  "novel_per_letter_variants": 0
+}
