@@ -1,0 +1,57 @@
+name: Validate sniff v2 release
+on:
+  push:
+    branches: [workbench/fix-sniff-v2-release]
+    paths:
+      - '.github/workflows/validate-sniff-v2-release.yml'
+      - 'hachimi_ura_plugin/**'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/fix-sniff-v2-release
+      - name: Verify six feature markers
+        run: |
+          set -euo pipefail
+          f=hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'SNIFF_RAW_MAX: usize = 50' "$f"
+          grep -Fq 'SNIFF_METADATA_MAX: usize = 1000' "$f"
+          grep -Fq 'path == "/api/sniff/status"' "$f"
+          grep -Fq 'path == "/api/sniff/metadata"' "$f"
+          grep -Fq 'parse_query(&full_uri, "after_id")' "$f"
+          grep -Fq 'parse_query(&full_uri, "enabled")' "$f"
+          grep -Fq 'SNIFF_RESPONSE_QUEUE' "$f"
+          grep -Fq 'PENDING_REQ_BODY = None' "$f"
+      - name: Rust host check
+        working-directory: hachimi_ura_plugin
+        run: |
+          cargo fmt --check
+          cargo check
+      - name: Setup Android target
+        run: rustup target add aarch64-linux-android
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+      - name: Android release build
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --target aarch64-linux-android --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libhachimi-ura-sniff-v2
+          path: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          if-no-files-found: error
+          retention-days: 14
