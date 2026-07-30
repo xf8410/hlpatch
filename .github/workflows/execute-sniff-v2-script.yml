@@ -1,0 +1,35 @@
+name: Execute sniff v2 script
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - tools/apply_sniff_v2.py
+      - .github/workflows/execute-sniff-v2-script.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/sniff-v2
+      - name: Fetch standalone patch script
+        run: |
+          git fetch origin main
+          git show origin/main:tools/apply_sniff_v2.py > /tmp/apply_sniff_v2.py
+      - name: Apply and verify
+        run: |
+          python3 /tmp/apply_sniff_v2.py
+          rm -f docs/sniff-v2-diagnostics.md docs/sniff-v2-execution.md docs/sniff-v2-failed-run.md
+          cd hachimi_ura_plugin
+          cargo fmt
+          cargo check
+      - name: Commit feature branch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat: add six long-session sniff capabilities'
+          git push origin HEAD:workbench/sniff-v2
