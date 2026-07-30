@@ -1,0 +1,36 @@
+name: Apply MessagePack sniff analyzer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [workbench/sniff-messagepack]
+    paths:
+      - tools/apply_messagepack_sniff.py
+      - hachimi_ura_plugin/src/protocol_sniff.rs
+      - .github/workflows/apply-messagepack-sniff.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/sniff-messagepack
+          fetch-depth: 0
+      - name: Apply integration patch
+        run: python3 tools/apply_messagepack_sniff.py
+      - name: Format and check
+        working-directory: hachimi_ura_plugin
+        run: |
+          cargo fmt --check
+          cargo check
+      - name: Commit generated integration
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add hachimi_ura_plugin/src/lib.rs hachimi_ura_plugin/src/protocol_sniff.rs hachimi_ura_plugin/Cargo.toml hachimi_ura_plugin/Cargo.lock
+          git commit -m "feat: decode captured MessagePack payloads" || exit 0
+          git push origin HEAD:workbench/sniff-messagepack
