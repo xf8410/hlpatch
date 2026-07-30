@@ -1,0 +1,39 @@
+name: Inspect sniff source
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/sniff-long-capture
+      - name: Extract bounded context
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('hachimi_ura_plugin/src/lib.rs')
+          lines=p.read_text(errors='replace').splitlines()
+          terms=['SNIFF_MAX','SNIFF_REQUESTS','SNIFF_RESPONSES','/api/sniff','CompressRequest','DecompressResponse','WWWRequest.Post','PENDING_URL','PENDING_REQ_ID','PENDING_REQ_BODY']
+          hits=[i for i,line in enumerate(lines) if any(t in line for t in terms)]
+          blocks=[]
+          for i in hits:
+              a=max(0,i-20); b=min(len(lines),i+35)
+              if blocks and a<=blocks[-1][1]+3: blocks[-1]=(blocks[-1][0],max(blocks[-1][1],b))
+              else: blocks.append((a,b))
+          out=['# Targeted sniff source context','',f'hits={len(hits)} blocks={len(blocks)}','']
+          for a,b in blocks:
+              out += [f'## Lines {a+1}-{b}','```rust']
+              out += [f'{j+1:06d}: {lines[j]}' for j in range(a,b)]
+              out += ['```','']
+          Path('docs/sniff-source-context.md').write_text('\n'.join(out))
+          PY
+      - name: Commit report to work branch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/sniff-source-context.md
+          git commit -m 'docs: capture bounded sniff implementation context' || exit 0
+          git push origin HEAD:workbench/sniff-long-capture
