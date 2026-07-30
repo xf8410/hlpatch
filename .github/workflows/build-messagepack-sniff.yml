@@ -1,0 +1,37 @@
+name: Build MessagePack sniff analyzer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/sniff-messagepack
+      - name: Apply analyzer integration
+        run: python3 tools/apply_messagepack_sniff.py
+      - name: Setup Rust target
+        run: rustup target add aarch64-linux-android
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+      - name: Build Android SO
+        working-directory: hachimi_ura_plugin
+        env:
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --target aarch64-linux-android --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libhachimi_ura-messagepack-sniff-v3.25.1
+          path: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
