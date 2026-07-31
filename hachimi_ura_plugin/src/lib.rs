@@ -8810,6 +8810,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let size_str = parse_query(&full_uri, "size");
         il2cpp_read_mem(&addr_str, &size_str)
     } else if path.starts_with("/il2cpp/read_string") {
+        (|| -> String {
         // ★ Read IL2CPP string at address (or via pointer indirection)
         // ?addr=0x...       → addr points to Il2CppString object directly
         // ?ptr=0x...        → read 8 bytes at ptr to get Il2CppString*, then read string
@@ -8845,6 +8846,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             s.replace('\\', "\\\\").replace('"', "\\\""),
             raw_len
         )
+        })()
     } else if path == "/il2cpp/search_methods_page" {
         // v3.22.89: 搜索方法名HTML页面（A-Z分组）
         search_methods_page()
