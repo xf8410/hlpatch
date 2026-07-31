@@ -105,7 +105,7 @@ static mut TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_ON_SUCCESS_PROLOGUE: [u8; 16] = [0; 16];
 static mut ON_SUCCESS_ADDR: usize = 0;
 // ★ v3.23.3: API sniffing — use Hachimi Interceptor API (hook+trampoline) + WWWRequest.Post for URL (replaces _Send+SetHeader)
-static SNIFF_ENABLED: AtomicBool = AtomicBool::new(false);
+static SNIFF_ENABLED: AtomicBool = AtomicBool::new(true); // 默认开启，抓认证流程
 static SNIFF_MUTEX: Mutex<()> = Mutex::new(());
 // SniffEntry: (id, url, headers_json, body)
 static mut SNIFF_REQUESTS: Vec<(u64, String, String, Vec<u8>)> = Vec::new();
