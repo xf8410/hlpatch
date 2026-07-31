@@ -1,11 +1,6 @@
 name: Build Hachimi URA Plugin
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "hachimi_ura_plugin/**"
-      - ".github/workflows/build-ura.yml"
   workflow_dispatch:
 
 permissions:
@@ -17,40 +12,190 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Capture targeted hook context
+      - name: Apply UnityWebRequest observer
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
           p=Path('hachimi_ura_plugin/src/lib.rs')
-          lines=p.read_text().splitlines()
-          terms=[
-            'install_api_sniff_hooks', 'hook_compress', 'hook_decompress',
-            'hook_post', 'COMPRESS_REQUEST_ADDR', 'DECOMPRESS_RESPONSE_ADDR',
-            'POST_ADDR', 'il2cpp_get_method_addr_fn', 'get_method_addr',
-            'interceptor_hook_fn', 'interceptor_get_trampoline_addr_fn',
-            '/api/sniff/diag', 'fn format_headers_json', 'PENDING_REQ_BODY'
-          ]
-          selected=[]
-          seen=set()
-          for term in terms:
-            hits=[i for i,x in enumerate(lines) if term in x]
-            selected.append(f'## `{term}` hits={len(hits)}')
-            for i in hits:
-              a=max(0,i-18); b=min(len(lines),i+45)
-              key=(a,b)
-              if key in seen: continue
-              seen.add(key)
-              selected += ['```rust']+[f'{j+1}: {lines[j]}' for j in range(a,b)]+['```']
-          out=Path('docs/unitywebrequest-hook-context.md')
-          out.write_text('# Targeted UnityWebRequest hook insertion context\n\n'+'\n'.join(selected)+'\n')
+          s=p.read_text()
+          def replace(old,new):
+              global s
+              n=s.count(old)
+              if n != 1: raise SystemExit(f'expected one match, got {n}: {old[:100]!r}')
+              s=s.replace(old,new,1)
+
+          replace('''static mut POST_ADDR: usize = 0;
+          // Pending request body parking''','''static mut POST_ADDR: usize = 0;
+          // UnityWebRequest request-entry observer. Metadata only: no headers, bodies, tokens, or query strings.
+          static mut UNITY_SEND_ADDR: usize = 0;
+          static UNITY_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
+          const UNITY_OBSERVATIONS_MAX: usize = 256;
+          #[derive(Clone)]
+          struct UnityRequestObservation {
+              id: u64,
+              timestamp_ms: u64,
+              method: String,
+              path: String,
+              body_size: usize,
+              content_type: String,
+          }
+          static UNITY_OBSERVATIONS: Mutex<Vec<UnityRequestObservation>> = Mutex::new(Vec::new());
+          // Pending request body parking''')
+
+          replace('''// ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]''','''fn unity_observer_timestamp_ms() -> u64 {
+              std::time::SystemTime::now()
+                  .duration_since(std::time::UNIX_EPOCH)
+                  .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+                  .unwrap_or(0)
+          }
+
+          fn unity_observer_path(url: &str) -> String {
+              let no_query = url.split('?').next().unwrap_or(url);
+              if let Some(scheme) = no_query.find("://") {
+                  let rest = &no_query[scheme + 3..];
+                  return rest.find('/').map(|i| rest[i..].to_string())
+                      .unwrap_or_else(|| "/".to_string());
+              }
+              no_query.to_string()
+          }
+
+          unsafe fn unity_get_string(obj: *const c_void, getter: &str) -> String {
+              if obj.is_null() { return String::new(); }
+              let class = get_class_from_object(obj);
+              if class.is_null() { return String::new(); }
+              read_il2cpp_string(call_getter_on_instance(class, obj, getter))
+          }
+
+          unsafe fn observe_unity_web_request(request: *mut c_void) {
+              if request.is_null() || !SNIFF_ENABLED.load(Ordering::Relaxed) { return; }
+              let method = unity_get_string(request, "get_method");
+              let url = unity_get_string(request, "get_url");
+              let request_class = get_class_from_object(request);
+              let upload = if request_class.is_null() { ptr::null_mut() }
+                  else { call_getter_ref(request_class, request, "get_uploadHandler") };
+              let (body_size, content_type) = if upload.is_null() {
+                  (0, String::new())
+              } else {
+                  let upload_class = get_class_from_object(upload);
+                  let data = if upload_class.is_null() { ptr::null_mut() }
+                      else { call_getter_on_instance(upload_class, upload, "get_data") };
+                  (read_il2cpp_byte_array(data).len(), unity_get_string(upload, "get_contentType"))
+              };
+              let item = UnityRequestObservation {
+                  id: UNITY_OBSERVATION_ID.fetch_add(1, Ordering::Relaxed),
+                  timestamp_ms: unity_observer_timestamp_ms(),
+                  method,
+                  path: unity_observer_path(&url),
+                  body_size,
+                  content_type,
+              };
+              if let Ok(mut entries) = UNITY_OBSERVATIONS.lock() {
+                  if entries.len() >= UNITY_OBSERVATIONS_MAX { entries.remove(0); }
+                  entries.push(item);
+              }
+          }
+
+          // UnityWebRequest.SendWebRequest() is asynchronous; this observes request entry only.
+          extern "C" fn unity_send_hook_handler(this: *mut c_void) -> *mut c_void {
+              unsafe {
+                  let trampoline = interceptor_get_trampoline(unity_send_hook_handler as usize);
+                  if trampoline == 0 { return ptr::null_mut(); }
+                  type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+                  let original: FnType = std::mem::transmute(trampoline);
+                  // Observation failures must never block or replace the game's request.
+                  let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                      observe_unity_web_request(this);
+                  }));
+                  original(this)
+              }
+          }
+
+          // ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]''')
+
+          replace('''    let all_hooked = COMPRESS_REQUEST_ADDR != 0 && DECOMPRESS_RESPONSE_ADDR != 0 && POST_ADDR != 0;''','''    let all_hooked = COMPRESS_REQUEST_ADDR != 0
+              && DECOMPRESS_RESPONSE_ADDR != 0
+              && POST_ADDR != 0
+              && UNITY_SEND_ADDR != 0;''')
+
+          marker='''    let umamusume = get_asm(to_cstr("umamusume.dll").as_ptr());'''
+          unity_install='''    // Observe the lower UnityWebRequest request-entry path used by boot/auth traffic.
+              if UNITY_SEND_ADDR == 0 {
+                  let unity_image = get_asm(to_cstr("UnityEngine.UnityWebRequestModule.dll").as_ptr());
+                  if unity_image.is_null() {
+                      set_hook_status("sniff.unity_send", "failed: image_not_found");
+                  } else {
+                      let unity_request = get_class(
+                          unity_image,
+                          to_cstr("UnityEngine.Networking").as_ptr(),
+                          to_cstr("UnityWebRequest").as_ptr(),
+                      );
+                      if unity_request.is_null() {
+                          set_hook_status("sniff.unity_send", "failed: class_not_found");
+                      } else {
+                          let addr = get_method_addr(
+                              unity_request as usize,
+                              to_cstr("SendWebRequest").as_ptr(),
+                              0,
+                          );
+                          if addr == 0 {
+                              set_hook_status("sniff.unity_send", "failed: method_not_found");
+                          } else if interceptor_hook(addr, unity_send_hook_handler as usize) {
+                              UNITY_SEND_ADDR = addr;
+                              set_hook_status("sniff.unity_send", &format!("hooked@0x{:x}", addr));
+                              ura_log(3, &format!("API sniff: UnityWebRequest.SendWebRequest hooked at 0x{:x}", addr));
+                          } else {
+                              set_hook_status("sniff.unity_send", "failed: interceptor_hook");
+                          }
+                      }
+                  }
+              }
+
+          '''
+          replace(marker,unity_install+marker)
+
+          route_marker='''    } else if path == "/api/sniff/diag" {'''
+          route='''    } else if path.starts_with("/api/sniff/unity") {
+              let after_id = parse_query(&full_uri, "after_id").parse::<u64>().unwrap_or(0);
+              let entries = UNITY_OBSERVATIONS.lock().map(|g| {
+                  g.iter().filter(|x| x.id > after_id).map(|x| format!(
+                      r#"{{"id":{},"timestamp_ms":{},"method":"{}","path":"{}","body_size":{},"content_type":"{}"}}"#,
+                      x.id, x.timestamp_ms, json_escape(&x.method), json_escape(&x.path),
+                      x.body_size, json_escape(&x.content_type)
+                  )).collect::<Vec<_>>()
+              }).unwrap_or_default();
+              format!(r#"{{"enabled":{},"unity_send_hooked":{},"count":{},"entries":[{}]}}"#,
+                  SNIFF_ENABLED.load(Ordering::Relaxed), unsafe { UNITY_SEND_ADDR != 0 },
+                  entries.len(), entries.join(","))
+          } else if path == "/api/sniff/diag" {'''
+          replace(route_marker,route)
+
+          replace('''            SNIFF_REQUESTS.clear();
+                      SNIFF_RESPONSES.clear();''','''            SNIFF_REQUESTS.clear();
+                      SNIFF_RESPONSES.clear();
+                      if let Ok(mut entries) = UNITY_OBSERVATIONS.lock() { entries.clear(); }''')
+
+          p.write_text(s)
+          cargo=Path('hachimi_ura_plugin/Cargo.toml')
+          c=cargo.read_text()
+          c,n=re.subn(r'(?m)^version = "[^"]+"','version = "3.24.76-unity-auth-observer"',c,count=1)
+          if n != 1: raise SystemExit('version marker mismatch')
+          cargo.write_text(c)
           PY
+          rm -f docs/unitywebrequest-hook-context.md
+          cd hachimi_ura_plugin
+          cargo fmt
+          cargo check
+
+      - name: Commit observer source
+        run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add docs/unitywebrequest-hook-context.md
-          git commit -m 'docs: capture targeted auth hook context' || true
+          git add -A
+          git commit -m 'feat: observe UnityWebRequest auth metadata' || true
           git push origin HEAD:workbench/unitywebrequest-auth-observer
 
-      - name: Setup Rust
+      - name: Setup Rust target
         run: rustup target add aarch64-linux-android
 
       - name: Setup NDK
@@ -60,7 +205,7 @@ jobs:
           ndk-version: r26c
           link-to-sdk: true
 
-      - name: Build baseline
+      - name: Build arm64
         working-directory: hachimi_ura_plugin
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -70,8 +215,17 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: cargo build --target aarch64-linux-android --release
 
-      - name: Upload baseline artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libhachimi_ura-auth-observer-baseline
+          name: libhachimi_ura-unity-auth-observer
           path: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+
+      - name: Publish diagnostic release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v3.24.76-unity-auth-observer"
+          ASSET="hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes "Diagnostic build: bounded metadata-only UnityWebRequest request-entry observer."
+          gh release upload "$TAG" "$ASSET" --clobber
