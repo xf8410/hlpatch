@@ -24,13 +24,9 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin "$LONG_SOURCE" "$UNITY_SOURCE"
-
-          # Start from the Android-validated six-feature long-session source.
           git show "$LONG_SOURCE:hachimi_ura_plugin/src/lib.rs" > hachimi_ura_plugin/src/lib.rs
           git show "$LONG_SOURCE:hachimi_ura_plugin/Cargo.toml" > hachimi_ura_plugin/Cargo.toml
 
-          # Reuse the exact observer transformation which produced the tested
-          # UnityWebRequest diagnostic build, rather than rebuilding it by hand.
           git show "$UNITY_SOURCE^:.github/workflows/build-ura.yml" > /tmp/unity-observer-workflow.yml
           awk '
             /python3 - <<'"'"'PY'"'"'/ { capture=1; next }
@@ -47,12 +43,7 @@ jobs:
           version = "3.25.1"
           cargo = Path("hachimi_ura_plugin/Cargo.toml")
           text = cargo.read_text()
-          text, count = re.subn(
-              r'(?m)^version = "[^"]+"$',
-              f'version = "{version}"',
-              text,
-              count=1,
-          )
+          text, count = re.subn(r'(?m)^version = "[^"]+"$', f'version = "{version}"', text, count=1)
           if count != 1:
               raise SystemExit("Cargo version marker mismatch")
           cargo.write_text(text)
@@ -118,7 +109,11 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add hachimi_ura_plugin/Cargo.toml hachimi_ura_plugin/Cargo.lock hachimi_ura_plugin/src/lib.rs
+          git add hachimi_ura_plugin/Cargo.toml hachimi_ura_plugin/src/lib.rs
+          # Cargo.lock is intentionally ignored by the plugin's historical
+          # .gitignore, but a reproducible release must commit the exact lockfile
+          # used by the successful --locked Android build.
+          git add -f hachimi_ura_plugin/Cargo.lock
           git commit -m "v${VERSION}: unify long-session sniff and Unity auth observer"
           SOURCE_SHA=$(git rev-parse HEAD)
           echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
