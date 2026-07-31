@@ -7296,6 +7296,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/debug/maps_list",
             "/debug/file_dl",
             "/debug/file_range_hex",
+            "/il2cpp/read_string",
+            "/il2cpp/read_mem",
         ];
         let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
             || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
@@ -8807,6 +8809,42 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let addr_str = parse_query(&full_uri, "addr");
         let size_str = parse_query(&full_uri, "size");
         il2cpp_read_mem(&addr_str, &size_str)
+    } else if path.starts_with("/il2cpp/read_string") {
+        // ★ Read IL2CPP string at address (or via pointer indirection)
+        // ?addr=0x...       → addr points to Il2CppString object directly
+        // ?ptr=0x...        → read 8 bytes at ptr to get Il2CppString*, then read string
+        let addr_str = parse_query(&full_uri, "addr");
+        let ptr_str = parse_query(&full_uri, "ptr");
+        let target = if !ptr_str.is_empty() {
+            // Indirection: read pointer at ptr_str, then read string
+            let ptr_addr = usize::from_str_radix(ptr_str.trim_start_matches("0x"), 16).unwrap_or(0);
+            if ptr_addr == 0 {
+                return r#"{"error":"invalid_ptr_addr"}"#.to_string();
+            }
+            unsafe {
+                let p = std::ptr::read::<u64>(ptr_addr as *const u64);
+                p as usize
+            }
+        } else if !addr_str.is_empty() {
+            usize::from_str_radix(addr_str.trim_start_matches("0x"), 16).unwrap_or(0)
+        } else {
+            return r#"{"error":"need_addr_or_ptr"}"#.to_string();
+        };
+        if target == 0 {
+            return r#"{"error":"invalid_target"}"#.to_string();
+        }
+        let s = unsafe { read_il2cpp_string(target as *const c_void) };
+        // Also dump raw bytes for debugging
+        let raw_len = unsafe {
+            std::ptr::read::<i32>((target as *const u8).offset(16) as *const i32)
+        };
+        format!(
+            r#"{{"addr":"0x{:x}","length":{},"string":"{}","raw_len":{}}}"#,
+            target,
+            s.len(),
+            s.replace('\\', "\\\\").replace('"', "\\\""),
+            raw_len
+        )
     } else if path == "/il2cpp/search_methods_page" {
         // v3.22.89: 搜索方法名HTML页面（A-Z分组）
         search_methods_page()
