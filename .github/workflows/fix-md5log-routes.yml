@@ -1,27 +1,24 @@
-name: Fix md5log routes
+name: Promote md5log fix
 on:
   workflow_dispatch:
   push:
     branches: [workbench/fix-md5log-routes]
+    paths: [.github/workflows/fix-md5log-routes.yml]
 permissions:
   contents: write
 jobs:
-  fix:
+  promote:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: workbench/fix-md5log-routes
-      - name: Apply fix
-        shell: bash
-        run: |
-          python3 .github/scripts/fix_md5log_routes.py
-          git diff --check
-      - name: Commit
+          fetch-depth: 0
+      - name: Cherry-pick source-only fix to main
         shell: bash
         run: |
           git config user.name github-actions-bot
           git config user.email actions@github.com
-          git add hachimi_ura_plugin/src/lib.rs
-          git commit -m 'fix md5log diagnostic routes'
-          git push origin HEAD:workbench/fix-md5log-routes
+          git checkout main
+          git pull --ff-only origin main
+          git cherry-pick 35639bcbdd4a0db6a5ace90b3c21984b16d9bcf6
+          git push origin main
