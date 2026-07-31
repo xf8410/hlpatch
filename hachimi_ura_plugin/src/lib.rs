@@ -138,6 +138,9 @@ static mut DECOMPRESS_RESPONSE_ADDR: usize = 0;
 static mut POST_ADDR: usize = 0;
 // UnityWebRequest request-entry observer. Metadata only: no headers, bodies, tokens, or query strings.
 static mut UNITY_SEND_ADDR: usize = 0;
+// MakeMd5 hook
+static mut MAKEMD5_ADDR: usize = 0;
+static MD5_LOG: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // (input, output)
 static UNITY_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
 const UNITY_OBSERVATIONS_MAX: usize = 256;
 #[derive(Clone)]
@@ -8045,6 +8048,20 @@ fn handle_http(mut stream: std::net::TcpStream) {
             interceptor_available,
             has_get_method_addr
         )
+    } else if path.starts_with("/api/md5log") {
+        let log = MD5_LOG.lock().unwrap();
+        let entries: Vec<String> = log.iter()
+            .enumerate()
+            .map(|(i, (input, output))| {
+                format!(
+                    r#"{{"id":{},"input":"{}","output":"{}"}}"#,
+                    i,
+                    input.replace('\\', "\\\\").replace('"', "\\\""),
+                    output.replace('\\', "\\\\").replace('"', "\\\"")
+                )
+            })
+            .collect();
+        format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
     } else if path == "/api/sniff" {
         let _lock = SNIFF_MUTEX.lock();
         unsafe {
@@ -9601,6 +9618,47 @@ extern "C" fn unity_send_hook_handler(this: *mut c_void) -> *mut c_void {
     }
 }
 
+// MakeMd5(string input) -> string
+// Hook to capture MD5 input (contains salt) and output
+extern "C" fn makemd5_hook_handler(input: *mut c_void) -> *mut c_void {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        // Read input string before calling original
+        let input_str = if !input.is_null() {
+            read_il2cpp_string(input)
+        } else {
+            String::new()
+        };
+        
+        let trampoline = interceptor_get_trampoline(makemd5_hook_handler as usize);
+        if trampoline == 0 {
+            return std::ptr::null_mut();
+        }
+        type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+        let original: FnType = std::mem::transmute(trampoline);
+        let ret = original(input);
+        
+        // Read output string
+        let output_str = if !ret.is_null() {
+            read_il2cpp_string(ret)
+        } else {
+            String::new()
+        };
+        
+        // Log input + output
+        if !input_str.is_empty() {
+            if let Ok(mut log) = MD5_LOG.lock() {
+                if log.len() >= 100 {
+                    log.remove(0);
+                }
+                log.push((input_str, output_str));
+            }
+        }
+        
+        ret
+    }));
+    result.unwrap_or(std::ptr::null_mut())
+}
+
 // ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]
 // Parks the uncompressed request body, keyed by the compressed byte array returned by the original.
 // WWWRequest.Post will match it later.
@@ -10610,6 +10668,34 @@ unsafe fn install_api_sniff_hooks() {
                     );
                 } else {
                     set_hook_status("sniff.unity_send", "failed: interceptor_hook");
+                }
+            }
+        }
+    }
+
+    // Hook Cryptographer.MakeMd5 to capture salt
+    if MAKEMD5_ADDR == 0 {
+        let umamusume_img = get_asm(to_cstr("umamusume.dll").as_ptr());
+        if !umamusume_img.is_null() {
+            let crypto_class = get_class(
+                umamusume_img,
+                to_cstr("Gallop").as_ptr(),
+                to_cstr("Cryptographer").as_ptr(),
+            );
+            if !crypto_class.is_null() {
+                let addr = get_method_addr(
+                    crypto_class as usize,
+                    to_cstr("MakeMd5").as_ptr(),
+                    1,
+                );
+                if addr != 0 {
+                    if interceptor_hook(addr, makemd5_hook_handler as usize) {
+                        MAKEMD5_ADDR = addr;
+                        set_hook_status("sniff.makemd5", &format!("hooked@0x{:x}", addr));
+                        ura_log(3, &format!("API sniff: Cryptographer.MakeMd5 hooked at 0x{:x}", addr));
+                    } else {
+                        set_hook_status("sniff.makemd5", "failed: interceptor_hook");
+                    }
                 }
             }
         }
