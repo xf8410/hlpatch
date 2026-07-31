@@ -17,9 +17,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
+      - name: Enable sniff by default for this build
         run: |
-          rustup target add aarch64-linux-android
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          src = Path("hachimi_ura_plugin/src/lib.rs")
+          text = src.read_text()
+          old = "static SNIFF_ENABLED: AtomicBool = AtomicBool::new(false);"
+          new = "static SNIFF_ENABLED: AtomicBool = AtomicBool::new(true);"
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one SNIFF_ENABLED=false, got {text.count(old)}")
+          src.write_text(text.replace(old, new, 1))
+
+          cargo = Path("hachimi_ura_plugin/Cargo.toml")
+          manifest = cargo.read_text()
+          manifest, count = re.subn(r'(?m)^version = "[^"]+"', 'version = "3.24.75-sniff-on"', manifest, count=1)
+          if count != 1:
+              raise SystemExit("Cargo version marker mismatch")
+          cargo.write_text(manifest)
+          PY
+          grep -F 'static SNIFF_ENABLED: AtomicBool = AtomicBool::new(true);' hachimi_ura_plugin/src/lib.rs
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
@@ -36,51 +57,19 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-        run: |
-          cargo build --target aarch64-linux-android --release
+        run: cargo build --target aarch64-linux-android --release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libhachimi_ura
+          name: libhachimi_ura-sniff-on
           path: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
 
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(grep -oP '^version = "\K[^"]+' hachimi_ura_plugin/Cargo.toml)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Check if tag exists
-        id: check_tag
-        run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Publish release asset
+      - name: Publish dedicated release asset
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          TAG="v${VERSION}"
+          TAG="v3.24.75-sniff-on"
           ASSET="hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so"
-          asset_exists() {
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
-              --jq '.assets[].name' 2>/dev/null | grep -Fxq "$(basename "$ASSET")"
-          }
-          for attempt in 1 2 3 4; do
-            # A previous upload may have succeeded even if uploads.github.com returned 502/503.
-            asset_exists && exit 0
-            if ! gh release view "$TAG" >/dev/null 2>&1; then
-              gh release create "$TAG" --title "$TAG" \
-                --notes "Automated plugin build $TAG" || true
-            fi
-            gh release upload "$TAG" "$ASSET" --clobber && exit 0
-            asset_exists && exit 0
-            sleep $((attempt * 15))
-          done
-          echo "Release asset missing after retries" >&2
-          exit 1
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes "Temporary diagnostic build: API sniffing enabled at plugin startup."
+          gh release upload "$TAG" "$ASSET" --clobber
