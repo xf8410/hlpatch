@@ -17,9 +17,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
+      - name: Capture targeted hook context
         run: |
-          rustup target add aarch64-linux-android
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('hachimi_ura_plugin/src/lib.rs')
+          lines=p.read_text().splitlines()
+          terms=[
+            'install_api_sniff_hooks', 'hook_compress', 'hook_decompress',
+            'hook_post', 'COMPRESS_REQUEST_ADDR', 'DECOMPRESS_RESPONSE_ADDR',
+            'POST_ADDR', 'il2cpp_get_method_addr_fn', 'get_method_addr',
+            'interceptor_hook_fn', 'interceptor_get_trampoline_addr_fn',
+            '/api/sniff/diag', 'fn format_headers_json', 'PENDING_REQ_BODY'
+          ]
+          selected=[]
+          seen=set()
+          for term in terms:
+            hits=[i for i,x in enumerate(lines) if term in x]
+            selected.append(f'## `{term}` hits={len(hits)}')
+            for i in hits:
+              a=max(0,i-18); b=min(len(lines),i+45)
+              key=(a,b)
+              if key in seen: continue
+              seen.add(key)
+              selected += ['```rust']+[f'{j+1}: {lines[j]}' for j in range(a,b)]+['```']
+          out=Path('docs/unitywebrequest-hook-context.md')
+          out.write_text('# Targeted UnityWebRequest hook insertion context\n\n'+'\n'.join(selected)+'\n')
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/unitywebrequest-hook-context.md
+          git commit -m 'docs: capture targeted auth hook context' || true
+          git push origin HEAD:workbench/unitywebrequest-auth-observer
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
@@ -28,7 +60,7 @@ jobs:
           ndk-version: r26c
           link-to-sdk: true
 
-      - name: Build
+      - name: Build baseline
         working-directory: hachimi_ura_plugin
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -36,51 +68,10 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-        run: |
-          cargo build --target aarch64-linux-android --release
+        run: cargo build --target aarch64-linux-android --release
 
-      - name: Upload artifact
+      - name: Upload baseline artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libhachimi_ura
+          name: libhachimi_ura-auth-observer-baseline
           path: hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(grep -oP '^version = "\K[^"]+' hachimi_ura_plugin/Cargo.toml)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Check if tag exists
-        id: check_tag
-        run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Publish release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          TAG="v${VERSION}"
-          ASSET="hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so"
-          asset_exists() {
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
-              --jq '.assets[].name' 2>/dev/null | grep -Fxq "$(basename "$ASSET")"
-          }
-          for attempt in 1 2 3 4; do
-            # A previous upload may have succeeded even if uploads.github.com returned 502/503.
-            asset_exists && exit 0
-            if ! gh release view "$TAG" >/dev/null 2>&1; then
-              gh release create "$TAG" --title "$TAG" \
-                --notes "Automated plugin build $TAG" || true
-            fi
-            gh release upload "$TAG" "$ASSET" --clobber && exit 0
-            asset_exists && exit 0
-            sleep $((attempt * 15))
-          done
-          echo "Release asset missing after retries" >&2
-          exit 1
