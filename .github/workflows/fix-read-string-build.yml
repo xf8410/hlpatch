@@ -1,0 +1,57 @@
+name: Fix and promote read_string build
+on:
+  workflow_dispatch:
+  push:
+    branches: [workbench/fix-read-string-build]
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/fix-read-string-build
+          fetch-depth: 0
+      - name: Repair source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('hachimi_ura_plugin/src/lib.rs')
+          s = p.read_text()
+          old = '''    } else if path.starts_with("/il2cpp/read_string") {
+        // ★ Read IL2CPP string at address (or via pointer indirection)'''
+          new = '''    } else if path.starts_with("/il2cpp/read_string") {
+        (|| -> String {
+        // ★ Read IL2CPP string at address (or via pointer indirection)'''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new, 1)
+          old = '''            raw_len
+        )
+    } else if path == "/il2cpp/search_methods_page" {'''
+          new = '''            raw_len
+        )
+        })()
+    } else if path == "/il2cpp/search_methods_page" {'''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          git diff --check
+      - name: Commit branch fix
+        shell: bash
+        run: |
+          git config user.name github-actions-bot
+          git config user.email actions@github.com
+          git add hachimi_ura_plugin/src/lib.rs
+          git commit -m 'fix read_string route return scope'
+          git push origin HEAD:workbench/fix-read-string-build
+      - name: Promote source fix to main
+        shell: bash
+        run: |
+          FIX=$(git rev-parse HEAD)
+          git checkout main
+          git pull --ff-only origin main
+          git cherry-pick "$FIX"
+          git push origin main
