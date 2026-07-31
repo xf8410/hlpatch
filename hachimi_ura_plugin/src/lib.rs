@@ -8033,18 +8033,22 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let req_addr = unsafe { COMPRESS_REQUEST_ADDR };
         let resp_addr = unsafe { DECOMPRESS_RESPONSE_ADDR };
         let post_addr = unsafe { POST_ADDR };
+        let makemd5_hooked = unsafe { MAKEMD5_ADDR != 0 };
+        let makemd5_addr = unsafe { MAKEMD5_ADDR };
         let interceptor_available = unsafe { !API.is_null() && (*API).interceptor != 0 };
         let has_get_method_addr =
             unsafe { !API.is_null() && (*API).il2cpp_get_method_addr_fn.is_some() };
         format!(
-            r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"post_hooked":{},"compress_addr":"0x{:x}","decompress_addr":"0x{:x}","post_addr":"0x{:x}","interceptor_available":{},"get_method_addr_available":{}}}"#,
+            r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"post_hooked":{},"makemd5_hooked":{},"compress_addr":"0x{:x}","decompress_addr":"0x{:x}","post_addr":"0x{:x}","makemd5_addr":"0x{:x}","interceptor_available":{},"get_method_addr_available":{}}}"#,
             SNIFF_ENABLED.load(Ordering::Relaxed),
             req_hooked,
             resp_hooked,
             post_hooked,
+            makemd5_hooked,
             req_addr,
             resp_addr,
             post_addr,
+            makemd5_addr,
             interceptor_available,
             has_get_method_addr
         )
@@ -8062,6 +8066,59 @@ fn handle_http(mut stream: std::net::TcpStream) {
             })
             .collect();
         format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+    } else if path == "/api/md5log/clear" {
+        MD5_LOG.lock().unwrap().clear();
+        r#"{"ok":true,"cleared":true}"#.to_string()
+    } else if path == "/api/md5log/install" {
+        // Manually trigger MakeMd5 hook installation (useful if auto-install failed at boot)
+        unsafe {
+            if MAKEMD5_ADDR != 0 {
+                format!(r#"{{"ok":true,"already_hooked":true,"addr":"0x{:x}"}}"#, MAKEMD5_ADDR)
+            } else if API.is_null() || (*API).interceptor == 0 {
+                r#"{"ok":false,"error":"interceptor_unavailable"}"#.to_string()
+            } else {
+                let get_asm = match (*API).il2cpp_get_assembly_image_fn {
+                    Some(f) => f,
+                    None => return r#"{"ok":false,"error":"no_get_asm"}"#.to_string(),
+                };
+                let get_class = match (*API).il2cpp_get_class_fn {
+                    Some(f) => f,
+                    None => return r#"{"ok":false,"error":"no_get_class"}"#.to_string(),
+                };
+                let get_method_addr = match (*API).il2cpp_get_method_addr_fn {
+                    Some(f) => f,
+                    None => return r#"{"ok":false,"error":"no_get_method_addr"}"#.to_string(),
+                };
+
+                let img = get_asm(to_cstr("umamusume.dll").as_ptr());
+                if img.is_null() {
+                    return r#"{"ok":false,"error":"umamusume_dll_not_found"}"#.to_string();
+                }
+                let cls = get_class(
+                    img,
+                    to_cstr("Gallop").as_ptr(),
+                    to_cstr("Cryptographer").as_ptr(),
+                );
+                if cls.is_null() {
+                    return r#"{"ok":false,"error":"cryptographer_class_not_found"}"#.to_string();
+                }
+                let addr = get_method_addr(
+                    cls as usize,
+                    to_cstr("MakeMd5").as_ptr(),
+                    1,
+                );
+                if addr == 0 {
+                    return r#"{"ok":false,"error":"makemd5_method_not_found"}"#.to_string();
+                }
+                if interceptor_hook(addr, makemd5_hook_handler as usize) {
+                    MAKEMD5_ADDR = addr;
+                    set_hook_status("sniff.makemd5", &format!("hooked@0x{:x}", addr));
+                    format!(r#"{{"ok":true,"hooked":true,"addr":"0x{:x}"}}"#, addr)
+                } else {
+                    r#"{"ok":false,"error":"interceptor_hook_failed"}"#.to_string()
+                }
+            }
+        }
     } else if path == "/api/sniff" {
         let _lock = SNIFF_MUTEX.lock();
         unsafe {
