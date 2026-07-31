@@ -8558,6 +8558,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // v3.22.89: dump单例实例（带运行时值）
         let class_name = parse_query(&full_uri, "name");
         unsafe { il2cpp_dump_singleton(&class_name) }
+    } else if path.starts_with("/il2cpp/call_static") {
+        // v3.25: 调用static方法 (无需singleton实例)
+        let class_name = parse_query(&full_uri, "class");
+        let method_name = parse_query(&full_uri, "method");
+        let p0 = parse_query(&full_uri, "p0").parse::<i64>().unwrap_or(0);
+        let p1 = parse_query(&full_uri, "p1").parse::<i64>().unwrap_or(0);
+        let p2 = parse_query(&full_uri, "p2").parse::<i64>().unwrap_or(0);
+        let p3 = parse_query(&full_uri, "p3").parse::<i64>().unwrap_or(0);
+        let p4 = parse_query(&full_uri, "p4").parse::<i64>().unwrap_or(0);
+        let param_count = parse_query(&full_uri, "n").parse::<i32>().unwrap_or(5);
+        unsafe { il2cpp_call_static_method(&class_name, &method_name, p0, p1, p2, p3, p4, param_count) }
     } else if path.starts_with("/il2cpp/call") {
         // v3.22.89: 调用单例上的getter方法
         let class_name = parse_query(&full_uri, "class");
@@ -16332,6 +16343,105 @@ unsafe fn il2cpp_dump_singleton(class_name: &str) -> String {
         fields_json.len(),
         fields_json.join(",")
     )
+}
+
+/// /il2cpp/call_static?class=X&method=Y&p0=..&p1=..&p2=..&p3=..&p4=..&n=5
+/// 调用static方法，无需singleton实例
+/// 支持最多5个int参数 + 第5个参数可作为指针(null=0)
+unsafe fn il2cpp_call_static_method(
+    class_name: &str,
+    method_name: &str,
+    p0: i64,
+    p1: i64,
+    p2: i64,
+    p3: i64,
+    p4: i64,
+    param_count: i32,
+) -> String {
+    if class_name.is_empty() || method_name.is_empty() {
+        return r#"{"error":"missing ?class= or ?method= parameter"}"#.to_string();
+    }
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
+    let api = &*API;
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+    let class = find_class_by_short_name(image, class_name);
+    if class.is_null() {
+        return format!(r#"{{"error":"class_not_found","name":"{}"}}"#, class_name);
+    }
+    // 用 il2cpp_get_method_addr_fn 找方法地址
+    let get_method_addr = match api.il2cpp_get_method_addr_fn {
+        Some(f) => f,
+        None => return r#"{"error":"no_method_addr_fn"}"#.to_string(),
+    };
+    // 尝试不同的参数数量找到方法
+    let mut method_addr: usize = 0;
+    for &n in &[param_count, 5, 4, 6, 3, 2, 1, 0] {
+        method_addr = get_method_addr(class as usize, to_cstr(method_name).as_ptr(), n);
+        if method_addr != 0 { break; }
+    }
+    if method_addr == 0 {
+        return format!(
+            r#"{{"error":"method_not_found","class":"{}","method":"{}"}}"#,
+            class_name, method_name
+        );
+    }
+    // 调用 static 方法
+    // ARM64 ABI: 参数 x0-x4, static 方法无 this 指针
+    // 参数1-4 是 int (w寄存器), 参数5 是指针 (x寄存器)
+    // p4=0 表示 null delegate
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match param_count {
+            0 => {
+                type F = unsafe extern "C" fn() -> *mut c_void;
+                let f: F = std::mem::transmute(method_addr);
+                f()
+            }
+            1 => {
+                type F = unsafe extern "C" fn(i64) -> *mut c_void;
+                let f: F = std::mem::transmute(method_addr);
+                f(p0)
+            }
+            2 => {
+                type F = unsafe extern "C" fn(i64, i64) -> *mut c_void;
+                let f: F = std::mem::transmute(method_addr);
+                f(p0, p1)
+            }
+            3 => {
+                type F = unsafe extern "C" fn(i64, i64, i64) -> *mut c_void;
+                let f: F = std::mem::transmute(method_addr);
+                f(p0, p1, p2)
+            }
+            4 => {
+                type F = unsafe extern "C" fn(i64, i64, i64, i64) -> *mut c_void;
+                let f: F = std::mem::transmute(method_addr);
+                f(p0, p1, p2, p3)
+            }
+            _ => {
+                type F = unsafe extern "C" fn(i64, i64, i64, i64, i64) -> *mut c_void;
+                let f: F = std::mem::transmute(method_addr);
+                f(p0, p1, p2, p3, p4)
+            }
+        }
+    }));
+    match result {
+        Ok(ret) => {
+            let ret_addr = ret as usize;
+            format!(
+                r#"{{"ok":true,"class":"{}","method":"{}","method_addr":"0x{:x}","params":[{},{},{},{},{}],"ret":"0x{:x}"}}"#,
+                class_name, method_name, method_addr,
+                p0, p1, p2, p3, p4, ret_addr
+            )
+        }
+        Err(_) => format!(
+            r#"{{"ok":false,"class":"{}","method":"{}","error":"panic"}}"#,
+            class_name, method_name
+        ),
+    }
 }
 
 /// /il2cpp/call?class=X&method=Y — 调用单例上的getter方法
