@@ -51,15 +51,6 @@ jobs:
           VERSION=$(grep -oP '^version = "\K[^"]+' hachimi_ura_plugin/Cargo.toml)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Check if tag exists
-        id: check_tag
-        run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Publish release asset
         env:
           GH_TOKEN: ${{ github.token }}
@@ -72,15 +63,14 @@ jobs:
               --jq '.assets[].name' 2>/dev/null | grep -Fxq "$(basename "$ASSET")"
           }
           for attempt in 1 2 3 4; do
-            # A previous upload may have succeeded even if uploads.github.com returned 502/503.
-            asset_exists && exit 0
             if ! gh release view "$TAG" >/dev/null 2>&1; then
               gh release create "$TAG" --title "$TAG" \
                 --notes "Automated plugin build $TAG" || true
             fi
+            # Always upload the binary produced by this run.  Do not return
+            # early merely because an older same-named asset already exists.
             gh release upload "$TAG" "$ASSET" --clobber && exit 0
-            asset_exists && exit 0
             sleep $((attempt * 15))
           done
-          echo "Release asset missing after retries" >&2
+          echo "Release asset upload failed after retries" >&2
           exit 1
