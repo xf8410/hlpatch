@@ -99,19 +99,36 @@ struct ActionState {
     sequence: u64,
 }
 static ACTION_STATE: Mutex<ActionState> = Mutex::new(ActionState {
-    training_result: -1, training_sub_id: -1, command_id: -1, sequence: 0,
+    training_result: -1,
+    training_sub_id: -1,
+    command_id: -1,
+    sequence: 0,
 });
 static mut TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_ON_SUCCESS_PROLOGUE: [u8; 16] = [0; 16];
 static mut ON_SUCCESS_ADDR: usize = 0;
 // ★ v3.23.3: API sniffing — use Hachimi Interceptor API (hook+trampoline) + WWWRequest.Post for URL (replaces _Send+SetHeader)
-static SNIFF_ENABLED: AtomicBool = AtomicBool::new(true); // 默认开启，抓认证流程
+static SNIFF_ENABLED: AtomicBool = AtomicBool::new(true);
 static SNIFF_MUTEX: Mutex<()> = Mutex::new(());
-// SniffEntry: (id, url, headers_json, body)
+// Raw payloads and safe metadata use separate bounded rings.
 static mut SNIFF_REQUESTS: Vec<(u64, String, String, Vec<u8>)> = Vec::new();
 static mut SNIFF_RESPONSES: Vec<(u64, Vec<u8>)> = Vec::new();
-static SNIFF_MAX: usize = 20;
-static SNIFF_REQ_ID: AtomicU64 = AtomicU64::new(0);
+const SNIFF_RAW_MAX: usize = 50;
+const SNIFF_METADATA_MAX: usize = 1000;
+static SNIFF_REQ_ID: AtomicU64 = AtomicU64::new(1);
+static SNIFF_METADATA_ID: AtomicU64 = AtomicU64::new(1);
+#[derive(Clone)]
+struct SniffMetadata {
+    id: u64,
+    request_id: u64,
+    timestamp_ms: u64,
+    direction: &'static str,
+    path: String,
+    size: usize,
+}
+static mut SNIFF_METADATA: Vec<SniffMetadata> = Vec::new();
+// Bounded temporal FIFO; unmatched responses are reported with request_id=0.
+static mut SNIFF_RESPONSE_QUEUE: Vec<(u64, String)> = Vec::new();
 static mut PENDING_URL: String = String::new();
 static mut PENDING_HEADERS: Vec<(String, String)> = Vec::new();
 static mut PENDING_REQ_ID: u64 = 0;
@@ -119,9 +136,57 @@ static mut PENDING_REQ_ID: u64 = 0;
 static mut COMPRESS_REQUEST_ADDR: usize = 0;
 static mut DECOMPRESS_RESPONSE_ADDR: usize = 0;
 static mut POST_ADDR: usize = 0;
+// UnityWebRequest request-entry observer. Metadata only: no headers, bodies, tokens, or query strings.
+static mut UNITY_SEND_ADDR: usize = 0;
+static UNITY_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
+const UNITY_OBSERVATIONS_MAX: usize = 256;
+#[derive(Clone)]
+struct UnityRequestObservation {
+    id: u64,
+    timestamp_ms: u64,
+    method: String,
+    path: String,
+    body_size: usize,
+    content_type: String,
+}
+static UNITY_OBSERVATIONS: Mutex<Vec<UnityRequestObservation>> = Mutex::new(Vec::new());
 // Pending request body parking (CompressRequest → Post matching)
 static mut PENDING_REQ_BODY: Option<Vec<u8>> = None;
 static mut PENDING_COMPRESSED: usize = 0;
+
+fn sniff_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn sniff_path(url: &str) -> String {
+    let no_query = url.split('?').next().unwrap_or(url);
+    if let Some(i) = no_query.find("://") {
+        let rest = &no_query[i + 3..];
+        return rest
+            .find('/')
+            .map(|j| rest[j..].to_string())
+            .unwrap_or_else(|| "/".to_string());
+    }
+    no_query.to_string()
+}
+
+unsafe fn push_sniff_metadata(request_id: u64, direction: &'static str, url: &str, size: usize) {
+    let id = SNIFF_METADATA_ID.fetch_add(1, Ordering::Relaxed);
+    SNIFF_METADATA.push(SniffMetadata {
+        id,
+        request_id,
+        timestamp_ms: sniff_timestamp_ms(),
+        direction,
+        path: sniff_path(url),
+        size,
+    });
+    if SNIFF_METADATA.len() > SNIFF_METADATA_MAX {
+        SNIFF_METADATA.remove(0);
+    }
+}
 // ★ Mutex to prevent concurrent read_summary_inner calls from HTTP + push threads
 static READ_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -146,15 +211,27 @@ const HOOK_LOG_MAX: usize = 256;
 // ★ v3.24.42: high-frequency read_summary/push spam is excluded from the
 // ring (still goes to logcat) so event/sniff diagnostics survive.
 const HOOK_LOG_NOISE: &[&str] = &[
-    "★ read_summary", "ramen scalar", "ramen arrays", "evaluation_list",
-    "sc: ", "skill_eval=", "v3.22.51 ramen", "★ Scenario 14", "Push:",
-    "call_getter: 'get_Skill", "call_getter: 'get_PossessSkill",
+    "★ read_summary",
+    "ramen scalar",
+    "ramen arrays",
+    "evaluation_list",
+    "sc: ",
+    "skill_eval=",
+    "v3.22.51 ramen",
+    "★ Scenario 14",
+    "Push:",
+    "call_getter: 'get_Skill",
+    "call_getter: 'get_PossessSkill",
     "find_field_offset: 'RemainTurn'",
 ];
 fn hook_log(msg: &str) {
-    if HOOK_LOG_NOISE.iter().any(|n| msg.contains(n)) { return; }
+    if HOOK_LOG_NOISE.iter().any(|n| msg.contains(n)) {
+        return;
+    }
     if let Ok(mut g) = HOOK_LOG.lock() {
-        if g.len() >= HOOK_LOG_MAX { g.remove(0); }
+        if g.len() >= HOOK_LOG_MAX {
+            g.remove(0);
+        }
         g.push(msg.to_string());
     }
 }
@@ -664,14 +741,15 @@ fn read_github_token() -> String {
     }
 }
 
-
 // ★ v3.24.52: boot step tracer — appends to ura_boot.log NEXT TO the plugin
 // .so (a path the user can reach with a file manager), so boot crashes are
 // diagnosable even when the HTTP server never comes up.
 fn boot_trace(step: &str) {
     // ★ v3.24.54: mirror into Hachimi's log (hachimi.log when the user enables
     // enable_file_logging) — no file access to the plugin dir needed.
-    unsafe { ura_log(3, &format!("boot: {}", step)); }
+    unsafe {
+        ura_log(3, &format!("boot: {}", step));
+    }
     let so_dir = find_own_so_path()
         .and_then(|p| {
             let mut v: Vec<&str> = p.rsplitn(2, '/').collect();
@@ -684,7 +762,9 @@ fn boot_trace(step: &str) {
         let _ = std::fs::write(&log_path, "ura boot trace\n");
         let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
         let pkg = String::from_utf8_lossy(&pkg_raw)
-            .trim_matches(char::from(0)).trim().to_string();
+            .trim_matches(char::from(0))
+            .trim()
+            .to_string();
         if !pkg.is_empty() {
             let alt = format!("/sdcard/Android/media/{}/hachimi/ura_boot.log", pkg);
             let _ = std::fs::write(&alt, "ura boot trace\n");
@@ -701,7 +781,9 @@ fn boot_trace(step: &str) {
     // (/sdcard/Android/data is root-only on modern Android).
     let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
     let pkg = String::from_utf8_lossy(&pkg_raw)
-        .trim_matches(char::from(0)).trim().to_string();
+        .trim_matches(char::from(0))
+        .trim()
+        .to_string();
     if !pkg.is_empty() {
         let alt = format!("/sdcard/Android/media/{}/hachimi/ura_boot.log", pkg);
         let _ = std::fs::OpenOptions::new()
@@ -711,7 +793,6 @@ fn boot_trace(step: &str) {
             .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
     }
 }
-
 
 // ★ v3.24.53: upload an arbitrary local file to the repo (contents API).
 // Used for crash log and boot trace so the user can read them on GitHub web
@@ -737,7 +818,9 @@ fn upload_file_to_repo(local_path: &str, repo_name: &str) {
         gh_token, tmp, repo_name
     );
     if let Ok(cmd_c) = std::ffi::CString::new(cmd) {
-        unsafe { sys_system(cmd_c.as_ptr() as *const i8); }
+        unsafe {
+            sys_system(cmd_c.as_ptr() as *const i8);
+        }
     }
     let _ = std::fs::remove_file(tmp);
 }
@@ -2729,11 +2812,19 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
     let mut all_fields: Vec<String> = Vec::new();
     let field_get_type_fn: Option<unsafe extern "C" fn(*const Il2CppFieldInfo) -> *const c_void> = {
         let p = resolve_il2cpp_symbol("il2cpp_field_get_type");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let type_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
         let p = resolve_il2cpp_symbol("il2cpp_type_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
 
     let mut current_class = class;
@@ -2778,15 +2869,21 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
             let type_name = type_get_name_fn
                 .and_then(|f| {
                     let p = f(type_ptr);
-                    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                    if p.is_null() {
+                        None
+                    } else {
+                        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+                    }
                 })
                 .unwrap_or_else(|| type_enum_to_name(type_enum));
             all_fields.push(format!(
                 r#"{{"name":"{}","offset":{},"class":"{}","type_enum":{},"type_name":"{}"}}"#,
-                json_escape(&field_name), offset, json_escape(&class_name), type_enum,
+                json_escape(&field_name),
+                offset,
+                json_escape(&class_name),
+                type_enum,
                 json_escape(&type_name)
             ));
-
         }
         if let Some(ref get_parent) = get_parent_fn {
             let parent = get_parent(current_class);
@@ -3532,8 +3629,8 @@ const OUTGOING_BONUS_MOT4: f64 = 10.0; // 好調→絶好調: minor
 
 // Game scenario total turns
 const URA_TOTAL_TURNS: i32 = 78; // URA scenario has 78 training turns
-// Scenario 14 UI is countdown-based and _totalTurnNum mapping is unverified.
-// Do not assign a total-turn constant or derive a year/remaining turn from it.
+                                 // Scenario 14 UI is countdown-based and _totalTurnNum mapping is unverified.
+                                 // Do not assign a total-turn constant or derive a year/remaining turn from it.
 const DEFAULT_TOTAL_TURNS: i32 = 72; // Standard scenarios have 72 turns
 
 // ★ v3.24.69/70: 拉面杯评分参数 [候选权重, 待实测校准]
@@ -3627,8 +3724,8 @@ const PARAMS_INCDEC_DATA_VALUE_OFF: i32 = 0x24;
 // Runtime diagnostic 2026-07-10 confirmed both fields are inline ObscuredInt values.
 const EVALUATION_PARTNER_ID_OFF: i32 = 0x10;
 const EVALUATION_VALUE_OFF: i32 = 0x24;
-const TRAINING_PARTNER_ARRAY_OFF: i32 = 0x50;  // = 80
-const TIPS_EVENT_PARTNER_ARRAY_OFF: i32 = 0x58;  // = 88
+const TRAINING_PARTNER_ARRAY_OFF: i32 = 0x50; // = 80
+const TIPS_EVENT_PARTNER_ARRAY_OFF: i32 = 0x58; // = 88
 const EVALUATION_LIST_OFF: i32 = 0x3f8;
 const OBSCURED_INT_SIZE: usize = 20;
 const IL2CPP_COMMAND_ID_OFF: usize = 0x10; // SingleModeCommandId.commandId (IL2CPP /fields/ offset=16)
@@ -3744,8 +3841,8 @@ fn evaluate_ai(
     skill_count: i32,         // ★ v3.22.0: learned skill count
     // ★ v3.24.69: 拉面杯剧本感知参数
     ramen_gauge_gains: &std::collections::HashMap<i32, i32>, // 各训练素材进度增益
-    kakushimi_num: i32,       // 当前隠し味持有数
-    next_turn_race: bool,     // 下回合是否比赛回合 [MDB single_mode_turn]
+    kakushimi_num: i32,                                      // 当前隠し味持有数
+    next_turn_race: bool, // 下回合是否比赛回合 [MDB single_mode_turn]
 ) -> AiResult {
     // Total turns per scenario
     let temporal_turn_verified = scenario_id != 14;
@@ -3758,7 +3855,9 @@ fn evaluate_ai(
     // increasing career turn. Immediate observed gains remain usable.
     let remain_turn = if temporal_turn_verified {
         (total_turn - turn - 1).max(0)
-    } else { 0 };
+    } else {
+        0
+    };
 
     // === Current Score ===
     let attr_score = compute_score(stats[0], stats[1], stats[2], stats[3], stats[4]);
@@ -4210,7 +4309,10 @@ fn extract_json_object(s: &str, key: &str) -> Option<String> {
     let mut in_str = false;
     let mut esc = false;
     for (i, c) in s[bpos..].char_indices() {
-        if esc { esc = false; continue; }
+        if esc {
+            esc = false;
+            continue;
+        }
         match c {
             '\\' if in_str => esc = true,
             '"' => in_str = !in_str,
@@ -4240,7 +4342,6 @@ fn extract_json_int(s: &str, key: &str) -> Option<i64> {
     num.parse().ok()
 }
 
-
 /// Extract a JSON array generated by this file (balanced brackets, string-aware).
 fn extract_json_array(s: &str, key: &str) -> Option<String> {
     let kpos = s.find(key)?;
@@ -4249,14 +4350,19 @@ fn extract_json_array(s: &str, key: &str) -> Option<String> {
     let mut in_str = false;
     let mut esc = false;
     for (i, c) in s[bpos..].char_indices() {
-        if esc { esc = false; continue; }
+        if esc {
+            esc = false;
+            continue;
+        }
         match c {
             '\\' if in_str => esc = true,
             '"' => in_str = !in_str,
             '[' if !in_str => depth += 1,
             ']' if !in_str => {
                 depth -= 1;
-                if depth == 0 { return Some(s[bpos..bpos + i + 1].to_string()); }
+                if depth == 0 {
+                    return Some(s[bpos..bpos + i + 1].to_string());
+                }
             }
             _ => {}
         }
@@ -4276,11 +4382,19 @@ fn compact_training_observation(summary: &str) -> String {
     let mut in_str = false;
     let mut esc = false;
     for (i, c) in arr.char_indices() {
-        if esc { esc = false; continue; }
+        if esc {
+            esc = false;
+            continue;
+        }
         match c {
             '\\' if in_str => esc = true,
             '"' => in_str = !in_str,
-            '{' if !in_str => { if depth == 0 { start = Some(i); } depth += 1; },
+            '{' if !in_str => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
             '}' if !in_str => {
                 depth -= 1;
                 if depth == 0 {
@@ -4290,8 +4404,10 @@ fn compact_training_observation(summary: &str) -> String {
                         let heads = extract_json_int(obj, "\"heads\"").unwrap_or(-1);
                         let partner_ids = extract_json_array(obj, "\"partner_ids\"")
                             .unwrap_or_else(|| "[]".to_string());
-                        out.push(format!(r#"{{"command_id":{},"heads":{},"partner_ids":{}}}"#,
-                            command_id, heads, partner_ids));
+                        out.push(format!(
+                            r#"{{"command_id":{},"heads":{},"partner_ids":{}}}"#,
+                            command_id, heads, partner_ids
+                        ));
                     }
                     start = None;
                 }
@@ -4303,8 +4419,13 @@ fn compact_training_observation(summary: &str) -> String {
 }
 
 fn observe_ramen_transition(summary: &str, captured_at: u64) {
-    if !summary.contains("\"scenario\":\"Ramen\"") { return; }
-    let ramen = match extract_json_object(summary, "\"ramen\"") { Some(v) => v, None => return };
+    if !summary.contains("\"scenario\":\"Ramen\"") {
+        return;
+    }
+    let ramen = match extract_json_object(summary, "\"ramen\"") {
+        Some(v) => v,
+        None => return,
+    };
     let frame = RamenObservedFrame {
         captured_at,
         raw_total_turn_num: extract_json_int(summary, "\"raw_total_turn_num\"").unwrap_or(-1),
@@ -4313,18 +4434,30 @@ fn observe_ramen_transition(summary: &str, captured_at: u64) {
     };
     if let Ok(mut prev) = RAMEN_OBS_PREV.lock() {
         if let Some(ref before) = *prev {
-            if before.raw_total_turn_num != frame.raw_total_turn_num || before.checkpoint_pt != frame.checkpoint_pt
-                    || before.trainings != frame.trainings {
+            if before.raw_total_turn_num != frame.raw_total_turn_num
+                || before.checkpoint_pt != frame.checkpoint_pt
+                || before.trainings != frame.trainings
+            {
                 let transition = format!(
                     r#"{{"schema_version":2,"source":"runtime_observation","causality":"unknown","ui_turn_semantics":"countdown","raw_field_mapping":"unverified","before":{{"captured_at":{},"raw_total_turn_num":{},"checkpoint_pt":{},"trainings":{}}},"after":{{"captured_at":{},"raw_total_turn_num":{},"checkpoint_pt":{},"trainings":{}}},"observed_checkpoint_pt_delta":{}}}"#,
-                    before.captured_at, before.raw_total_turn_num, before.checkpoint_pt, before.trainings,
-                    frame.captured_at, frame.raw_total_turn_num, frame.checkpoint_pt, frame.trainings,
+                    before.captured_at,
+                    before.raw_total_turn_num,
+                    before.checkpoint_pt,
+                    before.trainings,
+                    frame.captured_at,
+                    frame.raw_total_turn_num,
+                    frame.checkpoint_pt,
+                    frame.trainings,
                     if before.checkpoint_pt >= 0 && frame.checkpoint_pt >= 0 {
                         frame.checkpoint_pt - before.checkpoint_pt
-                    } else { 0 }
+                    } else {
+                        0
+                    }
                 );
                 if let Ok(mut history) = RAMEN_OBS_HISTORY.lock() {
-                    if history.len() >= RAMEN_OBS_HISTORY_MAX { history.remove(0); }
+                    if history.len() >= RAMEN_OBS_HISTORY_MAX {
+                        history.remove(0);
+                    }
                     history.push(transition);
                 }
             }
@@ -4536,20 +4669,25 @@ unsafe fn read_summary_inner_impl() -> String {
     } else {
         1
     }; // [INVOKE-04] get_Half — 唯一调用
-    // v3.24.72: decrypt the field, but do NOT assign cumulative/countdown semantics yet.
-    // 444444 is the ObscuredInt XOR key. The decrypted value is exposed only as raw data
-    // until it has been compared with the in-game countdown display across boundaries.
+       // v3.24.72: decrypt the field, but do NOT assign cumulative/countdown semantics yet.
+       // 444444 is the ObscuredInt XOR key. The decrypted value is exposed only as raw data
+       // until it has been compared with the in-game countdown display across boundaries.
     let raw_total_turn_num = read_obscured_int_at(sm_obj as *const c_void, 68); // _totalTurnNum
     let sid = read_obscured_int_at(chara_obj, 568); // _scenarioId
-    // Only Ramen is quarantined: its UI is countdown-based and the raw field mapping is unverified.
-    // Preserve the pre-existing behavior for other scenarios.
+                                                    // Only Ramen is quarantined: its UI is countdown-based and the raw field mapping is unverified.
+                                                    // Preserve the pre-existing behavior for other scenarios.
     let (year, cumulative_turn) = if sid == 14 {
         (-1, -1)
     } else if raw_total_turn_num > 0 {
-        let y = if raw_total_turn_num <= 18 { 1 }
-            else if raw_total_turn_num <= 42 { 2 }
-            else if raw_total_turn_num <= 66 { 3 }
-            else { 4 };
+        let y = if raw_total_turn_num <= 18 {
+            1
+        } else if raw_total_turn_num <= 42 {
+            2
+        } else if raw_total_turn_num <= 66 {
+            3
+        } else {
+            4
+        };
         (y, raw_total_turn_num)
     } else {
         let y = if mon >= 4 { 1 } else { 2 };
@@ -4854,7 +4992,7 @@ unsafe fn read_summary_inner_impl() -> String {
                     if !list_obj.is_null() {
                         let lb = list_obj as *const u8;
                         let count = std::ptr::read_unaligned::<usize>(
-                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize,
                         );
                         if count > 0 && count <= 3 {
                             let mut parts = Vec::new();
@@ -4863,7 +5001,9 @@ unsafe fn read_summary_inner_impl() -> String {
                                     lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
                                         as *const *mut c_void,
                                 );
-                                if item.is_null() { continue; }
+                                if item.is_null() {
+                                    continue;
+                                }
                                 let class = std::ptr::read_unaligned::<*mut c_void>(
                                     item as *const *mut c_void,
                                 );
@@ -4871,10 +5011,14 @@ unsafe fn read_summary_inner_impl() -> String {
                                 let feeling_off = cached_find_field_offset(class, "FeelingId");
                                 let remain = if remain_off >= 0 {
                                     read_obscured_int_at(item, remain_off)
-                                } else { -1 };
+                                } else {
+                                    -1
+                                };
                                 let feeling_id = if feeling_off >= 0 {
                                     read_obscured_int_at(item, feeling_off)
-                                } else { -1 };
+                                } else {
+                                    -1
+                                };
                                 parts.push(format!(
                                     r#"{{"feeling_id":{},"remaining":{}}}"#,
                                     feeling_id, remain
@@ -4891,7 +5035,7 @@ unsafe fn read_summary_inner_impl() -> String {
                     if !list_obj.is_null() {
                         let lb = list_obj as *const u8;
                         let count = std::ptr::read_unaligned::<usize>(
-                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize,
                         );
                         if count > 0 && count <= 20 {
                             let mut parts = Vec::new();
@@ -4900,7 +5044,9 @@ unsafe fn read_summary_inner_impl() -> String {
                                     lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
                                         as *const *mut c_void,
                                 );
-                                if item.is_null() { continue; }
+                                if item.is_null() {
+                                    continue;
+                                }
                                 let class = std::ptr::read_unaligned::<*mut c_void>(
                                     item as *const *mut c_void,
                                 );
@@ -4909,13 +5055,19 @@ unsafe fn read_summary_inner_impl() -> String {
                                 let feeling_off = cached_find_field_offset(class, "FeelingId");
                                 let command_type = if type_off >= 0 {
                                     read_obscured_int_at(item, type_off)
-                                } else { -1 };
+                                } else {
+                                    -1
+                                };
                                 let command_id = if id_off >= 0 {
                                     read_obscured_int_at(item, id_off)
-                                } else { -1 };
+                                } else {
+                                    -1
+                                };
                                 let feeling_id = if feeling_off >= 0 {
                                     read_obscured_int_at(item, feeling_off)
-                                } else { -1 };
+                                } else {
+                                    -1
+                                };
                                 parts.push(format!(
                                     r#"{{"command_type":{},"command_id":{},"feeling_id":{}}}"#,
                                     command_type, command_id, feeling_id
@@ -4935,7 +5087,7 @@ unsafe fn read_summary_inner_impl() -> String {
                     if !list_obj.is_null() {
                         let lb = list_obj as *const u8;
                         let count = std::ptr::read_unaligned::<usize>(
-                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                            lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize,
                         );
                         if count > 0 && count <= 20 {
                             let mut vectors = Vec::new();
@@ -4944,7 +5096,9 @@ unsafe fn read_summary_inner_impl() -> String {
                                     lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
                                         as *const *mut c_void,
                                 );
-                                if item.is_null() { continue; }
+                                if item.is_null() {
+                                    continue;
+                                }
                                 let class = std::ptr::read_unaligned::<*mut c_void>(
                                     item as *const *mut c_void,
                                 );
@@ -4953,36 +5107,54 @@ unsafe fn read_summary_inner_impl() -> String {
                                 let turns_off = cached_find_field_offset(class, "FeelingTurnArray");
                                 let command_type = if type_off >= 0 {
                                     read_obscured_int_at(item, type_off)
-                                } else { -1 };
+                                } else {
+                                    -1
+                                };
                                 let command_id = if id_off >= 0 {
                                     read_obscured_int_at(item, id_off)
-                                } else { -1 };
-                                if turns_off < 0 { continue; }
+                                } else {
+                                    -1
+                                };
+                                if turns_off < 0 {
+                                    continue;
+                                }
                                 let turns = read_ptr_at(item, turns_off);
-                                if turns.is_null() { continue; }
+                                if turns.is_null() {
+                                    continue;
+                                }
                                 let tb = turns as *const u8;
                                 let turn_count = std::ptr::read_unaligned::<usize>(
-                                    tb.add(IL2CPP_LIST_COUNT_OFF) as *const usize
+                                    tb.add(IL2CPP_LIST_COUNT_OFF) as *const usize,
                                 );
-                                if turn_count == 0 || turn_count > 3 { continue; }
+                                if turn_count == 0 || turn_count > 3 {
+                                    continue;
+                                }
                                 let mut progress = Vec::new();
                                 for j in 0..turn_count {
                                     let turn_item = std::ptr::read_unaligned::<*mut c_void>(
                                         tb.add(IL2CPP_LIST_ITEMS_OFF + j * IL2CPP_LIST_ITEM_SIZE)
                                             as *const *mut c_void,
                                     );
-                                    if turn_item.is_null() { continue; }
+                                    if turn_item.is_null() {
+                                        continue;
+                                    }
                                     let turn_class = std::ptr::read_unaligned::<*mut c_void>(
                                         turn_item as *const *mut c_void,
                                     );
-                                    let feeling_off = cached_find_field_offset(turn_class, "FeelingId");
-                                    let remain_off = cached_find_field_offset(turn_class, "RemainTurn");
+                                    let feeling_off =
+                                        cached_find_field_offset(turn_class, "FeelingId");
+                                    let remain_off =
+                                        cached_find_field_offset(turn_class, "RemainTurn");
                                     let feeling_id = if feeling_off >= 0 {
                                         read_obscured_int_at(turn_item, feeling_off)
-                                    } else { -1 };
+                                    } else {
+                                        -1
+                                    };
                                     let remaining = if remain_off >= 0 {
                                         read_obscured_int_at(turn_item, remain_off)
-                                    } else { -1 };
+                                    } else {
+                                        -1
+                                    };
                                     progress.push(format!(
                                         r#"{{"feeling_id":{},"remaining":{}}}"#,
                                         feeling_id, remaining
@@ -4991,7 +5163,9 @@ unsafe fn read_summary_inner_impl() -> String {
                                 if !progress.is_empty() {
                                     vectors.push(format!(
                                         r#"{{"command_type":{},"command_id":{},"progress":[{}]}}"#,
-                                        command_type, command_id, progress.join(",")
+                                        command_type,
+                                        command_id,
+                                        progress.join(",")
                                     ));
                                 }
                             }
@@ -5322,8 +5496,11 @@ unsafe fn read_summary_inner_impl() -> String {
     > = std::sync::Mutex::new(None);
 
     // Try cache first; rebuild if empty.
-    let mut info_map: std::collections::HashMap<i32, (i32, i32, i32)> =
-        SUPPORT_CARD_INFO_CACHE.lock().unwrap().clone().unwrap_or_default();
+    let mut info_map: std::collections::HashMap<i32, (i32, i32, i32)> = SUPPORT_CARD_INFO_CACHE
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_default();
 
     if info_map.is_empty() {
         if let Some(mdb_path) = find_mdb_path() {
@@ -5354,7 +5531,8 @@ unsafe fn read_summary_inner_impl() -> String {
                             support_command_by_position.insert(position, support_command_id);
                             bond_threshold_by_position.insert(position, threshold);
                             support_card_type_by_position.insert(position, sc_type);
-                            info_map.insert(support_card_id, (support_command_id, threshold, sc_type));
+                            info_map
+                                .insert(support_card_id, (support_command_id, threshold, sc_type));
                         }
                     }
                 }
@@ -5450,7 +5628,8 @@ unsafe fn read_summary_inner_impl() -> String {
                         // Group cards (support_card_type=3) shine when they trigger a
                         // special tips event, not based on bond threshold.
                         // TipsEventPartnerArray is at offset 0x58 (88), same ObscuredInt[] format.
-                        let tips_arr = read_ptr_at(ep as *const c_void, TIPS_EVENT_PARTNER_ARRAY_OFF);
+                        let tips_arr =
+                            read_ptr_at(ep as *const c_void, TIPS_EVENT_PARTNER_ARRAY_OFF);
                         let mut tips_partner_ids: std::collections::HashSet<i32> =
                             std::collections::HashSet::new();
                         if !tips_arr.is_null() {
@@ -5462,8 +5641,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                 for ti in 0..tips_len {
                                     let tval = tips_base
                                         .add(IL2CPP_LIST_ITEMS_OFF + ti * OBSCURED_INT_SIZE);
-                                    let tips_id =
-                                        read_obscured_int_at(tval as *const c_void, 0);
+                                    let tips_id = read_obscured_int_at(tval as *const c_void, 0);
                                     if tips_id > 0 {
                                         tips_partner_ids.insert(tips_id);
                                     }
@@ -5534,9 +5712,8 @@ unsafe fn read_summary_inner_impl() -> String {
                                     //   support_card_type=3 (团体卡): partner_id in TipsEventPartnerArray
                                     //     (触发特殊启示事件就彩圈，不管 bond)
                                     //   Unknown type: null (conservative)
-                                    let sc_type = support_card_type_by_position
-                                        .get(&partner_id)
-                                        .copied();
+                                    let sc_type =
+                                        support_card_type_by_position.get(&partner_id).copied();
 
                                     let bond_threshold = bond_threshold_by_position
                                         .get(&partner_id)
@@ -5549,14 +5726,23 @@ unsafe fn read_summary_inner_impl() -> String {
                                             Some(1) => {
                                                 match (
                                                     current_bond,
-                                                    support_command_by_position.get(&partner_id).copied(),
+                                                    support_command_by_position
+                                                        .get(&partner_id)
+                                                        .copied(),
                                                     normalize_training_command_id(cid),
                                                 ) {
-                                                    (Some(bond), Some(support_command_id), Some(current_training)) => {
-                                                        match support_card_command_id_to_training_id(support_command_id) {
+                                                    (
+                                                        Some(bond),
+                                                        Some(support_command_id),
+                                                        Some(current_training),
+                                                    ) => {
+                                                        match support_card_command_id_to_training_id(
+                                                            support_command_id,
+                                                        ) {
                                                             Some(card_training) => Some(
                                                                 bond >= bond_threshold
-                                                                    && card_training == current_training,
+                                                                    && card_training
+                                                                        == current_training,
                                                             ),
                                                             None => None,
                                                         }
@@ -5573,14 +5759,23 @@ unsafe fn read_summary_inner_impl() -> String {
                                                 // Fallback to old logic for untyped cards
                                                 match (
                                                     current_bond,
-                                                    support_command_by_position.get(&partner_id).copied(),
+                                                    support_command_by_position
+                                                        .get(&partner_id)
+                                                        .copied(),
                                                     normalize_training_command_id(cid),
                                                 ) {
-                                                    (Some(bond), Some(support_command_id), Some(current_training)) => {
-                                                        match support_card_command_id_to_training_id(support_command_id) {
+                                                    (
+                                                        Some(bond),
+                                                        Some(support_command_id),
+                                                        Some(current_training),
+                                                    ) => {
+                                                        match support_card_command_id_to_training_id(
+                                                            support_command_id,
+                                                        ) {
                                                             Some(card_training) => Some(
                                                                 bond >= bond_threshold
-                                                                    && card_training == current_training,
+                                                                    && card_training
+                                                                        == current_training,
                                                             ),
                                                             None => None,
                                                         }
@@ -5648,7 +5843,7 @@ unsafe fn read_summary_inner_impl() -> String {
                                         let ptype = match sc_type_val {
                                             2 => 1, // 友人卡
                                             3 => 2, // 团体卡 → 当普通支援卡显示
-                                            _ => 2,  // 普通支援卡
+                                            _ => 2, // 普通支援卡
                                         };
                                         // 名称从 MDB 查（后续优化），暂时用位置
                                         let name = format!("支援位{}", partner_id);
@@ -5846,7 +6041,10 @@ unsafe fn read_summary_inner_impl() -> String {
     // ★ v3.24.13: Reuse the array already fetched for shining detection —
     // eliminates a duplicate il2cpp_runtime_invoke that caused SIGSEGV.
     let mut sc_arr: *mut c_void = support_array_for_shining;
-    ura_log(3, &format!("sc: reused shining array ptr={}", !sc_arr.is_null()));
+    ura_log(
+        3,
+        &format!("sc: reused shining array ptr={}", !sc_arr.is_null()),
+    );
     // Method 2: direct field offset on chara_class (fallback)
     if sc_arr.is_null() {
         let sc_off = cached_find_field_offset(chara_class, "EquipSupportCardArray");
@@ -6045,7 +6243,8 @@ unsafe fn read_summary_inner_impl() -> String {
                                 "ObscuredSingleModeBreedersEnhanceGroup",
                             );
                             if !enhance_cls.is_null() {
-                                let enhance_arr = call_getter_on_instance( // [INVOKE-10] get_EnhanceGroupArray — 循环外
+                                let enhance_arr = call_getter_on_instance(
+                                    // [INVOKE-10] get_EnhanceGroupArray — 循环外
                                     ds_class,
                                     ds_obj,
                                     "get_EnhanceGroupArray",
@@ -6067,12 +6266,14 @@ unsafe fn read_summary_inner_impl() -> String {
                                             if ep.is_null() {
                                                 continue;
                                             }
-                                            let gt = call_getter_obscured_int( // [INVOKE-11] get_GainTotal (obscured) — 循环内倍增
+                                            let gt = call_getter_obscured_int(
+                                                // [INVOKE-11] get_GainTotal (obscured) — 循环内倍增
                                                 enhance_cls,
                                                 ep,
                                                 "get_GroupType",
                                             );
-                                            let lv = call_getter_obscured_int( // [INVOKE-12] get_Level (obscured) — 循环内倍增
+                                            let lv = call_getter_obscured_int(
+                                                // [INVOKE-12] get_Level (obscured) — 循环内倍增
                                                 enhance_cls,
                                                 ep,
                                                 "get_Level",
@@ -6281,7 +6482,8 @@ unsafe fn read_summary_inner_impl() -> String {
 
     // ★ v2.2: last_action 字段 — 从缓存读取，不调用 IL2CPP
     let last_action_json = {
-        let (cmd_id, seq) = ACTION_STATE.lock()
+        let (cmd_id, seq) = ACTION_STATE
+            .lock()
             .map(|state| (state.command_id, state.sequence))
             .unwrap_or((-1, 0));
         if cmd_id >= 0 {
@@ -6444,7 +6646,6 @@ fn push_loop() {
                 ura_log(
                     3,
                     &format!("Push: waiting for game... round={}", wait_round),
-    
                 );
             }
         }
@@ -6807,7 +7008,6 @@ unsafe fn debug_ramengains() -> String {
     format!("{{{}}}", parts.join(","))
 }
 
-
 // ★ v3.24.61: in-process meta dump via libnative's own sqlite3.
 // The game reads meta with these exact functions + the captured passphrase,
 // so this works regardless of how customized the cipher/KDF is.
@@ -6832,9 +7032,16 @@ fn hex_decode(s: &str) -> Vec<u8> {
 
 fn meta_dump_endpoint() -> String {
     unsafe {
-        type OpenV2 = extern "C" fn(*const i8, *mut *mut c_void, libc::c_int, *const i8) -> libc::c_int;
+        type OpenV2 =
+            extern "C" fn(*const i8, *mut *mut c_void, libc::c_int, *const i8) -> libc::c_int;
         type KeyFn = extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int;
-        type PrepV2 = extern "C" fn(*mut c_void, *const i8, libc::c_int, *mut *mut c_void, *mut *const i8) -> libc::c_int;
+        type PrepV2 = extern "C" fn(
+            *mut c_void,
+            *const i8,
+            libc::c_int,
+            *mut *mut c_void,
+            *mut *const i8,
+        ) -> libc::c_int;
         type StepFn = extern "C" fn(*mut c_void) -> libc::c_int;
         type ColText = extern "C" fn(*mut c_void, libc::c_int) -> *const u8;
         type FinFn = extern "C" fn(*mut c_void) -> libc::c_int;
@@ -6846,7 +7053,14 @@ fn meta_dump_endpoint() -> String {
         let p_coltext = resolve_module_symbol("libnative.so", "sqlite3_column_text");
         let p_fin = resolve_module_symbol("libnative.so", "sqlite3_finalize");
         let p_close = resolve_module_symbol("libnative.so", "sqlite3_close");
-        if p_open == 0 || p_key == 0 || p_prep == 0 || p_step == 0 || p_coltext == 0 || p_fin == 0 || p_close == 0 {
+        if p_open == 0
+            || p_key == 0
+            || p_prep == 0
+            || p_step == 0
+            || p_coltext == 0
+            || p_fin == 0
+            || p_close == 0
+        {
             return r#"{"ok":false,"error":"symbol_resolve_failed"}"#.to_string();
         }
         let open_v2: OpenV2 = std::mem::transmute(p_open);
@@ -6858,19 +7072,35 @@ fn meta_dump_endpoint() -> String {
         let close: FinFn = std::mem::transmute(p_close);
 
         let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
-        let pkg = String::from_utf8_lossy(&pkg_raw).trim_matches(char::from(0)).trim().to_string();
-        if pkg.is_empty() { return r#"{"ok":false,"error":"pkg"}"#.to_string(); }
+        let pkg = String::from_utf8_lossy(&pkg_raw)
+            .trim_matches(char::from(0))
+            .trim()
+            .to_string();
+        if pkg.is_empty() {
+            return r#"{"ok":false,"error":"pkg"}"#.to_string();
+        }
         let db_path = format!("/data/user/0/{}/files/meta", pkg);
         // key: prefer persisted file, fall back to in-memory capture
-        let key_hex = std::fs::read_to_string(format!("/data/user/0/{}/files/ura_meta_key.txt", pkg))
-            .ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
-            .or_else(|| META_KEY_HEX.lock().ok().map(|g| g.clone()).filter(|v| !v.is_empty()));
+        let key_hex =
+            std::fs::read_to_string(format!("/data/user/0/{}/files/ura_meta_key.txt", pkg))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    META_KEY_HEX
+                        .lock()
+                        .ok()
+                        .map(|g| g.clone())
+                        .filter(|v| !v.is_empty())
+                });
         let key_hex = match key_hex {
             Some(h) => h,
             None => return r#"{"ok":false,"error":"no_key_captured"}"#.to_string(),
         };
         let key_bytes = hex_decode(&key_hex);
-        if key_bytes.is_empty() { return r#"{"ok":false,"error":"bad_key_hex"}"#.to_string(); }
+        if key_bytes.is_empty() {
+            return r#"{"ok":false,"error":"bad_key_hex"}"#.to_string();
+        }
 
         let c_path = std::ffi::CString::new(db_path.clone()).unwrap();
         let c_path_ptr = c_path.as_ptr() as *const i8;
@@ -6880,7 +7110,11 @@ fn meta_dump_endpoint() -> String {
         if rc != 0 || db.is_null() {
             return format!(r#"{{"ok":false,"error":"open_rc={}"}}"#, rc);
         }
-        let krc = key_fn(db, key_bytes.as_ptr() as *const c_void, key_bytes.len() as libc::c_int);
+        let krc = key_fn(
+            db,
+            key_bytes.as_ptr() as *const c_void,
+            key_bytes.len() as libc::c_int,
+        );
         if krc != 0 {
             close(db);
             return format!(r#"{{"ok":false,"error":"key_rc={}"}}"#, krc);
@@ -6889,16 +7123,27 @@ fn meta_dump_endpoint() -> String {
         let run_query = |sql: &str, mut on_row: &mut dyn FnMut(&[*const u8])| -> i32 {
             let c_sql = std::ffi::CString::new(sql).unwrap();
             let mut st: *mut c_void = std::ptr::null_mut();
-            let rc = prep(db, c_sql.as_ptr() as *const i8, -1, &mut st, std::ptr::null_mut());
-            if rc != 0 { return rc; }
+            let rc = prep(
+                db,
+                c_sql.as_ptr() as *const i8,
+                -1,
+                &mut st,
+                std::ptr::null_mut(),
+            );
+            if rc != 0 {
+                return rc;
+            }
             let mut rows = 0;
             loop {
                 let s = step(st);
-                if s == 100 { // SQLITE_ROW
+                if s == 100 {
+                    // SQLITE_ROW
                     on_row(&[coltext(st, 0), coltext(st, 1)]);
                     rows += 1;
                 } else {
-                    if s != 101 { rows = -(s as i32); } // SQLITE_DONE=101 else error
+                    if s != 101 {
+                        rows = -(s as i32);
+                    } // SQLITE_DONE=101 else error
                     break;
                 }
             }
@@ -6911,10 +7156,17 @@ fn meta_dump_endpoint() -> String {
         {
             let mut collect = |cols: &[*const u8]| {
                 if !cols[0].is_null() {
-                    tables.push(CStr::from_ptr(cols[0] as *const c_char).to_string_lossy().into_owned());
+                    tables.push(
+                        CStr::from_ptr(cols[0] as *const c_char)
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
                 }
             };
-            run_query("SELECT name, NULL FROM sqlite_master WHERE type='table'", &mut collect);
+            run_query(
+                "SELECT name, NULL FROM sqlite_master WHERE type='table'",
+                &mut collect,
+            );
         }
 
         // dump `a` table to accessible media dir
@@ -6926,27 +7178,46 @@ fn meta_dump_endpoint() -> String {
                 let mut w = std::io::BufWriter::new(f);
                 use std::io::Write;
                 let mut writer = |cols: &[*const u8]| {
-                    let a = if cols[0].is_null() { String::new() } else {
-                        CStr::from_ptr(cols[0] as *const c_char).to_string_lossy().into_owned()
+                    let a = if cols[0].is_null() {
+                        String::new()
+                    } else {
+                        CStr::from_ptr(cols[0] as *const c_char)
+                            .to_string_lossy()
+                            .into_owned()
                     };
-                    let b = if cols[1].is_null() { String::new() } else {
-                        CStr::from_ptr(cols[1] as *const c_char).to_string_lossy().into_owned()
+                    let b = if cols[1].is_null() {
+                        String::new()
+                    } else {
+                        CStr::from_ptr(cols[1] as *const c_char)
+                            .to_string_lossy()
+                            .into_owned()
                     };
                     let _ = writeln!(w, "{}\t{}", a, b);
                     rows_written += 1;
                 };
                 let r = run_query("SELECT n, h FROM a", &mut writer);
                 let _ = w.flush();
-                if r < 0 { err = format!("step_rc={}", -r); }
+                if r < 0 {
+                    err = format!("step_rc={}", -r);
+                }
             }
-            Err(e) => { err = format!("file_create: {}", e); }
+            Err(e) => {
+                err = format!("file_create: {}", e);
+            }
         }
         close(db);
 
-        let tables_json: Vec<String> = tables.iter().map(|t| format!("\"{}\"", json_escape(t))).collect();
+        let tables_json: Vec<String> = tables
+            .iter()
+            .map(|t| format!("\"{}\"", json_escape(t)))
+            .collect();
         format!(
             r#"{{"ok":{},"tables":[{}],"a_rows":{},"out":"{}","err":"{}"}}"#,
-            err.is_empty(), tables_json.join(","), rows_written, out_path, err
+            err.is_empty(),
+            tables_json.join(","),
+            rows_written,
+            out_path,
+            err
         )
     }
 }
@@ -6975,18 +7246,50 @@ fn handle_http(mut stream: std::net::TcpStream) {
     // that touches game memory; static/self-state endpoints stay available.
     if !GAME_INITIALIZED.load(Ordering::Relaxed) {
         const BOOT_SAFE_EXACT: &[&str] = &[
-            "/", "/health", "/status", "/config", "/config.html",
-            "/update", "/update/status",
-            "/debug/hookdiag", "/debug/hooklog", "/debug/crashlog", "/debug/upload",
-            "/api/sniff", "/api/sniff/diag", "/api/sniff/toggle", "/api/sniff/clear",
-            "/api/event/choices", "/api/event/observations", "/api/event/observations/clear", "/api/event/clear",
-            "/action/latest", "/seed/history", "/seed/stats",
-            "/log", "/carddb", "/skilldata",
-            "/debug/table", "/debug/push_table", "/debug/download_table",
-            "/debug/mdb_all_tables", "/debug/mdb_schema_dump",
+            "/",
+            "/health",
+            "/status",
+            "/config",
+            "/config.html",
+            "/update",
+            "/update/status",
+            "/debug/hookdiag",
+            "/debug/hooklog",
+            "/debug/crashlog",
+            "/debug/upload",
+            "/api/sniff",
+            "/api/sniff/metadata",
+            "/api/sniff/status",
+            "/api/sniff/diag",
+            "/api/sniff/toggle",
+            "/api/sniff/clear",
+            "/api/event/choices",
+            "/api/event/observations",
+            "/api/event/observations/clear",
+            "/api/event/clear",
+            "/action/latest",
+            "/seed/history",
+            "/seed/stats",
+            "/log",
+            "/carddb",
+            "/skilldata",
+            "/debug/table",
+            "/debug/push_table",
+            "/debug/download_table",
+            "/debug/mdb_all_tables",
+            "/debug/mdb_schema_dump",
         ];
         const BOOT_SAFE_PREFIX: &[&str] = &[
-            "/mdb", "/debug/resource_", "/debug/private_file", "/debug/mem_scan_sqlite", "/debug/mem_scan_zdict", "/debug/mem_scan_hex", "/debug/file_scan_hex", "/debug/maps_list", "/debug/file_dl", "/debug/file_range_hex",
+            "/mdb",
+            "/debug/resource_",
+            "/debug/private_file",
+            "/debug/mem_scan_sqlite",
+            "/debug/mem_scan_zdict",
+            "/debug/mem_scan_hex",
+            "/debug/file_scan_hex",
+            "/debug/maps_list",
+            "/debug/file_dl",
+            "/debug/file_range_hex",
         ];
         let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
             || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
@@ -7005,23 +7308,49 @@ fn handle_http(mut stream: std::net::TcpStream) {
     //    ?dl=1&name=xxx 可自定义文件名（仅保留字母数字和下划线/连字符）
     //    大文件仍走各专用流式 _dl 端点，避免此路径内存翻倍
     const DL_ALLOWED: &[&str] = &[
-        "/summary", "/scenario", "/data", "/ramen", "/debug/ramen_transition",
-        "/api/sniff", "/api/sniff/diag", "/api/event/choices", "/api/event/observations",
-        "/debug/event_reward_targets", "/debug/resource_meta_schema", "/debug/resource_meta_probe", "/debug/resource_crypto_symbols",
-        "/debug/all", "/debug/params", "/debug/cmdinfo", "/debug/breeders",
-        "/debug/training_partners", "/debug/rameninfo", "/debug/laststep",
-        "/debug/storydata", "/debug/ramenfields", "/debug/gauge", "/debug/gauge2",
-        "/debug/ramengains", "/debug/paramsincdec", "/debug/training_seed",
-        "/debug/unique_skills", "/debug/hint_gain", "/debug/sc_effect",
-        "/debug/unique_detail", "/classes",
+        "/summary",
+        "/scenario",
+        "/data",
+        "/ramen",
+        "/debug/ramen_transition",
+        "/api/sniff",
+        "/api/sniff/metadata",
+        "/api/sniff/diag",
+        "/api/event/choices",
+        "/api/event/observations",
+        "/debug/event_reward_targets",
+        "/debug/resource_meta_schema",
+        "/debug/resource_meta_probe",
+        "/debug/resource_crypto_symbols",
+        "/debug/all",
+        "/debug/params",
+        "/debug/cmdinfo",
+        "/debug/breeders",
+        "/debug/training_partners",
+        "/debug/rameninfo",
+        "/debug/laststep",
+        "/debug/storydata",
+        "/debug/ramenfields",
+        "/debug/gauge",
+        "/debug/gauge2",
+        "/debug/ramengains",
+        "/debug/paramsincdec",
+        "/debug/training_seed",
+        "/debug/unique_skills",
+        "/debug/hint_gain",
+        "/debug/sc_effect",
+        "/debug/unique_detail",
+        "/classes",
     ];
     let dl_flag = parse_query(&full_uri, "dl");
     let dl_name = parse_query(&full_uri, "name");
-    let dl_enabled = !dl_flag.is_empty() && dl_flag != "0"
-        && DL_ALLOWED.iter().any(|p| path == *p);
+    let dl_enabled = !dl_flag.is_empty() && dl_flag != "0" && DL_ALLOWED.iter().any(|p| path == *p);
 
     let body = if path == "/" || path == "/health" {
-        format!(r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#, PLUGIN_VERSION)
+        format!(
+            r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#,
+            PLUGIN_VERSION
+        )
     } else if path == "/scan" {
         unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
@@ -7154,7 +7483,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         debug_ramen_participants()
     } else if path == "/training/result" {
         // v3.22.94: Read latest training result from hook
-        let (result, sub_id) = ACTION_STATE.lock()
+        let (result, sub_id) = ACTION_STATE
+            .lock()
             .map(|state| (state.training_result, state.training_sub_id))
             .unwrap_or((-1, -1));
         let hooked = unsafe { TRAINING_HOOK_INSTALLED };
@@ -7170,12 +7500,63 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 _ => "Unknown",
             }
         )
+    } else if path == "/api/sniff/status" {
+        let _lock = SNIFF_MUTEX.lock();
+        unsafe {
+            let last_id = SNIFF_METADATA.last().map(|m| m.id).unwrap_or(0);
+            let request_count = SNIFF_METADATA
+                .iter()
+                .filter(|m| m.direction == "request")
+                .count();
+            let response_count = SNIFF_METADATA
+                .iter()
+                .filter(|m| m.direction == "response")
+                .count();
+            format!(
+                r#"{{"enabled":{},"raw_request_count":{},"raw_response_count":{},"metadata_count":{},"request_count":{},"response_count":{},"last_id":{},"raw_limit":{},"metadata_limit":{}}}"#,
+                SNIFF_ENABLED.load(Ordering::Relaxed),
+                SNIFF_REQUESTS.len(),
+                SNIFF_RESPONSES.len(),
+                SNIFF_METADATA.len(),
+                request_count,
+                response_count,
+                last_id,
+                SNIFF_RAW_MAX,
+                SNIFF_METADATA_MAX
+            )
+        }
+    } else if path == "/api/sniff/metadata" {
+        let after_id = parse_query(&full_uri, "after_id")
+            .parse::<u64>()
+            .unwrap_or(0);
+        let _lock = SNIFF_MUTEX.lock();
+        unsafe {
+            let entries: Vec<String> = SNIFF_METADATA.iter()
+                .filter(|m| m.id > after_id)
+                .map(|m| format!(r#"{{"id":{},"request_id":{},"timestamp_ms":{},"direction":"{}","path":"{}","size":{}}}"#,
+                    m.id, m.request_id, m.timestamp_ms, m.direction, json_escape(&m.path), m.size))
+                .collect();
+            let last_id = SNIFF_METADATA.last().map(|m| m.id).unwrap_or(after_id);
+            format!(
+                r#"{{"enabled":{},"after_id":{},"last_id":{},"count":{},"entries":[{}]}}"#,
+                SNIFF_ENABLED.load(Ordering::Relaxed),
+                after_id,
+                last_id,
+                entries.len(),
+                entries.join(",")
+            )
+        }
     } else if path == "/api/sniff/toggle" {
         // ★ v3.24.40: lazy retry for fallback-mode installs.
         unsafe {
             install_api_sniff_hooks();
         }
-        let new_val = !SNIFF_ENABLED.load(Ordering::Relaxed);
+        let requested = parse_query(&full_uri, "enabled");
+        let new_val = match requested.as_str() {
+            "1" | "true" => true,
+            "0" | "false" => false,
+            _ => !SNIFF_ENABLED.load(Ordering::Relaxed),
+        };
         SNIFF_ENABLED.store(new_val, Ordering::Relaxed);
         let req_hooked = unsafe { COMPRESS_REQUEST_ADDR != 0 };
         let resp_hooked = unsafe { DECOMPRESS_RESPONSE_ADDR != 0 };
@@ -7189,27 +7570,46 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe {
             SNIFF_REQUESTS.clear();
             SNIFF_RESPONSES.clear();
+            if let Ok(mut entries) = UNITY_OBSERVATIONS.lock() {
+                entries.clear();
+            }
+            SNIFF_METADATA.clear();
+            SNIFF_RESPONSE_QUEUE.clear();
+            PENDING_REQ_BODY = None;
         }
         r#"{"ok":true}"#.to_string()
     } else if path.starts_with("/debug/hooklog") {
         // ★ v3.24.40/42: last HOOK_LOG_MAX lines, optional ?filter=substr
         let filter = parse_query(&full_uri, "filter");
         let entries: Vec<String> = match HOOK_LOG.lock() {
-            Ok(g) => g.iter()
+            Ok(g) => g
+                .iter()
                 .filter(|l| filter.is_empty() || l.contains(&filter))
-                .map(|l| json_escape(l)).collect(),
+                .map(|l| json_escape(l))
+                .collect(),
             Err(_) => Vec::new(),
         };
-        format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+        format!(
+            r#"{{"count":{},"entries":[{}]}}"#,
+            entries.len(),
+            entries.join(",")
+        )
     } else if path == "/debug/resource_reads" {
         // ★ v3.24.58: meta/dat file-read trace. Lazy-starts the /proc watcher
         // on first request (never at init — thread spawn in init context).
         start_res_fd_watcher();
         let entries: Vec<String> = match RES_READ_LOG.lock() {
-            Ok(g) => g.iter().map(|l| format!("\"{}\"", json_escape(l))).collect(),
+            Ok(g) => g
+                .iter()
+                .map(|l| format!("\"{}\"", json_escape(l)))
+                .collect(),
             Err(_) => Vec::new(),
         };
-        format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+        format!(
+            r#"{{"count":{},"entries":[{}]}}"#,
+            entries.len(),
+            entries.join(",")
+        )
     } else if path.starts_with("/debug/mem_scan_sqlite") {
         // ★ v3.24.58: hunt plaintext "SQLite format 3" pages in process memory
         // — any custom decryption MUST materialize this in RAM.
@@ -7222,27 +7622,42 @@ fn handle_http(mut stream: std::net::TcpStream) {
             if let Ok(mem) = mem {
                 'outer: for line in maps.lines() {
                     let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.len() < 6 { continue; }
-                    if !cols[1].contains("rw") { continue; }
+                    if cols.len() < 6 {
+                        continue;
+                    }
+                    if !cols[1].contains("rw") {
+                        continue;
+                    }
                     let range: Vec<&str> = cols[0].split('-').collect();
-                    if range.len() != 2 { continue; }
+                    if range.len() != 2 {
+                        continue;
+                    }
                     let (Ok(sa), Ok(ea)) = (
                         usize::from_str_radix(range[0], 16),
                         usize::from_str_radix(range[1], 16),
-                    ) else { continue };
+                    ) else {
+                        continue;
+                    };
                     let len = ea - sa;
-                    if len < 4096 || len > 512 * 1024 * 1024 { continue; }
+                    if len < 4096 || len > 512 * 1024 * 1024 {
+                        continue;
+                    }
                     let mut off = 0usize;
                     while off < len {
                         let chunk = (4 * 1024 * 1024usize).min(len - off);
                         let mut buf = vec![0u8; chunk];
-                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() { break; }
+                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() {
+                            break;
+                        }
                         for (i, w) in buf.windows(needle.len()).enumerate() {
                             if w == needle {
                                 let abs = sa + off + i;
-                                let after = &buf[i + needle.len()..(i + needle.len() + 16).min(buf.len())];
+                                let after =
+                                    &buf[i + needle.len()..(i + needle.len() + 16).min(buf.len())];
                                 hits.push(format!("0x{:x} {}", abs, hex_encode(after)));
-                                if hits.len() >= max_hits { break 'outer; }
+                                if hits.len() >= max_hits {
+                                    break 'outer;
+                                }
                             }
                         }
                         off += chunk;
@@ -7253,7 +7668,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
         format!(
             r#"{{"needle":"SQLite format 3","hits":{},"locations":[{}]}}"#,
             hits.len(),
-            hits.iter().map(|h| format!("\"{}\"", h)).collect::<Vec<_>>().join(",")
+            hits.iter()
+                .map(|h| format!("\"{}\"", h))
+                .collect::<Vec<_>>()
+                .join(",")
         )
     } else if path == "/debug/mem_scan_zdict" {
         // ★ v3.24.63: hunt zstd dictionary magic (37 A4 30 EC) in ALL readable
@@ -7267,21 +7685,33 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 use std::os::unix::fs::FileExt;
                 'outer: for line in maps.lines() {
                     let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.len() < 2 { continue; }
-                    if !cols[1].starts_with('r') { continue; }
+                    if cols.len() < 2 {
+                        continue;
+                    }
+                    if !cols[1].starts_with('r') {
+                        continue;
+                    }
                     let range: Vec<&str> = cols[0].split('-').collect();
-                    if range.len() != 2 { continue; }
+                    if range.len() != 2 {
+                        continue;
+                    }
                     let (Ok(sa), Ok(ea)) = (
                         usize::from_str_radix(range[0], 16),
                         usize::from_str_radix(range[1], 16),
-                    ) else { continue };
+                    ) else {
+                        continue;
+                    };
                     let len = ea - sa;
-                    if len < 4096 || len > 1024 * 1024 * 1024 { continue; }
+                    if len < 4096 || len > 1024 * 1024 * 1024 {
+                        continue;
+                    }
                     let mut off = 0usize;
                     while off < len {
                         let chunk = (8 * 1024 * 1024usize).min(len - off);
                         let mut buf = vec![0u8; chunk];
-                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() { break; }
+                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() {
+                            break;
+                        }
                         for (i, w) in buf.windows(4).enumerate() {
                             if w == needle {
                                 let abs = sa + off + i;
@@ -7300,7 +7730,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
                                     "0x{:x} saved={} bytes={} map={}",
                                     abs, saved, got, map_name
                                 ));
-                                if hits.len() >= max_hits { break 'outer; }
+                                if hits.len() >= max_hits {
+                                    break 'outer;
+                                }
                             }
                         }
                         off += chunk;
@@ -7311,7 +7743,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
         format!(
             r#"{{"needle":"37a430ec","hits":{},"locations":[{}],"note":"raw-content dicts have no magic; if 0 hits use /debug/mem_scan_hex"}}"#,
             hits.len(),
-            hits.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
+            hits.iter()
+                .map(|h| format!("\"{}\"", json_escape(h)))
+                .collect::<Vec<_>>()
+                .join(",")
         )
     } else if path.starts_with("/debug/mem_scan_hex") {
         // ★ v3.24.63: arbitrary <=32B hex pattern scan across readable maps
@@ -7328,7 +7763,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(8);
         let mut hits: Vec<String> = Vec::new();
         if needle.is_empty() {
-            let body = r#"{"error":"empty_needle","usage":"/debug/mem_scan_hex?hex=37a430ec"}"#.to_string();
+            let body = r#"{"error":"empty_needle","usage":"/debug/mem_scan_hex?hex=37a430ec"}"#
+                .to_string();
             let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
             let _ = stream.write_all(resp.as_bytes());
             return;
@@ -7338,20 +7774,30 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 use std::os::unix::fs::FileExt;
                 'outer: for line in maps.lines() {
                     let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.len() < 2 || !cols[1].starts_with('r') { continue; }
+                    if cols.len() < 2 || !cols[1].starts_with('r') {
+                        continue;
+                    }
                     let range: Vec<&str> = cols[0].split('-').collect();
-                    if range.len() != 2 { continue; }
+                    if range.len() != 2 {
+                        continue;
+                    }
                     let (Ok(sa), Ok(ea)) = (
                         usize::from_str_radix(range[0], 16),
                         usize::from_str_radix(range[1], 16),
-                    ) else { continue };
+                    ) else {
+                        continue;
+                    };
                     let len = ea - sa;
-                    if len < 4096 || len > 1024 * 1024 * 1024 { continue; }
+                    if len < 4096 || len > 1024 * 1024 * 1024 {
+                        continue;
+                    }
                     let mut off = 0usize;
                     while off < len {
                         let chunk = (8 * 1024 * 1024usize).min(len - off);
                         let mut buf = vec![0u8; chunk];
-                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() { break; }
+                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() {
+                            break;
+                        }
                         for (i, w) in buf.windows(needle.len()).enumerate() {
                             if w == needle.as_slice() {
                                 let abs = sa + off + i;
@@ -7363,7 +7809,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
                                     hex_encode(&buf[tail_s..tail_e]),
                                     cols.get(5).copied().unwrap_or("")
                                 ));
-                                if hits.len() >= max_hits { break 'outer; }
+                                if hits.len() >= max_hits {
+                                    break 'outer;
+                                }
                             }
                         }
                         off += chunk;
@@ -7374,7 +7822,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
         format!(
             r#"{{"hits":{},"locations":[{}]}}"#,
             hits.len(),
-            hits.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
+            hits.iter()
+                .map(|h| format!("\"{}\"", json_escape(h)))
+                .collect::<Vec<_>>()
+                .join(",")
         )
     } else if path.starts_with("/debug/file_scan_hex") {
         // ★ v3.24.64: scan device files for a hex pattern.
@@ -7385,7 +7836,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let hb = hexq.as_bytes();
         let mut i = 0;
         while i + 1 < hb.len() && needle.len() < 64 {
-            if let Ok(b) = u8::from_str_radix(&hexq[i..i + 2], 16) { needle.push(b); }
+            if let Ok(b) = u8::from_str_radix(&hexq[i..i + 2], 16) {
+                needle.push(b);
+            }
             i += 2;
         }
         let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(8);
@@ -7413,13 +7866,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
             'files: for t in &targets {
                 if let Ok(mut f) = std::fs::File::open(t) {
                     let mut fbuf: Vec<u8> = Vec::new();
-                    if f.read_to_end(&mut fbuf).is_err() { continue; }
+                    if f.read_to_end(&mut fbuf).is_err() {
+                        continue;
+                    }
                     for (i, w) in fbuf.windows(needle.len()).enumerate() {
                         if w == needle.as_slice() {
                             let ts = i + needle.len();
                             let te = (ts + 24).min(fbuf.len());
                             hits.push(format!("{}@0x{:x} {}", t, i, hex_encode(&fbuf[ts..te])));
-                            if hits.len() >= max_hits { break 'files; }
+                            if hits.len() >= max_hits {
+                                break 'files;
+                            }
                         }
                     }
                 }
@@ -7429,7 +7886,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
             r#"{{"targets":{},"hits":{},"locations":[{}]}}"#,
             targets.len(),
             hits.len(),
-            hits.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
+            hits.iter()
+                .map(|h| format!("\"{}\"", json_escape(h)))
+                .collect::<Vec<_>>()
+                .join(",")
         )
     } else if path == "/debug/maps_list" {
         // ★ v3.24.65: list file-backed memory maps (find libzstd / codec hosts)
@@ -7441,7 +7901,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 if let Some(name) = cols.get(5) {
                     if name.starts_with('/') && (filter.is_empty() || name.contains(&filter)) {
                         let e = format!("{} {}", cols[0], name);
-                        if !out.contains(&e) { out.push(e); }
+                        if !out.contains(&e) {
+                            out.push(e);
+                        }
                     }
                 }
             }
@@ -7449,7 +7911,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
         format!(
             r#"{{"count":{},"maps":[{}]}}"#,
             out.len(),
-            out.iter().map(|h| format!("\"{}\"", json_escape(h))).collect::<Vec<_>>().join(",")
+            out.iter()
+                .map(|h| format!("\"{}\"", json_escape(h)))
+                .collect::<Vec<_>>()
+                .join(",")
         )
     } else if path.starts_with("/debug/file_range_hex") {
         // ★ v3.24.67: read a byte range of a maps-listed file, return hex (chunked RE)
@@ -7463,7 +7928,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
             if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
                 for line in maps.lines() {
                     let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.get(5).copied() == Some(want.as_str()) { allowed = true; break; }
+                    if cols.get(5).copied() == Some(want.as_str()) {
+                        allowed = true;
+                        break;
+                    }
                 }
             }
         }
@@ -7474,13 +7942,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
             match std::fs::File::open(&want) {
                 Ok(mut f) => {
                     let mut buf = vec![0u8; max_len];
-                    let got = f.seek(SeekFrom::Start(off as u64))
+                    let got = f
+                        .seek(SeekFrom::Start(off as u64))
                         .and_then(|_| f.read(&mut buf))
                         .unwrap_or(0);
                     buf.truncate(got);
                     format!(
                         r#"{{"path":"{}","offset":"0x{:x}","len":{},"hex":"{}"}}"#,
-                        json_escape(&want), off, got, hex_encode(&buf)
+                        json_escape(&want),
+                        off,
+                        got,
+                        hex_encode(&buf)
                     )
                 }
                 Err(e) => format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
@@ -7492,10 +7964,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/resource_db_keys" {
         // ★ v3.24.45: full db open/key/mc_config pairing log
         let entries: Vec<String> = match DB_KEY_LOG.lock() {
-            Ok(g) => g.iter().map(|l| format!("\"{}\"", json_escape(l))).collect(),
+            Ok(g) => g
+                .iter()
+                .map(|l| format!("\"{}\"", json_escape(l)))
+                .collect(),
             Err(_) => Vec::new(),
         };
-        format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+        format!(
+            r#"{{"count":{},"entries":[{}]}}"#,
+            entries.len(),
+            entries.join(",")
+        )
     } else if path == "/debug/resource_meta_key" {
         // ★ v3.24.44: captured SQLCipher key for the resource `meta` DB
         let key = META_KEY_HEX.lock().map(|g| g.clone()).unwrap_or_default();
@@ -7508,13 +7987,40 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/hookdiag" {
         // ★ v3.24.40: per-hook install status
         let items: Vec<String> = match HOOK_STATUS.lock() {
-            Ok(g) => g.iter().map(|(n, st)| format!(r#"{{"hook":"{}","status":"{}"}}"#, json_escape(n), json_escape(st))).collect(),
+            Ok(g) => g
+                .iter()
+                .map(|(n, st)| {
+                    format!(
+                        r#"{{"hook":"{}","status":"{}"}}"#,
+                        json_escape(n),
+                        json_escape(st)
+                    )
+                })
+                .collect(),
             Err(_) => Vec::new(),
         };
         format!(
             r#"{{"game_initialized":{},"hooks":[{}]}}"#,
             GAME_INITIALIZED.load(Ordering::Relaxed),
             items.join(",")
+        )
+    } else if path.starts_with("/api/sniff/unity") {
+        let after_id = parse_query(&full_uri, "after_id")
+            .parse::<u64>()
+            .unwrap_or(0);
+        let entries = UNITY_OBSERVATIONS.lock().map(|g| {
+        g.iter().filter(|x| x.id > after_id).map(|x| format!(
+            r#"{{"id":{},"timestamp_ms":{},"method":"{}","path":"{}","body_size":{},"content_type":"{}"}}"#,
+            x.id, x.timestamp_ms, json_escape(&x.method), json_escape(&x.path),
+            x.body_size, json_escape(&x.content_type)
+        )).collect::<Vec<_>>()
+    }).unwrap_or_default();
+        format!(
+            r#"{{"enabled":{},"unity_send_hooked":{},"count":{},"entries":[{}]}}"#,
+            SNIFF_ENABLED.load(Ordering::Relaxed),
+            unsafe { UNITY_SEND_ADDR != 0 },
+            entries.len(),
+            entries.join(",")
         )
     } else if path == "/api/sniff/diag" {
         // v3.23.3: Diagnostic endpoint for hook installation (Interceptor API)
@@ -7615,18 +8121,30 @@ fn handle_http(mut stream: std::net::TcpStream) {
             result
         }
     } else if path == "/api/event/observations" {
-        let after_id = parse_query(&full_uri, "after_id").parse::<i64>().unwrap_or(0);
+        let after_id = parse_query(&full_uri, "after_id")
+            .parse::<i64>()
+            .unwrap_or(0);
         match EVENT_OBSERVATIONS.lock() {
             Ok(v) => {
-                let selected: Vec<String> = v.iter()
-                    .filter(|item| extract_json_int(item, "\"observation_id\"").unwrap_or(0) > after_id)
-                    .cloned().collect();
-                format!(r#"{{"schema_version":2,"source":"runtime_observation","count":{},"observations":[{}]}}"#, selected.len(), selected.join(","))
-            },
+                let selected: Vec<String> = v
+                    .iter()
+                    .filter(|item| {
+                        extract_json_int(item, "\"observation_id\"").unwrap_or(0) > after_id
+                    })
+                    .cloned()
+                    .collect();
+                format!(
+                    r#"{{"schema_version":2,"source":"runtime_observation","count":{},"observations":[{}]}}"#,
+                    selected.len(),
+                    selected.join(",")
+                )
+            }
             Err(_) => r#"{"error":"lock_error","observations":[]}"#.to_string(),
         }
     } else if path == "/api/event/observations/clear" {
-        if let Ok(mut v) = EVENT_OBSERVATIONS.lock() { v.clear(); }
+        if let Ok(mut v) = EVENT_OBSERVATIONS.lock() {
+            v.clear();
+        }
         r#"{"ok":true,"cleared":"observations"}"#.to_string()
     } else if path == "/api/event/clear" {
         let _lock = EVENT_STATE_MUTEX.lock();
@@ -7637,13 +8155,16 @@ fn handle_http(mut stream: std::net::TcpStream) {
             EVENT_CHARA_ID = 0;
             EVENT_GENERATION = EVENT_GENERATION.wrapping_add(1);
         }
-        if let Ok(mut p) = EVENT_PENDING_RESULT.lock() { *p = None; }
+        if let Ok(mut p) = EVENT_PENDING_RESULT.lock() {
+            *p = None;
+        }
         // Preserve completed observations. They have a separate explicit clear endpoint.
         drop(_lock);
         r#"{"ok":true}"#.to_string()
     } else if path == "/action/latest" {
         // ★ v2.2: 返回最新动作记录（只读缓存，不调用 IL2CPP）
-        let (cmd_id, seq, result_type) = ACTION_STATE.lock()
+        let (cmd_id, seq, result_type) = ACTION_STATE
+            .lock()
             .map(|state| (state.command_id, state.sequence, state.training_result))
             .unwrap_or((-1, 0, -1));
         let (action, normalized) = match cmd_id {
@@ -7678,20 +8199,30 @@ fn handle_http(mut stream: std::net::TcpStream) {
         r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
     } else if path == "/debug/event_reward_targets" {
         // v3.24.33: fixed-list, metadata-only discovery; no object reads or invokes.
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_event_reward_targets() }))
-            .unwrap_or_else(|_| r#"{"error":"event_reward_targets_panic"}"#.to_string())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            debug_event_reward_targets()
+        }))
+        .unwrap_or_else(|_| r#"{"error":"event_reward_targets_panic"}"#.to_string())
     } else if path == "/debug/ramen_formula_targets" {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_formula_targets() }))
-            .unwrap_or_else(|_| r#"{"error":"ramen_formula_targets_panic"}"#.to_string())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            debug_ramen_formula_targets()
+        }))
+        .unwrap_or_else(|_| r#"{"error":"ramen_formula_targets_panic"}"#.to_string())
     } else if path == "/debug/ramen_dataset_path" {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_dataset_path() }))
-            .unwrap_or_else(|_| r#"{"error":"ramen_dataset_path_panic"}"#.to_string())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            debug_ramen_dataset_path()
+        }))
+        .unwrap_or_else(|_| r#"{"error":"ramen_dataset_path_panic"}"#.to_string())
     } else if path == "/debug/ramen_planner_state" {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_planner_state() }))
-            .unwrap_or_else(|_| r#"{"error":"ramen_planner_state_panic"}"#.to_string())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            debug_ramen_planner_state()
+        }))
+        .unwrap_or_else(|_| r#"{"error":"ramen_planner_state_panic"}"#.to_string())
     } else if path == "/debug/ramen_region_select" {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_ramen_region_select() }))
-            .unwrap_or_else(|_| r#"{"error":"ramen_region_select_panic"}"#.to_string())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            debug_ramen_region_select()
+        }))
+        .unwrap_or_else(|_| r#"{"error":"ramen_region_select_panic"}"#.to_string())
     } else if path == "/debug/race_random_program_exact" {
         unsafe { debug_race_random_program_exact() }
     } else if path.starts_with("/debug/dumpclass") {
@@ -7986,7 +8517,14 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let prefix = parse_query(&full_uri, "prefix");
         let body = mdb_dl_batch(&prefix);
         let safe_prefix: String = prefix.chars().filter(|c| c.is_alphanumeric()).collect();
-        let fname = format!("mdb_{}.json", if safe_prefix.is_empty() { "ALL" } else { &safe_prefix });
+        let fname = format!(
+            "mdb_{}.json",
+            if safe_prefix.is_empty() {
+                "ALL"
+            } else {
+                &safe_prefix
+            }
+        );
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             fname, body.len(), body
@@ -8220,7 +8758,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             }
         }
         if !allowed {
-            format!(r#"{{"error":"not_in_maps","hint":"path must appear in /proc/self/maps (see /debug/maps_list)"}}"#)
+            format!(
+                r#"{{"error":"not_in_maps","hint":"path must appear in /proc/self/maps (see /debug/maps_list)"}}"#
+            )
         } else {
             let fname = std::path::Path::new(&want)
                 .file_name()
@@ -8252,7 +8792,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 let target = format!("{}{}", meta, suffix);
                 stream_private_file(&mut stream, &target, filename);
                 return;
-            },
+            }
             Err(e) => format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
         }
     } else if path == "/debug/resource_file_dl" {
@@ -8260,7 +8800,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // 与 hex 哈希一并接受；Base32 需保持原样（不做 lowercase）。
         let raw_hash = parse_query(&full_uri, "hash");
         let hash = if raw_hash.len() == 32
-            && raw_hash.bytes().all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'2'..=b'7'))
+            && raw_hash
+                .bytes()
+                .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'2'..=b'7'))
             && !raw_hash.bytes().all(|b| b.is_ascii_hexdigit())
         {
             raw_hash.to_ascii_uppercase()
@@ -8278,9 +8820,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
                     if !target.is_file() {
                         format!(r#"{{"error":"resource_not_found","hash":"{}"}}"#, hash)
                     } else {
-                        stream_private_file(&mut stream, &target.to_string_lossy(), &hash); return;
+                        stream_private_file(&mut stream, &target.to_string_lossy(), &hash);
+                        return;
                     }
-                },
+                }
                 Err(e) => format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
             }
         }
@@ -8293,7 +8836,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else {
         format!(
-            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
+            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
             path
         )
     };
@@ -8370,8 +8913,16 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 .collect();
             let fallback = path.trim_matches('/').replace('/', "_");
             let base = if safe.is_empty() { fallback } else { safe };
-            let base = if base.is_empty() { "download".to_string() } else { base };
-            let ext = if content_type.starts_with("text/html") { "html" } else { "json" };
+            let base = if base.is_empty() {
+                "download".to_string()
+            } else {
+                base
+            };
+            let ext = if content_type.starts_with("text/html") {
+                "html"
+            } else {
+                "json"
+            };
             let fname = format!("{}.{}", base, ext);
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -8950,6 +9501,95 @@ unsafe fn install_hook_safe(
     }
 }
 
+fn unity_observer_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn unity_observer_path(url: &str) -> String {
+    let no_query = url.split('?').next().unwrap_or(url);
+    if let Some(scheme) = no_query.find("://") {
+        let rest = &no_query[scheme + 3..];
+        return rest
+            .find('/')
+            .map(|i| rest[i..].to_string())
+            .unwrap_or_else(|| "/".to_string());
+    }
+    no_query.to_string()
+}
+
+unsafe fn unity_get_string(obj: *const c_void, getter: &str) -> String {
+    if obj.is_null() {
+        return String::new();
+    }
+    let class = get_class_from_object(obj);
+    if class.is_null() {
+        return String::new();
+    }
+    read_il2cpp_string(call_getter_on_instance(class, obj, getter))
+}
+
+unsafe fn observe_unity_web_request(request: *mut c_void) {
+    if request.is_null() || !SNIFF_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let method = unity_get_string(request, "get_method");
+    let url = unity_get_string(request, "get_url");
+    let request_class = get_class_from_object(request);
+    let upload = if request_class.is_null() {
+        ptr::null_mut()
+    } else {
+        call_getter_ref(request_class, request, "get_uploadHandler")
+    };
+    let (body_size, content_type) = if upload.is_null() {
+        (0, String::new())
+    } else {
+        let upload_class = get_class_from_object(upload);
+        let data = if upload_class.is_null() {
+            ptr::null_mut()
+        } else {
+            call_getter_on_instance(upload_class, upload, "get_data")
+        };
+        (
+            read_il2cpp_byte_array(data).len(),
+            unity_get_string(upload, "get_contentType"),
+        )
+    };
+    let item = UnityRequestObservation {
+        id: UNITY_OBSERVATION_ID.fetch_add(1, Ordering::Relaxed),
+        timestamp_ms: unity_observer_timestamp_ms(),
+        method,
+        path: unity_observer_path(&url),
+        body_size,
+        content_type,
+    };
+    if let Ok(mut entries) = UNITY_OBSERVATIONS.lock() {
+        if entries.len() >= UNITY_OBSERVATIONS_MAX {
+            entries.remove(0);
+        }
+        entries.push(item);
+    }
+}
+
+// UnityWebRequest.SendWebRequest() is asynchronous; this observes request entry only.
+extern "C" fn unity_send_hook_handler(this: *mut c_void) -> *mut c_void {
+    unsafe {
+        let trampoline = interceptor_get_trampoline(unity_send_hook_handler as usize);
+        if trampoline == 0 {
+            return ptr::null_mut();
+        }
+        type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+        let original: FnType = std::mem::transmute(trampoline);
+        // Observation failures must never block or replace the game's request.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            observe_unity_web_request(this);
+        }));
+        original(this)
+    }
+}
+
 // ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]
 // Parks the uncompressed request body, keyed by the compressed byte array returned by the original.
 // WWWRequest.Post will match it later.
@@ -8999,14 +9639,29 @@ extern "C" fn decompress_response_hook_handler(data: *mut c_void) -> *mut c_void
                         None => (String::new(), -1, -1, -1),
                     };
                     let observation_id = EVENT_OBSERVATION_ID.fetch_add(1, Ordering::Relaxed);
-                    let record = format!(r#"{{"schema_version":2,"observation_id":{},"source":"runtime_observation","causality":"unknown","result_label":"unknown","captured_at":{},"generation":{},"story_id":{},"chara_id":{},"selected_idx_raw":{},"choice":{{"label":"{}","gain_id":{},"next_block_idx":{},"loop_exit_gain_id":{}}},"response":{{"request_id":{},"url":"{}","size_captured":{},"preview_truncated":{},"hex_prefix":"{}","text_preview":"{}"}}}}"#,
-                        observation_id, sel.captured_at, sel.generation, sel.story_id, sel.chara_id,
-                        sel.selected_idx_raw, json_escape(&label), gain_id, next_block_idx,
-                        loop_exit_gain_id, PENDING_REQ_ID, json_escape(&PENDING_URL), bytes.len(),
-                        bytes.len() > preview_len, hex_encode(&bytes[..bytes.len().min(64)]),
-                        json_escape(&preview));
+                    let record = format!(
+                        r#"{{"schema_version":2,"observation_id":{},"source":"runtime_observation","causality":"unknown","result_label":"unknown","captured_at":{},"generation":{},"story_id":{},"chara_id":{},"selected_idx_raw":{},"choice":{{"label":"{}","gain_id":{},"next_block_idx":{},"loop_exit_gain_id":{}}},"response":{{"request_id":{},"url":"{}","size_captured":{},"preview_truncated":{},"hex_prefix":"{}","text_preview":"{}"}}}}"#,
+                        observation_id,
+                        sel.captured_at,
+                        sel.generation,
+                        sel.story_id,
+                        sel.chara_id,
+                        sel.selected_idx_raw,
+                        json_escape(&label),
+                        gain_id,
+                        next_block_idx,
+                        loop_exit_gain_id,
+                        PENDING_REQ_ID,
+                        json_escape(&PENDING_URL),
+                        bytes.len(),
+                        bytes.len() > preview_len,
+                        hex_encode(&bytes[..bytes.len().min(64)]),
+                        json_escape(&preview)
+                    );
                     if let Ok(mut obs) = EVENT_OBSERVATIONS.lock() {
-                        if obs.len() >= EVENT_OBSERVATIONS_MAX { obs.remove(0); }
+                        if obs.len() >= EVENT_OBSERVATIONS_MAX {
+                            obs.remove(0);
+                        }
                         obs.push(record);
                     }
                 }
@@ -9015,9 +9670,14 @@ extern "C" fn decompress_response_hook_handler(data: *mut c_void) -> *mut c_void
         if SNIFF_ENABLED.load(Ordering::Relaxed) {
             if !bytes.is_empty() {
                 let _lock = SNIFF_MUTEX.lock();
-                let rid = PENDING_REQ_ID;
+                let (rid, response_url) = if SNIFF_RESPONSE_QUEUE.is_empty() {
+                    (0, String::new())
+                } else {
+                    SNIFF_RESPONSE_QUEUE.remove(0)
+                };
+                push_sniff_metadata(rid, "response", &response_url, bytes.len());
                 SNIFF_RESPONSES.push((rid, bytes));
-                if SNIFF_RESPONSES.len() > SNIFF_MAX {
+                if SNIFF_RESPONSES.len() > SNIFF_RAW_MAX {
                     SNIFF_RESPONSES.remove(0);
                 }
             }
@@ -9066,13 +9726,18 @@ extern "C" fn post_hook_handler(
         if SNIFF_ENABLED.load(Ordering::Relaxed) {
             let rid = SNIFF_REQ_ID.fetch_add(1, Ordering::Relaxed);
             PENDING_REQ_ID = rid;
-            // Try to match parked request body
-            if let Some(body) = PENDING_REQ_BODY.take() {
-                let headers_json = format_headers_json(&req_headers);
-                let url_str = game_url.clone().unwrap_or_default();
+            let body = PENDING_REQ_BODY.take().unwrap_or_default();
+            let headers_json = format_headers_json(&req_headers);
+            let url_str = game_url.clone().unwrap_or_default();
+            {
                 let _lock = SNIFF_MUTEX.lock();
+                push_sniff_metadata(rid, "request", &url_str, body.len());
+                SNIFF_RESPONSE_QUEUE.push((rid, url_str.clone()));
+                if SNIFF_RESPONSE_QUEUE.len() > SNIFF_METADATA_MAX {
+                    SNIFF_RESPONSE_QUEUE.remove(0);
+                }
                 SNIFF_REQUESTS.push((rid, url_str, headers_json, body));
-                if SNIFF_REQUESTS.len() > SNIFF_MAX {
+                if SNIFF_REQUESTS.len() > SNIFF_RAW_MAX {
                     SNIFF_REQUESTS.remove(0);
                 }
             }
@@ -9158,12 +9823,16 @@ static DB_KEY_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 fn db_track(entry: String) {
     hook_log(&entry);
     if let Ok(mut g) = DB_KEY_LOG.lock() {
-        if g.len() >= 96 { g.remove(0); }
+        if g.len() >= 96 {
+            g.remove(0);
+        }
         g.push(entry);
     }
 }
 fn db_file_of(handle: usize) -> String {
-    DB_HANDLES.lock().ok()
+    DB_HANDLES
+        .lock()
+        .ok()
         .and_then(|g| g.iter().find(|(h, _)| *h == handle).map(|(_, f)| f.clone()))
         .unwrap_or_else(|| "?".to_string())
 }
@@ -9171,18 +9840,34 @@ fn db_file_of(handle: usize) -> String {
 /// ★ v3.24.46: read a C string at a raw address ONLY if it lies inside a
 /// readable mapped region (mc_config varargs may or may not be pointers).
 unsafe fn safe_read_cstr(addr: usize, max: usize) -> String {
-    if addr < 0x10000 { return String::new(); }
+    if addr < 0x10000 {
+        return String::new();
+    }
     if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
         for line in maps.lines() {
             let mut parts = line.split_whitespace();
-            let range = match parts.next() { Some(r) => r, None => continue };
-            let (a, b) = match range.split_once('-') { Some(x) => x, None => continue };
-            let sa = match usize::from_str_radix(a, 16) { Ok(v) => v, Err(_) => continue };
-            let ea = match usize::from_str_radix(b, 16) { Ok(v) => v, Err(_) => continue };
+            let range = match parts.next() {
+                Some(r) => r,
+                None => continue,
+            };
+            let (a, b) = match range.split_once('-') {
+                Some(x) => x,
+                None => continue,
+            };
+            let sa = match usize::from_str_radix(a, 16) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let ea = match usize::from_str_radix(b, 16) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
             if addr >= sa && addr + max <= ea && line.contains('r') {
                 let s = std::slice::from_raw_parts(addr as *const u8, max);
                 let end = s.iter().position(|&c| c == 0).unwrap_or(max);
-                if end == 0 { return String::new(); }
+                if end == 0 {
+                    return String::new();
+                }
                 // printable ASCII only, else treat as non-string
                 if s[..end].iter().all(|&c| (0x20..0x7f).contains(&c)) {
                     return String::from_utf8_lossy(&s[..end]).into_owned();
@@ -9202,9 +9887,15 @@ extern "C" fn sqlite3_open_v2_hook(
 ) -> libc::c_int {
     unsafe {
         let tramp = interceptor_get_trampoline(sqlite3_open_v2_hook as usize);
-        if tramp == 0 { return 1; }
-        let f: unsafe extern "C" fn(*const c_char, *mut *mut c_void, libc::c_int, *const c_char) -> libc::c_int =
-            std::mem::transmute(tramp);
+        if tramp == 0 {
+            return 1;
+        }
+        let f: unsafe extern "C" fn(
+            *const c_char,
+            *mut *mut c_void,
+            libc::c_int,
+            *const c_char,
+        ) -> libc::c_int = std::mem::transmute(tramp);
         let rc = f(filename, ppdb, flags, zvfs);
         let fstr = if filename.is_null() {
             String::new()
@@ -9215,7 +9906,9 @@ extern "C" fn sqlite3_open_v2_hook(
         if !fstr.is_empty() {
             db_track(format!("open: {} handle=0x{:x} rc={}", fstr, handle, rc));
             if let Ok(mut g) = DB_HANDLES.lock() {
-                if g.len() >= 64 { g.remove(0); }
+                if g.len() >= 64 {
+                    g.remove(0);
+                }
                 g.push((handle, fstr));
             }
         }
@@ -9223,13 +9916,12 @@ extern "C" fn sqlite3_open_v2_hook(
     }
 }
 
-extern "C" fn sqlite3_open_hook(
-    filename: *const c_char,
-    ppdb: *mut *mut c_void,
-) -> libc::c_int {
+extern "C" fn sqlite3_open_hook(filename: *const c_char, ppdb: *mut *mut c_void) -> libc::c_int {
     unsafe {
         let tramp = interceptor_get_trampoline(sqlite3_open_hook as usize);
-        if tramp == 0 { return 1; }
+        if tramp == 0 {
+            return 1;
+        }
         let f: unsafe extern "C" fn(*const c_char, *mut *mut c_void) -> libc::c_int =
             std::mem::transmute(tramp);
         let rc = f(filename, ppdb);
@@ -9242,7 +9934,9 @@ extern "C" fn sqlite3_open_hook(
         if !fstr.is_empty() {
             db_track(format!("open: {} handle=0x{:x} rc={}", fstr, handle, rc));
             if let Ok(mut g) = DB_HANDLES.lock() {
-                if g.len() >= 64 { g.remove(0); }
+                if g.len() >= 64 {
+                    g.remove(0);
+                }
                 g.push((handle, fstr));
             }
         }
@@ -9268,7 +9962,12 @@ extern "C" fn sqlite3mc_config_hook(
         let a3s = safe_read_cstr(a3 as usize, 64);
         db_track(format!(
             "mc_config: {} param={} a2=0x{:x} a3=0x{:x} a2_str='{}' a3_str='{}'",
-            db_file_of(db as usize), pstr, a2, a3, a2s, a3s
+            db_file_of(db as usize),
+            pstr,
+            a2,
+            a3,
+            a2s,
+            a3s
         ));
         let tramp = interceptor_get_trampoline(sqlite3mc_config_hook as usize);
         if tramp != 0 {
@@ -9291,11 +9990,15 @@ unsafe fn resolve_module_symbol(module_substr: &str, sym: &str) -> usize {
             }
         }
     }
-    if path.is_empty() { return 0; }
+    if path.is_empty() {
+        return 0;
+    }
     const RTLD_NOLOAD_ANDROID: i32 = 4;
     let cpath = to_cstr(&path);
     let h = libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | RTLD_NOLOAD_ANDROID);
-    if h.is_null() { return 0; }
+    if h.is_null() {
+        return 0;
+    }
     let cs = to_cstr(sym);
     let p = libc::dlsym(h, cs.as_ptr());
     libc::dlclose(h);
@@ -9303,24 +10006,38 @@ unsafe fn resolve_module_symbol(module_substr: &str, sym: &str) -> usize {
 }
 
 unsafe fn capture_sqlcipher_key(db: *mut c_void, pkey: *const c_void, nkey: isize, source: &str) {
-    if pkey.is_null() || nkey <= 0 || nkey > 8192 { return; }
+    if pkey.is_null() || nkey <= 0 || nkey > 8192 {
+        return;
+    }
     // ★ v3.24.45: record EVERY keying with its file, not just the first.
     let bytes = std::slice::from_raw_parts(pkey as *const u8, nkey as usize);
     let hex_full = hex_encode(bytes);
     db_track(format!(
         "key: {} file={} len={} hex={}",
-        source, db_file_of(db as usize), nkey, hex_full
+        source,
+        db_file_of(db as usize),
+        nkey,
+        hex_full
     ));
     let already = META_KEY_HEX.lock().map(|g| !g.is_empty()).unwrap_or(false);
-    if already { return; }  // keep first for the legacy endpoint
+    if already {
+        return;
+    } // keep first for the legacy endpoint
     let hex = hex_full.clone();
-    if let Ok(mut g) = META_KEY_HEX.lock() { *g = hex.clone(); }
-    ura_log(3, &format!("sqlcipher key captured via {}: {} bytes", source, nkey));
+    if let Ok(mut g) = META_KEY_HEX.lock() {
+        *g = hex.clone();
+    }
+    ura_log(
+        3,
+        &format!("sqlcipher key captured via {}: {} bytes", source, nkey),
+    );
     set_hook_status("meta.key", &format!("captured:{}bytes", nkey));
     // Persist so the key survives restarts.
     let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
     let pkg = String::from_utf8_lossy(&pkg_raw)
-        .trim_matches(char::from(0)).trim().to_string();
+        .trim_matches(char::from(0))
+        .trim()
+        .to_string();
     if !pkg.is_empty() {
         let path = format!("/data/user/0/{}/files/ura_meta_key.txt", pkg);
         let _ = std::fs::write(&path, &hex);
@@ -9328,7 +10045,11 @@ unsafe fn capture_sqlcipher_key(db: *mut c_void, pkey: *const c_void, nkey: isiz
     }
 }
 
-extern "C" fn sqlcipher_key_hook(db: *mut c_void, pkey: *const c_void, nkey: libc::c_int) -> libc::c_int {
+extern "C" fn sqlcipher_key_hook(
+    db: *mut c_void,
+    pkey: *const c_void,
+    nkey: libc::c_int,
+) -> libc::c_int {
     unsafe {
         capture_sqlcipher_key(db, pkey, nkey as isize, "sqlite3_key");
         let tramp = interceptor_get_trampoline(sqlcipher_key_hook as usize);
@@ -9337,7 +10058,7 @@ extern "C" fn sqlcipher_key_hook(db: *mut c_void, pkey: *const c_void, nkey: lib
                 std::mem::transmute(tramp);
             return f(db, pkey, nkey);
         }
-        0  // SQLITE_OK-ish fallback; without trampoline we must not break the game
+        0 // SQLITE_OK-ish fallback; without trampoline we must not break the game
     }
 }
 
@@ -9351,8 +10072,12 @@ extern "C" fn sqlcipher_key_v2_hook(
         capture_sqlcipher_key(db, pkey, nkey as isize, "sqlite3_key_v2");
         let tramp = interceptor_get_trampoline(sqlcipher_key_v2_hook as usize);
         if tramp != 0 {
-            let f: unsafe extern "C" fn(*mut c_void, *const c_char, *const c_void, libc::c_int) -> libc::c_int =
-                std::mem::transmute(tramp);
+            let f: unsafe extern "C" fn(
+                *mut c_void,
+                *const c_char,
+                *const c_void,
+                libc::c_int,
+            ) -> libc::c_int = std::mem::transmute(tramp);
             return f(db, zdb_name, pkey, nkey);
         }
         0
@@ -9362,8 +10087,11 @@ extern "C" fn sqlcipher_key_v2_hook(
 // ★ v3.24.48b: allocation-free case-insensitive substring scan over raw bytes.
 // SQL hooks run on EVERY statement at boot — never allocate just to filter.
 fn bytes_contains_ci(hay: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() || hay.len() < needle.len() { return false; }
-    hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+    if needle.is_empty() || hay.len() < needle.len() {
+        return false;
+    }
+    hay.windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
 extern "C" fn sqlite3_prepare_v2_hook(
@@ -9398,7 +10126,11 @@ extern "C" fn sqlite3_prepare_v2_hook(
         let tramp = interceptor_get_trampoline(sqlite3_prepare_v2_hook as usize);
         if tramp != 0 {
             let f: unsafe extern "C" fn(
-                *mut c_void, *const c_char, libc::c_int, *mut *mut c_void, *mut *const c_char,
+                *mut c_void,
+                *const c_char,
+                libc::c_int,
+                *mut *mut c_void,
+                *mut *const c_char,
             ) -> libc::c_int = std::mem::transmute(tramp);
             return f(db, zsql, nbyte, ppstmt, pztail);
         }
@@ -9430,7 +10162,11 @@ extern "C" fn sqlite3_exec_hook(
         let tramp = interceptor_get_trampoline(sqlite3_exec_hook as usize);
         if tramp != 0 {
             let f: unsafe extern "C" fn(
-                *mut c_void, *const c_char, *mut c_void, *mut c_void, *mut *mut c_char,
+                *mut c_void,
+                *const c_char,
+                *mut c_void,
+                *mut c_void,
+                *mut *mut c_char,
             ) -> libc::c_int = std::mem::transmute(tramp);
             return f(db, sql, cb, arg, errmsg);
         }
@@ -9444,20 +10180,33 @@ static RES_READ_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 fn res_read_track(entry: String) {
     hook_log(&entry);
     if let Ok(mut g) = RES_READ_LOG.lock() {
-        if g.len() >= 256 { g.remove(0); }
+        if g.len() >= 256 {
+            g.remove(0);
+        }
         g.push(entry);
     }
 }
 fn res_path_of_fd(fd: libc::c_int) -> Option<String> {
-    RES_FDS.lock().ok()?.iter().find(|(f, _)| *f == fd).map(|(_, p)| p.clone())
+    RES_FDS
+        .lock()
+        .ok()?
+        .iter()
+        .find(|(f, _)| *f == fd)
+        .map(|(_, p)| p.clone())
 }
 unsafe fn res_track_open(path: *const c_char, fd: libc::c_int) {
-    if path.is_null() || fd < 0 { return; }
+    if path.is_null() || fd < 0 {
+        return;
+    }
     let p = CStr::from_ptr(path).to_string_lossy().into_owned();
-    if !(p.contains("/meta") || p.contains("/dat/")) { return; }
+    if !(p.contains("/meta") || p.contains("/dat/")) {
+        return;
+    }
     res_read_track(format!("open: fd={} path={}", fd, p));
     if let Ok(mut g) = RES_FDS.lock() {
-        if g.len() >= 128 { g.remove(0); }
+        if g.len() >= 128 {
+            g.remove(0);
+        }
         g.push((fd, p));
     }
 }
@@ -9503,7 +10252,8 @@ fn start_res_fd_watcher() {
                                 seen.push((fd, link.clone(), pos));
                             }
                             res_read_track(format!(
-                                "fd_open: fd={} path={} pos=0x{:x}", fd, link, pos
+                                "fd_open: fd={} path={} pos=0x{:x}",
+                                fd, link, pos
                             ));
                         }
                         Some((_, p, last)) => {
@@ -9511,7 +10261,8 @@ fn start_res_fd_watcher() {
                                 *p = link.clone();
                                 *last = pos;
                                 res_read_track(format!(
-                                    "fd_reopen: fd={} path={} pos=0x{:x}", fd, link, pos
+                                    "fd_reopen: fd={} path={} pos=0x{:x}",
+                                    fd, link, pos
                                 ));
                             } else if pos >= 0 && pos != *last {
                                 let old = *last;
@@ -9533,11 +10284,12 @@ fn start_res_fd_watcher() {
     set_hook_status("res.fd_watcher", "started");
 }
 
-
 /// ★ v3.24.59: SAFE subset — NEVER touch sqlite3_open_v2 / sqlite3_key
 /// (Hachimi owns them; a failed double-hook corrupts the function body).
 unsafe fn install_sqlcipher_safe_hooks() {
-    if SQLCIPHER_KEY_HOOK_DONE { return; }
+    if SQLCIPHER_KEY_HOOK_DONE {
+        return;
+    }
     SQLCIPHER_KEY_HOOK_DONE = true;
     if API.is_null() || (*API).interceptor == 0 {
         set_hook_status("meta.key", "failed: no_interceptor");
@@ -9551,24 +10303,43 @@ unsafe fn install_sqlcipher_safe_hooks() {
     let a3 = resolve_module_symbol("libnative.so", "sqlite3mc_config");
     if a3 != 0 {
         let ok = interceptor_hook(a3, sqlite3mc_config_hook as usize);
-        set_hook_status("meta.mc_config", if ok { "hooked" } else { "failed: interceptor_hook" });
+        set_hook_status(
+            "meta.mc_config",
+            if ok {
+                "hooked"
+            } else {
+                "failed: interceptor_hook"
+            },
+        );
     } else {
         set_hook_status("meta.mc_config", "failed: resolve");
     }
     let a2 = resolve_module_symbol("libnative.so", "sqlite3_key_v2");
     if a2 != 0 {
         let ok = interceptor_hook(a2, sqlcipher_key_v2_hook as usize);
-        set_hook_status("meta.key_v2", if ok { "hooked" } else { "failed: interceptor_hook" });
+        set_hook_status(
+            "meta.key_v2",
+            if ok {
+                "hooked"
+            } else {
+                "failed: interceptor_hook"
+            },
+        );
     } else {
         set_hook_status("meta.key_v2", "failed: resolve");
     }
     set_hook_status("meta.open_v2", "skipped_hachimi_owns");
     set_hook_status("meta.key_v1", "skipped_hachimi_owns");
-    ura_log(3, "sqlcipher SAFE hooks installed (open_v2/key skipped, Hachimi owns them)");
+    ura_log(
+        3,
+        "sqlcipher SAFE hooks installed (open_v2/key skipped, Hachimi owns them)",
+    );
 }
 
 unsafe fn install_sqlcipher_key_hook() {
-    if SQLCIPHER_KEY_HOOK_DONE { return; }
+    if SQLCIPHER_KEY_HOOK_DONE {
+        return;
+    }
     SQLCIPHER_KEY_HOOK_DONE = true;
     if API.is_null() || (*API).interceptor == 0 {
         set_hook_status("meta.key", "failed: no_interceptor");
@@ -9578,7 +10349,14 @@ unsafe fn install_sqlcipher_key_hook() {
     let a0b = resolve_module_symbol("libnative.so", "sqlite3_open");
     if a0b != 0 {
         let ok = interceptor_hook(a0b, sqlite3_open_hook as usize);
-        set_hook_status("meta.open_v1", if ok { "hooked" } else { "failed: interceptor_hook" });
+        set_hook_status(
+            "meta.open_v1",
+            if ok {
+                "hooked"
+            } else {
+                "failed: interceptor_hook"
+            },
+        );
     } else {
         set_hook_status("meta.open_v1", "failed: resolve");
     }
@@ -9587,65 +10365,125 @@ unsafe fn install_sqlcipher_key_hook() {
     let a3 = resolve_module_symbol("libnative.so", "sqlite3mc_config");
     if a0 != 0 {
         let ok = interceptor_hook(a0, sqlite3_open_v2_hook as usize);
-        set_hook_status("meta.open_v2", if ok { "hooked" } else { "failed: interceptor_hook" });
+        set_hook_status(
+            "meta.open_v2",
+            if ok {
+                "hooked"
+            } else {
+                "failed: interceptor_hook"
+            },
+        );
     } else {
         set_hook_status("meta.open_v2", "failed: resolve");
     }
     if a3 != 0 {
         let ok = interceptor_hook(a3, sqlite3mc_config_hook as usize);
-        set_hook_status("meta.mc_config", if ok { "hooked" } else { "failed: interceptor_hook" });
+        set_hook_status(
+            "meta.mc_config",
+            if ok {
+                "hooked"
+            } else {
+                "failed: interceptor_hook"
+            },
+        );
     } else {
         set_hook_status("meta.mc_config", "failed: resolve");
     }
     let mut any = false;
     if a1 != 0 {
         let ok = interceptor_hook(a1, sqlcipher_key_hook as usize);
-        set_hook_status("meta.key_v1", if ok { "hooked" } else { "failed: interceptor_hook" });
+        set_hook_status(
+            "meta.key_v1",
+            if ok {
+                "hooked"
+            } else {
+                "failed: interceptor_hook"
+            },
+        );
         any |= ok;
     } else {
         set_hook_status("meta.key_v1", "failed: resolve");
     }
     if a2 != 0 {
         let ok = interceptor_hook(a2, sqlcipher_key_v2_hook as usize);
-        set_hook_status("meta.key_v2", if ok { "hooked" } else { "failed: interceptor_hook" });
+        set_hook_status(
+            "meta.key_v2",
+            if ok {
+                "hooked"
+            } else {
+                "failed: interceptor_hook"
+            },
+        );
         any |= ok;
     } else {
         set_hook_status("meta.key_v2", "failed: resolve");
     }
-    ura_log(3, &format!("sqlcipher key hook install: v1=0x{:x} v2=0x{:x} any={}", a1, a2, any));
+    ura_log(
+        3,
+        &format!(
+            "sqlcipher key hook install: v1=0x{:x} v2=0x{:x} any={}",
+            a1, a2, any
+        ),
+    );
 }
 
 /// ★ v3.24.40: fuzzy variant — first method whose name CONTAINS `substr`.
 /// Self-heals when Cygames renames methods (e.g. CompressRequest_v2).
 unsafe fn find_method_fuzzy(class: *mut c_void, substr: &str) -> usize {
-    if class.is_null() { return 0; }
+    if class.is_null() {
+        return 0;
+    }
     let get_methods_fn: Option<
         unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void,
     > = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let method_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
         let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let method_get_ptr_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> = {
         let p = resolve_il2cpp_symbol("il2cpp_method_get_pointer");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
-    if get_methods_fn.is_none() || method_get_name_fn.is_none() { return 0; }
+    if get_methods_fn.is_none() || method_get_name_fn.is_none() {
+        return 0;
+    }
     let mut iter: *mut c_void = std::ptr::null_mut();
     loop {
         let mi = get_methods_fn.unwrap()(class, &mut iter);
-        if mi.is_null() { break; }
+        if mi.is_null() {
+            break;
+        }
         let name_ptr = method_get_name_fn.unwrap()(mi);
-        if name_ptr.is_null() { continue; }
+        if name_ptr.is_null() {
+            continue;
+        }
         let name = CStr::from_ptr(name_ptr).to_string_lossy();
         if name.contains(substr) {
             if let Some(get_ptr) = method_get_ptr_fn {
                 let ptr = get_ptr(mi);
                 if !ptr.is_null() {
-                    ura_log(3, &format!("find_method_fuzzy: {}~{} -> 0x{:x}", substr, name, ptr as usize));
+                    ura_log(
+                        3,
+                        &format!(
+                            "find_method_fuzzy: {}~{} -> 0x{:x}",
+                            substr, name, ptr as usize
+                        ),
+                    );
                     return ptr as usize;
                 }
             }
@@ -9664,13 +10502,18 @@ unsafe fn find_class_fuzzy(image: *const c_void, substr: &str) -> *mut c_void {
     }
     let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
     let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
-    let get_name: unsafe extern "C" fn(*const c_void) -> *const c_char = std::mem::transmute(get_name_fn);
+    let get_name: unsafe extern "C" fn(*const c_void) -> *const c_char =
+        std::mem::transmute(get_name_fn);
     let count = get_count(image);
     for i in 0..count {
         let cls = get_class(image, i);
-        if cls.is_null() { continue; }
+        if cls.is_null() {
+            continue;
+        }
         let np = get_name(cls);
-        if np.is_null() { continue; }
+        if np.is_null() {
+            continue;
+        }
         let name = CStr::from_ptr(np).to_string_lossy();
         if name.contains(substr) {
             ura_log(3, &format!("find_class_fuzzy: {}~{}", substr, name));
@@ -9681,7 +10524,10 @@ unsafe fn find_class_fuzzy(image: *const c_void, substr: &str) -> *mut c_void {
 }
 
 unsafe fn install_api_sniff_hooks() {
-    let all_hooked = COMPRESS_REQUEST_ADDR != 0 && DECOMPRESS_RESPONSE_ADDR != 0 && POST_ADDR != 0;
+    let all_hooked = COMPRESS_REQUEST_ADDR != 0
+        && DECOMPRESS_RESPONSE_ADDR != 0
+        && POST_ADDR != 0
+        && UNITY_SEND_ADDR != 0;
     if all_hooked {
         return;
     }
@@ -9720,6 +10566,44 @@ unsafe fn install_api_sniff_hooks() {
         }
     };
 
+    // Observe the lower UnityWebRequest request-entry path used by boot/auth traffic.
+    if UNITY_SEND_ADDR == 0 {
+        let unity_image = get_asm(to_cstr("UnityEngine.UnityWebRequestModule.dll").as_ptr());
+        if unity_image.is_null() {
+            set_hook_status("sniff.unity_send", "failed: image_not_found");
+        } else {
+            let unity_request = get_class(
+                unity_image,
+                to_cstr("UnityEngine.Networking").as_ptr(),
+                to_cstr("UnityWebRequest").as_ptr(),
+            );
+            if unity_request.is_null() {
+                set_hook_status("sniff.unity_send", "failed: class_not_found");
+            } else {
+                let addr = get_method_addr(
+                    unity_request as usize,
+                    to_cstr("SendWebRequest").as_ptr(),
+                    0,
+                );
+                if addr == 0 {
+                    set_hook_status("sniff.unity_send", "failed: method_not_found");
+                } else if interceptor_hook(addr, unity_send_hook_handler as usize) {
+                    UNITY_SEND_ADDR = addr;
+                    set_hook_status("sniff.unity_send", &format!("hooked@0x{:x}", addr));
+                    ura_log(
+                        3,
+                        &format!(
+                            "API sniff: UnityWebRequest.SendWebRequest hooked at 0x{:x}",
+                            addr
+                        ),
+                    );
+                } else {
+                    set_hook_status("sniff.unity_send", "failed: interceptor_hook");
+                }
+            }
+        }
+    }
+
     let umamusume = get_asm(to_cstr("umamusume.dll").as_ptr());
     if umamusume.is_null() {
         ura_log(3, "API sniff: umamusume.dll image not found");
@@ -9745,7 +10629,8 @@ unsafe fn install_api_sniff_hooks() {
 
     // Hook CompressRequest
     if COMPRESS_REQUEST_ADDR == 0 {
-        let mut addr = get_method_addr(http_helper as usize, to_cstr("CompressRequest").as_ptr(), 1);
+        let mut addr =
+            get_method_addr(http_helper as usize, to_cstr("CompressRequest").as_ptr(), 1);
         if addr == 0 {
             addr = find_method_fuzzy(http_helper, "CompressRequest");
         }
@@ -9858,7 +10743,9 @@ extern "C" fn event_choice_hook_handler(
             EVENT_SELECTED_IDX = choice_index;
             let choice = if choice_index >= 0 {
                 EVENT_CHOICES.get(choice_index as usize).cloned()
-            } else { None };
+            } else {
+                None
+            };
             if let Ok(mut pending) = EVENT_PENDING_RESULT.lock() {
                 *pending = Some(PendingEventSelection {
                     captured_at: sniff_timestamp(),
@@ -9876,8 +10763,7 @@ extern "C" fn event_choice_hook_handler(
             3,
             &format!(
                 "Event choice: index={} choices_count={}",
-                choice_index,
-                choices_count
+                choice_index, choices_count
             ),
         );
 
@@ -9894,50 +10780,89 @@ extern "C" fn event_choice_hook_handler(
 
 // ★ v3.24.41: runtime class of an object via il2cpp_object_get_class
 unsafe fn obj_class(obj: *const c_void) -> *mut c_void {
-    if obj.is_null() { return ptr::null_mut(); }
+    if obj.is_null() {
+        return ptr::null_mut();
+    }
     let f: Option<unsafe extern "C" fn(*const c_void) -> *mut c_void> = {
         let p = resolve_il2cpp_symbol("il2cpp_object_get_class");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
-    match f { Some(g) => g(obj), None => ptr::null_mut() }
+    match f {
+        Some(g) => g(obj),
+        None => ptr::null_mut(),
+    }
 }
 
 /// ★ v3.24.41: name of an IL2CPP class pointer
 unsafe fn class_name_of(class: *const c_void) -> String {
-    if class.is_null() { return "null".to_string(); }
+    if class.is_null() {
+        return "null".to_string();
+    }
     let f: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     match f {
         Some(g) => {
             let n = g(class);
-            if n.is_null() { "?".to_string() } else { CStr::from_ptr(n).to_string_lossy().into_owned() }
+            if n.is_null() {
+                "?".to_string()
+            } else {
+                CStr::from_ptr(n).to_string_lossy().into_owned()
+            }
         }
         None => "?".to_string(),
     }
 }
 
 /// ★ v3.24.41: fuzzy MethodInfo* search (substring, with exclusions)
-unsafe fn find_method_info_fuzzy(class: *mut c_void, substr: &str, exclude: &[&str]) -> *const c_void {
-    if class.is_null() { return ptr::null(); }
+unsafe fn find_method_info_fuzzy(
+    class: *mut c_void,
+    substr: &str,
+    exclude: &[&str],
+) -> *const c_void {
+    if class.is_null() {
+        return ptr::null();
+    }
     let get_methods_fn: Option<
         unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void,
     > = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
         let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
-    if get_methods_fn.is_none() || name_fn.is_none() { return ptr::null(); }
+    if get_methods_fn.is_none() || name_fn.is_none() {
+        return ptr::null();
+    }
     let mut iter: *mut c_void = std::ptr::null_mut();
     loop {
         let mi = get_methods_fn.unwrap()(class, &mut iter);
-        if mi.is_null() { break; }
+        if mi.is_null() {
+            break;
+        }
         let np = name_fn.unwrap()(mi);
-        if np.is_null() { continue; }
+        if np.is_null() {
+            continue;
+        }
         let name = CStr::from_ptr(np).to_string_lossy();
         if name.contains(substr) && !exclude.iter().any(|e| name.contains(e)) {
             return mi;
@@ -9948,38 +10873,69 @@ unsafe fn find_method_info_fuzzy(class: *mut c_void, substr: &str, exclude: &[&s
 
 /// ★ v3.24.41: invoke 0-arg method by MethodInfo*, boxed int at +16
 unsafe fn invoke0_int(mi: *const c_void, instance: *const c_void) -> i32 {
-    if mi.is_null() || instance.is_null() { return -1; }
+    if mi.is_null() || instance.is_null() {
+        return -1;
+    }
     let invoke_fn: Option<FnRuntimeInvoke> = {
         let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
-    if invoke_fn.is_none() { return -1; }
+    if invoke_fn.is_none() {
+        return -1;
+    }
     let mut exc: *mut c_void = ptr::null_mut();
     let r = invoke_fn.unwrap()(mi, instance as *mut c_void, ptr::null_mut(), &mut exc);
-    if !exc.is_null() || r.is_null() { return -1; }
+    if !exc.is_null() || r.is_null() {
+        return -1;
+    }
     std::ptr::read_unaligned::<i32>((r as *const u8).add(16) as *const i32)
 }
 
 /// ★ v3.24.41: fuzzy int getter with sanity clamp (delegate/garbage -> -1)
-unsafe fn call_fuzzy_int(class: *mut c_void, instance: *const c_void, substr: &str, exclude: &[&str]) -> i32 {
+unsafe fn call_fuzzy_int(
+    class: *mut c_void,
+    instance: *const c_void,
+    substr: &str,
+    exclude: &[&str],
+) -> i32 {
     let mi = find_method_info_fuzzy(class, substr, exclude);
-    if mi.is_null() { return -1; }
+    if mi.is_null() {
+        return -1;
+    }
     let v = invoke0_int(mi, instance);
-    if v <= 0 || v > 1_000_000 { -1 } else { v }
+    if v <= 0 || v > 1_000_000 {
+        -1
+    } else {
+        v
+    }
 }
 
 /// ★ v3.24.41: fuzzy string getter
 unsafe fn call_fuzzy_string(class: *mut c_void, instance: *const c_void, substr: &str) -> String {
     let mi = find_method_info_fuzzy(class, substr, &[]);
-    if mi.is_null() { return String::new(); }
+    if mi.is_null() {
+        return String::new();
+    }
     let invoke_fn: Option<FnRuntimeInvoke> = {
         let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
-    if invoke_fn.is_none() { return String::new(); }
+    if invoke_fn.is_none() {
+        return String::new();
+    }
     let mut exc: *mut c_void = ptr::null_mut();
     let r = invoke_fn.unwrap()(mi, instance as *mut c_void, ptr::null_mut(), &mut exc);
-    if !exc.is_null() || r.is_null() { return String::new(); }
+    if !exc.is_null() || r.is_null() {
+        return String::new();
+    }
     read_il2cpp_string(r)
 }
 
@@ -10006,9 +10962,8 @@ extern "C" fn event_add_choice_hook_handler(this: *mut c_void, param: *mut c_voi
         let mut data_class = pclass;
         let mut data_class_name = pclass_name.clone();
         if pclass_name == "StoryChoiceButton" {
-            let inner = std::ptr::read_unaligned(
-                (param as *const u8).add(64) as *const *mut c_void,
-            );
+            let inner =
+                std::ptr::read_unaligned((param as *const u8).add(64) as *const *mut c_void);
             if !inner.is_null() {
                 data_obj = inner;
                 data_class = obj_class(inner);
@@ -10022,7 +10977,12 @@ extern "C" fn event_add_choice_hook_handler(this: *mut c_void, param: *mut c_voi
         }
         let mut gain_id = call_getter_int_raw(data_obj, "get_GainId");
         if gain_id <= 0 {
-            gain_id = call_fuzzy_int(data_class, data_obj, "GainId", &["LoopExit", "Analyze", "OnSelect"]);
+            gain_id = call_fuzzy_int(
+                data_class,
+                data_obj,
+                "GainId",
+                &["LoopExit", "Analyze", "OnSelect"],
+            );
         }
         let mut next_block_idx = call_getter_int_raw(data_obj, "get_GetNextBlockIndex");
         if next_block_idx <= 0 {
@@ -10316,7 +11276,10 @@ unsafe fn install_event_choice_hook() {
                 story_set_hook_handler as usize,
                 &mut ORIG_STORY_SET_PROLOGUE,
             );
-            set_hook_status("event.story_set", &format!("resolved@0x{:x}", set_story_addr));
+            set_hook_status(
+                "event.story_set",
+                &format!("resolved@0x{:x}", set_story_addr),
+            );
             ura_log(
                 3,
                 &format!(
@@ -10365,7 +11328,10 @@ extern "C" fn on_menu_section(ui: *mut c_void, _userdata: *mut c_void) {
         let api = &*API;
 
         if let Some(f) = api.gui_ui_heading_fn {
-            f(ui, to_cstr(&format!("URA Assistant v{}", PLUGIN_VERSION)).as_ptr());
+            f(
+                ui,
+                to_cstr(&format!("URA Assistant v{}", PLUGIN_VERSION)).as_ptr(),
+            );
         }
         if let Some(f) = api.gui_ui_separator_fn {
             f(ui);
@@ -10777,24 +11743,43 @@ pub unsafe extern "C" fn hachimi_init_v3(
     boot_trace("before_key_hooks");
     let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
     let pkg = String::from_utf8_lossy(&pkg_raw)
-        .trim_matches(char::from(0)).trim().to_string();
+        .trim_matches(char::from(0))
+        .trim()
+        .to_string();
     // ★ v3.24.58: flag moved to the user-accessible media dir. When set, also
     // install the prepare/exec SQL-text interception (libnative-only, Hachimi
     // does not hook those two, so no conflict).
-    let flag = format!("/sdcard/Android/media/{}/hachimi/ura_sqlcipher_hooks.flag", pkg);
+    let flag = format!(
+        "/sdcard/Android/media/{}/hachimi/ura_sqlcipher_hooks.flag",
+        pkg
+    );
     if std::path::Path::new(&flag).exists() {
         install_sqlcipher_safe_hooks();
         let ap = resolve_module_symbol("libnative.so", "sqlite3_prepare_v2");
         if ap != 0 {
             let ok = interceptor_hook(ap, sqlite3_prepare_v2_hook as usize);
-            set_hook_status("meta.prepare", if ok { "hooked" } else { "failed: interceptor_hook" });
+            set_hook_status(
+                "meta.prepare",
+                if ok {
+                    "hooked"
+                } else {
+                    "failed: interceptor_hook"
+                },
+            );
         } else {
             set_hook_status("meta.prepare", "failed: resolve");
         }
         let ae = resolve_module_symbol("libnative.so", "sqlite3_exec");
         if ae != 0 {
             let ok = interceptor_hook(ae, sqlite3_exec_hook as usize);
-            set_hook_status("meta.exec", if ok { "hooked" } else { "failed: interceptor_hook" });
+            set_hook_status(
+                "meta.exec",
+                if ok {
+                    "hooked"
+                } else {
+                    "failed: interceptor_hook"
+                },
+            );
         } else {
             set_hook_status("meta.exec", "failed: resolve");
         }
@@ -11661,29 +12646,54 @@ struct PrivateFileEntry {
 
 fn private_app_root() -> Result<std::path::PathBuf, String> {
     let bytes = std::fs::read("/proc/self/cmdline").map_err(|_| "cmdline_unavailable")?;
-    let pkg = bytes.split(|&b| b == 0).find(|s| !s.is_empty())
-        .and_then(|s| std::str::from_utf8(s).ok()).ok_or("package_unknown")?;
+    let pkg = bytes
+        .split(|&b| b == 0)
+        .find(|s| !s.is_empty())
+        .and_then(|s| std::str::from_utf8(s).ok())
+        .ok_or("package_unknown")?;
     let pkg = pkg.split(':').next().unwrap_or(pkg);
-    if pkg.is_empty() || !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+    if pkg.is_empty()
+        || !pkg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+    {
         return Err("invalid_package_name".to_string());
     }
-    for root in [format!("/data/user/0/{}", pkg), format!("/data/data/{}", pkg)] {
+    for root in [
+        format!("/data/user/0/{}", pkg),
+        format!("/data/data/{}", pkg),
+    ] {
         let path = std::path::PathBuf::from(root);
-        if path.is_dir() { return Ok(path); }
+        if path.is_dir() {
+            return Ok(path);
+        }
     }
     Err("private_app_root_not_found".to_string())
 }
 
 fn classify_private_file(path: &std::path::Path) -> &'static str {
-    let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
-    if name == "meta" || name.starts_with("meta-") { "resource_index" }
-    else if name.ends_with(".db") || name.ends_with(".sqlite") || name.ends_with(".mdb") { "database" }
-    else if name.ends_with(".xml") { "xml" }
-    else if name.ends_with(".json") { "json" }
-    else if name.ends_with(".log") || name.ends_with(".txt") { "text" }
-    else if name.ends_with(".apk") { "apk" }
-    else if name.ends_with(".so") { "native_library" }
-    else { "binary" }
+    let name = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if name == "meta" || name.starts_with("meta-") {
+        "resource_index"
+    } else if name.ends_with(".db") || name.ends_with(".sqlite") || name.ends_with(".mdb") {
+        "database"
+    } else if name.ends_with(".xml") {
+        "xml"
+    } else if name.ends_with(".json") {
+        "json"
+    } else if name.ends_with(".log") || name.ends_with(".txt") {
+        "text"
+    } else if name.ends_with(".apk") {
+        "apk"
+    } else if name.ends_with(".so") {
+        "native_library"
+    } else {
+        "binary"
+    }
 }
 
 /// Build a deterministic, bounded snapshot of private files. `dat` is skipped
@@ -11696,35 +12706,71 @@ fn private_file_inventory() -> Result<Vec<PrivateFileEntry>, String> {
     let mut visited_dirs = 0usize;
     while let Some((dir, depth)) = queue.pop_front() {
         visited_dirs += 1;
-        if visited_dirs > 4096 || rows.len() >= 20000 { break; }
-        let entries = match std::fs::read_dir(&dir) { Ok(v) => v, Err(_) => continue };
+        if visited_dirs > 4096 || rows.len() >= 20000 {
+            break;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         for entry in entries.flatten() {
-            let ty = match entry.file_type() { Ok(v) => v, Err(_) => continue };
-            if ty.is_symlink() { continue; }
-            let path = entry.path();
-            if ty.is_dir() {
-                if depth < 10 && entry.file_name() != "dat" { queue.push_back((path, depth + 1)); }
+            let ty = match entry.file_type() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if ty.is_symlink() {
                 continue;
             }
-            if !ty.is_file() { continue; }
-            let relative = path.strip_prefix(&root).unwrap_or(&path).to_string_lossy().into_owned();
+            let path = entry.path();
+            if ty.is_dir() {
+                if depth < 10 && entry.file_name() != "dat" {
+                    queue.push_back((path, depth + 1));
+                }
+                continue;
+            }
+            if !ty.is_file() {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             let kind = classify_private_file(&path);
             rows.push((relative, path.to_string_lossy().into_owned(), size, kind));
-            if rows.len() >= 20000 { break; }
+            if rows.len() >= 20000 {
+                break;
+            }
         }
     }
     rows.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(rows.into_iter().enumerate().map(|(id, (relative_path, absolute_path, size, kind))|
-        PrivateFileEntry { id, relative_path, absolute_path, size, kind }).collect())
+    Ok(rows
+        .into_iter()
+        .enumerate()
+        .map(
+            |(id, (relative_path, absolute_path, size, kind))| PrivateFileEntry {
+                id,
+                relative_path,
+                absolute_path,
+                size,
+                kind,
+            },
+        )
+        .collect())
 }
 
 fn debug_private_file_inventory(full_uri: &str) -> String {
     if parse_query(full_uri, "confirm") != "1" {
         return r#"{"ok":false,"error":"explicit_confirmation_required","warning":"private files may contain account session cookie or device identifiers","retry":"/debug/private_file_inventory?confirm=1&offset=0&limit=200"}"#.to_string();
     }
-    let offset = parse_query(full_uri, "offset").parse::<usize>().unwrap_or(0);
-    let limit = parse_query(full_uri, "limit").parse::<usize>().unwrap_or(200).clamp(1, 500);
+    let offset = parse_query(full_uri, "offset")
+        .parse::<usize>()
+        .unwrap_or(0);
+    let limit = parse_query(full_uri, "limit")
+        .parse::<usize>()
+        .unwrap_or(200)
+        .clamp(1, 500);
     match private_file_inventory() {
         Ok(entries) => {
             let total = entries.len();
@@ -11733,7 +12779,11 @@ fn debug_private_file_inventory(full_uri: &str) -> String {
                 e.id, json_escape(&e.relative_path), e.size, e.kind, e.id)).collect();
             format!(
                 r#"{{"ok":true,"snapshot_rebuilt_each_request":true,"dat_skipped":true,"max_depth":10,"max_files":20000,"total":{},"offset":{},"limit":{},"files":[{}]}}"#,
-                total, offset, limit, rows.join(","))
+                total,
+                offset,
+                limit,
+                rows.join(",")
+            )
         }
         Err(e) => format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
     }
@@ -11741,7 +12791,11 @@ fn debug_private_file_inventory(full_uri: &str) -> String {
 
 fn download_private_file_by_id(stream: &mut std::net::TcpStream, full_uri: &str) {
     if parse_query(full_uri, "confirm") != "1" {
-        stream_private_file(stream, "/__explicit_confirmation_required__", "confirmation_required");
+        stream_private_file(
+            stream,
+            "/__explicit_confirmation_required__",
+            "confirmation_required",
+        );
         return;
     }
     let id = match parse_query(full_uri, "id").parse::<usize>() {
@@ -11751,10 +12805,15 @@ fn download_private_file_by_id(stream: &mut std::net::TcpStream, full_uri: &str)
             return;
         }
     };
-    match private_file_inventory().ok().and_then(|v| v.into_iter().find(|e| e.id == id)) {
+    match private_file_inventory()
+        .ok()
+        .and_then(|v| v.into_iter().find(|e| e.id == id))
+    {
         Some(entry) => {
-            let name = std::path::Path::new(&entry.relative_path).file_name()
-                .and_then(|v| v.to_str()).unwrap_or("private_file.bin");
+            let name = std::path::Path::new(&entry.relative_path)
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("private_file.bin");
             stream_private_file(stream, &entry.absolute_path, name);
         }
         None => stream_private_file(stream, "/__private_file_not_found__", "not_found"),
@@ -11767,13 +12826,23 @@ fn find_resource_storage() -> Result<(String, String), String> {
 
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(bytes) = std::fs::read("/proc/self/cmdline") {
-        if let Some(pkg) = bytes.split(|&b| b == 0).find(|s| !s.is_empty())
-            .and_then(|s| std::str::from_utf8(s).ok()) {
+        if let Some(pkg) = bytes
+            .split(|&b| b == 0)
+            .find(|s| !s.is_empty())
+            .and_then(|s| std::str::from_utf8(s).ok())
+        {
             let pkg = pkg.split(':').next().unwrap_or(pkg);
-            if !pkg.is_empty() && pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+            if !pkg.is_empty()
+                && pkg
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+            {
                 roots.push(PathBuf::from(format!("/data/user/0/{}/files", pkg)));
                 roots.push(PathBuf::from(format!("/data/data/{}/files", pkg)));
-                roots.push(PathBuf::from(format!("/storage/emulated/0/Android/data/{}/files", pkg)));
+                roots.push(PathBuf::from(format!(
+                    "/storage/emulated/0/Android/data/{}/files",
+                    pkg
+                )));
             }
         }
     }
@@ -11786,31 +12855,51 @@ fn find_resource_storage() -> Result<(String, String), String> {
     let mut seen = HashSet::new();
     let mut queue = VecDeque::new();
     for root in roots {
-        if root.is_dir() && seen.insert(root.clone()) { queue.push_back((root, 0usize)); }
+        if root.is_dir() && seen.insert(root.clone()) {
+            queue.push_back((root, 0usize));
+        }
     }
     let mut visited = 0usize;
     while let Some((dir, depth)) = queue.pop_front() {
         visited += 1;
-        if visited > 512 { return Err("scan_limit_reached".to_string()); }
+        if visited > 512 {
+            return Err("scan_limit_reached".to_string());
+        }
         let meta = dir.join("meta");
         let dat = dir.join("dat");
         if meta.is_file() && dat.is_dir() {
-            return Ok((meta.to_string_lossy().into_owned(), dat.to_string_lossy().into_owned()));
+            return Ok((
+                meta.to_string_lossy().into_owned(),
+                dat.to_string_lossy().into_owned(),
+            ));
         }
-        if depth >= 4 { continue; }
-        let entries = match std::fs::read_dir(&dir) { Ok(v) => v, Err(_) => continue };
+        if depth >= 4 {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         for entry in entries.flatten() {
-            let file_type = match entry.file_type() { Ok(v) => v, Err(_) => continue };
-            if !file_type.is_dir() || file_type.is_symlink() { continue; }
+            let file_type = match entry.file_type() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if !file_type.is_dir() || file_type.is_symlink() {
+                continue;
+            }
             let name = entry.file_name();
-            if name == "dat" { continue; }
+            if name == "dat" {
+                continue;
+            }
             let child = entry.path();
-            if seen.insert(child.clone()) { queue.push_back((child, depth + 1)); }
+            if seen.insert(child.clone()) {
+                queue.push_back((child, depth + 1));
+            }
         }
     }
     Err("resource_storage_not_found".to_string())
 }
-
 
 /// Inspect the downloaded resource index in place. This is strictly read-only,
 /// returns bounded schema data and a small set of rows containing "story".
@@ -11823,34 +12912,69 @@ fn debug_resource_crypto_symbols() -> String {
     use std::collections::{BTreeMap, BTreeSet};
     let maps = match std::fs::read_to_string("/proc/self/maps") {
         Ok(v) => v,
-        Err(e) => return format!(r#"{{"ok":false,"error":"maps_read_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
+        Err(e) => {
+            return format!(
+                r#"{{"ok":false,"error":"maps_read_failed","detail":"{}"}}"#,
+                json_escape(&e.to_string())
+            )
+        }
     };
     let mut ranges: Vec<(usize, usize, String)> = Vec::new();
     let mut modules = BTreeSet::new();
     for line in maps.lines() {
         let mut parts = line.split_whitespace();
-        let range = match parts.next() { Some(v) => v, None => continue };
-        let _perms = parts.next(); let _offset = parts.next(); let _dev = parts.next(); let _inode = parts.next();
-        let path = match parts.next() { Some(v) if v.starts_with('/') => v.to_string(), _ => continue };
+        let range = match parts.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        let _perms = parts.next();
+        let _offset = parts.next();
+        let _dev = parts.next();
+        let _inode = parts.next();
+        let path = match parts.next() {
+            Some(v) if v.starts_with('/') => v.to_string(),
+            _ => continue,
+        };
         let mut bounds = range.split('-');
         let start = usize::from_str_radix(bounds.next().unwrap_or(""), 16).unwrap_or(0);
         let end = usize::from_str_radix(bounds.next().unwrap_or(""), 16).unwrap_or(0);
-        if start != 0 && end > start { ranges.push((start, end, path.clone())); }
+        if start != 0 && end > start {
+            ranges.push((start, end, path.clone()));
+        }
         let lower = path.to_ascii_lowercase();
-        if lower.contains("sqlite") || lower.contains("native") || lower.contains("cipher") || lower.contains("sql") {
+        if lower.contains("sqlite")
+            || lower.contains("native")
+            || lower.contains("cipher")
+            || lower.contains("sql")
+        {
             modules.insert(path);
         }
     }
     let targets = [
-        "sqlite3_open", "sqlite3_open_v2", "sqlite3_close", "sqlite3_prepare_v2",
-        "sqlite3_step", "sqlite3_exec", "sqlite3_key", "sqlite3_key_v2",
-        "sqlite3_rekey", "sqlite3_rekey_v2", "sqlite3mc_config",
-        "sqlite3mc_config_cipher", "sqlite3_activate_see", "sqlite3CodecAttach",
-        "sqlite3PagerSetCodec", "sqlite3_column_text", "sqlite3_bind_text"
+        "sqlite3_open",
+        "sqlite3_open_v2",
+        "sqlite3_close",
+        "sqlite3_prepare_v2",
+        "sqlite3_step",
+        "sqlite3_exec",
+        "sqlite3_key",
+        "sqlite3_key_v2",
+        "sqlite3_rekey",
+        "sqlite3_rekey_v2",
+        "sqlite3mc_config",
+        "sqlite3mc_config_cipher",
+        "sqlite3_activate_see",
+        "sqlite3CodecAttach",
+        "sqlite3PagerSetCodec",
+        "sqlite3_column_text",
+        "sqlite3_bind_text",
     ];
     let owner_for = |addr: usize| -> String {
-        ranges.iter().find(|(s, e, _)| addr >= *s && addr < *e)
-            .map(|(_, _, p)| p.clone()).unwrap_or_default()
+        ranges
+            .iter()
+            .find(|(s, e, _)| addr >= *s && addr < *e)
+            .map(|(_, _, p)| p.clone())
+            .unwrap_or_default()
     };
     let mut found: BTreeMap<String, (usize, String, String)> = BTreeMap::new();
     unsafe {
@@ -11861,7 +12985,10 @@ fn debug_resource_crypto_symbols() -> String {
                     let ptr = libc::dlsym(global, cname.as_ptr());
                     if !ptr.is_null() {
                         let addr = ptr as usize;
-                        found.insert((*name).to_string(), (addr, owner_for(addr), "global".to_string()));
+                        found.insert(
+                            (*name).to_string(),
+                            (addr, owner_for(addr), "global".to_string()),
+                        );
                     }
                 }
             }
@@ -11869,11 +12996,18 @@ fn debug_resource_crypto_symbols() -> String {
         }
         const RTLD_NOLOAD_ANDROID: i32 = 4;
         for module in modules.iter() {
-            let cpath = match CString::new(module.as_str()) { Ok(v) => v, Err(_) => continue };
+            let cpath = match CString::new(module.as_str()) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
             let handle = libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | RTLD_NOLOAD_ANDROID);
-            if handle.is_null() { continue; }
+            if handle.is_null() {
+                continue;
+            }
             for name in targets.iter() {
-                if found.contains_key(*name) { continue; }
+                if found.contains_key(*name) {
+                    continue;
+                }
                 if let Ok(cname) = CString::new(*name) {
                     let ptr = libc::dlsym(handle, cname.as_ptr());
                     if !ptr.is_null() {
@@ -11885,19 +13019,28 @@ fn debug_resource_crypto_symbols() -> String {
             libc::dlclose(handle);
         }
     }
-    let module_json: Vec<String> = modules.iter().take(64)
-        .map(|p| format!(r#""{}""#, json_escape(p))).collect();
-    let symbols_json: Vec<String> = targets.iter().map(|name| {
-        match found.get(*name) {
+    let module_json: Vec<String> = modules
+        .iter()
+        .take(64)
+        .map(|p| format!(r#""{}""#, json_escape(p)))
+        .collect();
+    let symbols_json: Vec<String> = targets
+        .iter()
+        .map(|name| match found.get(*name) {
             Some((addr, owner, lookup)) => format!(
                 r#"{{"name":"{}","found":true,"address":"0x{:x}","owner":"{}","lookup":"{}"}}"#,
-                name, addr, json_escape(owner), json_escape(lookup)),
+                name,
+                addr,
+                json_escape(owner),
+                json_escape(lookup)
+            ),
             None => format!(r#"{{"name":"{}","found":false}}"#, name),
-        }
-    }).collect();
+        })
+        .collect();
     format!(
         r#"{{"ok":true,"read_only":true,"invoked":false,"hooked":false,"module_limit":64,"candidate_modules":[{}],"symbols":[{}]}}"#,
-        module_json.join(","), symbols_json.join(",")
+        module_json.join(","),
+        symbols_json.join(",")
     )
 }
 fn debug_resource_meta_probe() -> String {
@@ -11908,7 +13051,12 @@ fn debug_resource_meta_probe() -> String {
     };
     let mut file = match std::fs::File::open(&meta) {
         Ok(v) => v,
-        Err(e) => return format!(r#"{{"ok":false,"error":"open_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
+        Err(e) => {
+            return format!(
+                r#"{{"ok":false,"error":"open_failed","detail":"{}"}}"#,
+                json_escape(&e.to_string())
+            )
+        }
     };
     let size = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut head = vec![0u8; 65536.min(size as usize)];
@@ -11922,21 +13070,44 @@ fn debug_resource_meta_probe() -> String {
         tail.truncate(n);
     }
     let hex = |data: &[u8]| -> String {
-        data.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("")
+        data.iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join("")
     };
     let ascii = |data: &[u8]| -> String {
-        data.iter().map(|b| if (0x20..=0x7e).contains(b) { *b as char } else { '.' }).collect()
+        data.iter()
+            .map(|b| {
+                if (0x20..=0x7e).contains(b) {
+                    *b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect()
     };
     let strings = |data: &[u8], base: u64| -> Vec<String> {
         let mut out = Vec::new();
         let mut start = 0usize;
         while start < data.len() && out.len() < 80 {
-            while start < data.len() && !(0x20..=0x7e).contains(&data[start]) { start += 1; }
+            while start < data.len() && !(0x20..=0x7e).contains(&data[start]) {
+                start += 1;
+            }
             let mut end = start;
-            while end < data.len() && (0x20..=0x7e).contains(&data[end]) { end += 1; }
+            while end < data.len() && (0x20..=0x7e).contains(&data[end]) {
+                end += 1;
+            }
             if end.saturating_sub(start) >= 4 {
-                let value: String = data[start..end].iter().map(|b| *b as char).take(300).collect();
-                out.push(format!(r#"{{"offset":{},"value":"{}"}}"#, base + start as u64, json_escape(&value)));
+                let value: String = data[start..end]
+                    .iter()
+                    .map(|b| *b as char)
+                    .take(300)
+                    .collect();
+                out.push(format!(
+                    r#"{{"offset":{},"value":"{}"}}"#,
+                    base + start as u64,
+                    json_escape(&value)
+                ));
             }
             start = end.saturating_add(1);
         }
@@ -11946,9 +13117,13 @@ fn debug_resource_meta_probe() -> String {
     samples.extend(strings(&tail, size.saturating_sub(tail.len() as u64)));
     format!(
         r#"{{"ok":true,"read_only":true,"path":"{}","size":{},"sqlite_header":{},"head_hex":"{}","head_ascii":"{}","tail_hex":"{}","printable_samples":[{}]}}"#,
-        json_escape(&meta), size, head.starts_with(b"SQLite format 3\0"),
-        hex(&head[..head.len().min(256)]), json_escape(&ascii(&head[..head.len().min(256)])),
-        hex(&tail[tail.len().saturating_sub(128)..]), samples.join(",")
+        json_escape(&meta),
+        size,
+        head.starts_with(b"SQLite format 3\0"),
+        hex(&head[..head.len().min(256)]),
+        json_escape(&ascii(&head[..head.len().min(256)])),
+        hex(&tail[tail.len().saturating_sub(128)..]),
+        samples.join(",")
     )
 }
 fn debug_resource_meta_schema() -> String {
@@ -11959,75 +13134,136 @@ fn debug_resource_meta_schema() -> String {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = match Connection::open_with_flags(&meta, flags) {
         Ok(v) => v,
-        Err(e) => return format!(r#"{{"ok":false,"error":"meta_open_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
+        Err(e) => {
+            return format!(
+                r#"{{"ok":false,"error":"meta_open_failed","detail":"{}"}}"#,
+                json_escape(&e.to_string())
+            )
+        }
     };
     let mut master = match conn.prepare(
         "SELECT name, type, COALESCE(sql,'') FROM sqlite_master \
-         WHERE type IN ('table','view') ORDER BY type, name LIMIT 128"
+         WHERE type IN ('table','view') ORDER BY type, name LIMIT 128",
     ) {
         Ok(v) => v,
-        Err(e) => return format!(r#"{{"ok":false,"error":"schema_query_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
+        Err(e) => {
+            return format!(
+                r#"{{"ok":false,"error":"schema_query_failed","detail":"{}"}}"#,
+                json_escape(&e.to_string())
+            )
+        }
     };
-    let objects: Vec<(String, String, String)> = match master.query_map([], |r| {
-        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-    }) {
-        Ok(rows) => rows.filter_map(Result::ok).collect(),
-        Err(e) => return format!(r#"{{"ok":false,"error":"schema_read_failed","detail":"{}"}}"#, json_escape(&e.to_string())),
-    };
+    let objects: Vec<(String, String, String)> =
+        match master.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))) {
+            Ok(rows) => rows.filter_map(Result::ok).collect(),
+            Err(e) => {
+                return format!(
+                    r#"{{"ok":false,"error":"schema_read_failed","detail":"{}"}}"#,
+                    json_escape(&e.to_string())
+                )
+            }
+        };
 
     let quote_ident = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
     let mut object_json = Vec::new();
     let mut story_samples = Vec::new();
     for (name, kind, sql) in objects.iter() {
         let pragma = format!("PRAGMA table_info({})", quote_ident(name));
-        let columns: Vec<(String, String)> = conn.prepare(&pragma).ok().and_then(|mut stmt| {
-            stmt.query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2).unwrap_or_default())))
-                .ok().map(|rows| rows.filter_map(Result::ok).take(64).collect())
-        }).unwrap_or_default();
-        let cols_json: Vec<String> = columns.iter().map(|(n, t)| format!(
-            r#"{{"name":"{}","type":"{}"}}"#, json_escape(n), json_escape(t)
-        )).collect();
+        let columns: Vec<(String, String)> = conn
+            .prepare(&pragma)
+            .ok()
+            .and_then(|mut stmt| {
+                stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2).unwrap_or_default(),
+                    ))
+                })
+                .ok()
+                .map(|rows| rows.filter_map(Result::ok).take(64).collect())
+            })
+            .unwrap_or_default();
+        let cols_json: Vec<String> = columns
+            .iter()
+            .map(|(n, t)| {
+                format!(
+                    r#"{{"name":"{}","type":"{}"}}"#,
+                    json_escape(n),
+                    json_escape(t)
+                )
+            })
+            .collect();
         let sql_short: String = sql.chars().take(1000).collect();
         object_json.push(format!(
             r#"{{"name":"{}","type":"{}","sql":"{}","columns":[{}]}}"#,
-            json_escape(name), json_escape(kind), json_escape(&sql_short), cols_json.join(",")
+            json_escape(name),
+            json_escape(kind),
+            json_escape(&sql_short),
+            cols_json.join(",")
         ));
 
-        if kind != "table" || columns.is_empty() || story_samples.len() >= 40 { continue; }
+        if kind != "table" || columns.is_empty() || story_samples.len() >= 40 {
+            continue;
+        }
         let selected: Vec<&(String, String)> = columns.iter().take(16).collect();
-        let predicates: Vec<String> = selected.iter().map(|(c, _)|
-            format!("CAST({} AS TEXT) LIKE '%story%'", quote_ident(c))).collect();
+        let predicates: Vec<String> = selected
+            .iter()
+            .map(|(c, _)| format!("CAST({} AS TEXT) LIKE '%story%'", quote_ident(c)))
+            .collect();
         let query = format!(
             "SELECT {} FROM {} WHERE {} LIMIT {}",
-            selected.iter().map(|(c, _)| quote_ident(c)).collect::<Vec<_>>().join(","),
-            quote_ident(name), predicates.join(" OR "), 40usize.saturating_sub(story_samples.len())
+            selected
+                .iter()
+                .map(|(c, _)| quote_ident(c))
+                .collect::<Vec<_>>()
+                .join(","),
+            quote_ident(name),
+            predicates.join(" OR "),
+            40usize.saturating_sub(story_samples.len())
         );
         if let Ok(mut stmt) = conn.prepare(&query) {
             let col_count = selected.len();
             if let Ok(mut rows) = stmt.query([]) {
                 while story_samples.len() < 40 {
-                    let row = match rows.next() { Ok(Some(v)) => v, _ => break };
+                    let row = match rows.next() {
+                        Ok(Some(v)) => v,
+                        _ => break,
+                    };
                     let mut values = Vec::new();
                     for i in 0..col_count {
                         let text = match row.get_ref(i) {
                             Ok(rusqlite::types::ValueRef::Null) => "null".to_string(),
                             Ok(rusqlite::types::ValueRef::Integer(v)) => v.to_string(),
                             Ok(rusqlite::types::ValueRef::Real(v)) => v.to_string(),
-                            Ok(rusqlite::types::ValueRef::Text(v)) => String::from_utf8_lossy(v).chars().take(500).collect(),
-                            Ok(rusqlite::types::ValueRef::Blob(v)) => format!("<blob:{} bytes>", v.len()),
+                            Ok(rusqlite::types::ValueRef::Text(v)) => {
+                                String::from_utf8_lossy(v).chars().take(500).collect()
+                            }
+                            Ok(rusqlite::types::ValueRef::Blob(v)) => {
+                                format!("<blob:{} bytes>", v.len())
+                            }
                             Err(_) => "<read_error>".to_string(),
                         };
-                        values.push(format!(r#""{}":"{}""#, json_escape(&selected[i].0), json_escape(&text)));
+                        values.push(format!(
+                            r#""{}":"{}""#,
+                            json_escape(&selected[i].0),
+                            json_escape(&text)
+                        ));
                     }
-                    story_samples.push(format!(r#"{{"table":"{}","row":{{{}}}}}"#, json_escape(name), values.join(",")));
+                    story_samples.push(format!(
+                        r#"{{"table":"{}","row":{{{}}}}}"#,
+                        json_escape(name),
+                        values.join(",")
+                    ));
                 }
             }
         }
     }
     format!(
         r#"{{"ok":true,"read_only":true,"meta_path":"{}","meta_size":{},"object_limit":128,"column_limit":64,"story_sample_limit":40,"objects":[{}],"story_samples":[{}]}}"#,
-        json_escape(&meta), std::fs::metadata(&meta).map(|m| m.len()).unwrap_or(0),
-        object_json.join(","), story_samples.join(",")
+        json_escape(&meta),
+        std::fs::metadata(&meta).map(|m| m.len()).unwrap_or(0),
+        object_json.join(","),
+        story_samples.join(",")
     )
 }
 fn debug_resource_storage() -> String {
@@ -12039,13 +13275,18 @@ fn debug_resource_storage() -> String {
             let shm = format!("{}-shm", meta);
             format!(
                 r#"{{"ok":true,"read_only":true,"scan_max_depth":4,"scan_max_directories":512,"meta":{{"path":"{}","size":{}}},"dat":{{"path":"{}"}},"sidecars":{{"journal":{},"wal":{},"shm":{}}},"downloads":{{"meta":"/debug/resource_meta_dl","resource":"/debug/resource_file_dl?hash=HEX_HASH"}}}}"#,
-                json_escape(&meta), meta_size, json_escape(&dat),
+                json_escape(&meta),
+                meta_size,
+                json_escape(&dat),
                 std::path::Path::new(&journal).is_file(),
                 std::path::Path::new(&wal).is_file(),
                 std::path::Path::new(&shm).is_file()
             )
         }
-        Err(error) => format!(r#"{{"ok":false,"error":"{}","read_only":true}}"#, json_escape(&error)),
+        Err(error) => format!(
+            r#"{{"ok":false,"error":"{}","read_only":true}}"#,
+            json_escape(&error)
+        ),
     }
 }
 
@@ -12059,25 +13300,40 @@ fn stream_private_file(stream: &mut std::net::TcpStream, path: &str, filename: &
     let mut file = match std::fs::File::open(path) {
         Ok(v) => v,
         Err(e) => {
-            let body = format!(r#"{{"error":"file_open_failed","detail":"{}"}}"#, json_escape(&e.to_string()));
+            let body = format!(
+                r#"{{"error":"file_open_failed","detail":"{}"}}"#,
+                json_escape(&e.to_string())
+            );
             let response = format!("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
             let _ = stream.write_all(response.as_bytes());
             return;
         }
     };
-    let size = match file.metadata() { Ok(v) if v.is_file() => v.len(), _ => 0 };
-    let safe_name: String = filename.chars()
+    let size = match file.metadata() {
+        Ok(v) if v.is_file() => v.len(),
+        _ => 0,
+    };
+    let safe_name: String = filename
+        .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
-        .take(140).collect();
+        .take(140)
+        .collect();
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         if safe_name.is_empty() { "download.bin" } else { &safe_name }, size
     );
-    if stream.write_all(header.as_bytes()).is_err() { return; }
+    if stream.write_all(header.as_bytes()).is_err() {
+        return;
+    }
     let mut buffer = [0u8; 65536];
     loop {
-        let count = match file.read(&mut buffer) { Ok(0) | Err(_) => break, Ok(n) => n };
-        if stream.write_all(&buffer[..count]).is_err() { break; }
+        let count = match file.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        if stream.write_all(&buffer[..count]).is_err() {
+            break;
+        }
     }
     let _ = stream.flush();
 }
@@ -13443,11 +14699,35 @@ fn debug_mdb_schema_dump() -> String {
 
     // 2. 筛选关键表（按关键词）
     let key_keywords = [
-        "goal", "target", "race", "fan", "career", "turn", "program",
-        "condition", "saddle", "story", "event", "choice", "reward",
-        "skill", "hint", "chara", "card", "support", "relation",
-        "succession", "inherit", "factor", "gauge", "training",
-        "single_mode", "text_data", "grade", "rank", "point",
+        "goal",
+        "target",
+        "race",
+        "fan",
+        "career",
+        "turn",
+        "program",
+        "condition",
+        "saddle",
+        "story",
+        "event",
+        "choice",
+        "reward",
+        "skill",
+        "hint",
+        "chara",
+        "card",
+        "support",
+        "relation",
+        "succession",
+        "inherit",
+        "factor",
+        "gauge",
+        "training",
+        "single_mode",
+        "text_data",
+        "grade",
+        "rank",
+        "point",
     ];
     let key_lower = |t: &str| t.to_lowercase();
     let is_key_table = |name: &str| {
@@ -13493,10 +14773,7 @@ fn debug_mdb_schema_dump() -> String {
 
         // sample rows (only for key tables, max 20)
         let sample_json: String = if is_key && row_count > 0 {
-            match conn.prepare(&format!(
-                "SELECT * FROM [{}] LIMIT 20",
-                safe_name
-            )) {
+            match conn.prepare(&format!("SELECT * FROM [{}] LIMIT 20", safe_name)) {
                 Ok(mut stmt) => {
                     let col_count = stmt.column_count();
                     // Get column names
@@ -13572,7 +14849,10 @@ fn debug_mdb_schema_dump() -> String {
     format!(
         r#"{{"ok":true,"total_tables":{},"key_table_count":{},"tables":[{}],"turn_race_entry_dist":[{}]}}"#,
         all_tables.len(),
-        tables_json.iter().filter(|t| t.contains("\"key\":true")).count(),
+        tables_json
+            .iter()
+            .filter(|t| t.contains("\"key\":true"))
+            .count(),
         tables_json.join(","),
         turn_dist.join(","),
     )
@@ -13592,16 +14872,15 @@ fn mdb_dl_batch(prefix: &str) -> String {
     };
 
     // 1. 获取所有表名
-    let all_tables: Vec<String> = match conn.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ) {
-        Ok(mut stmt) => stmt
-            .query_map([], |row| Ok(row.get::<_, String>(0).unwrap_or_default()))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect(),
-        Err(e) => return format!(r#"{{"error":"table_list_failed","detail":"{}"}}"#, e),
-    };
+    let all_tables: Vec<String> =
+        match conn.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name") {
+            Ok(mut stmt) => stmt
+                .query_map([], |row| Ok(row.get::<_, String>(0).unwrap_or_default()))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect(),
+            Err(e) => return format!(r#"{{"error":"table_list_failed","detail":"{}"}}"#, e),
+        };
 
     // 2. 按前缀筛选
     let prefix_lower = prefix.to_lowercase();
@@ -13630,14 +14909,17 @@ fn mdb_dl_batch(prefix: &str) -> String {
     for table_name in &filtered {
         let safe_name = table_name.replace("]", "]]");
         let count: i64 = conn
-            .query_row(&format!("SELECT COUNT(*) FROM [{}]", safe_name), [], |r| r.get(0))
+            .query_row(&format!("SELECT COUNT(*) FROM [{}]", safe_name), [], |r| {
+                r.get(0)
+            })
             .unwrap_or(0);
 
         // 获取列名
-        let col_names: Vec<String> = match conn.prepare(&format!("SELECT * FROM [{}] LIMIT 1", safe_name)) {
-            Ok(mut stmt) => stmt.column_names().iter().map(|s| s.to_string()).collect(),
-            Err(_) => Vec::new(),
-        };
+        let col_names: Vec<String> =
+            match conn.prepare(&format!("SELECT * FROM [{}] LIMIT 1", safe_name)) {
+                Ok(mut stmt) => stmt.column_names().iter().map(|s| s.to_string()).collect(),
+                Err(_) => Vec::new(),
+            };
 
         // 查询数据
         let limit = (count as usize).min(max_rows_per_table);
@@ -13649,15 +14931,18 @@ fn mdb_dl_batch(prefix: &str) -> String {
                         let mut pairs: Vec<String> = Vec::new();
                         for ci in 0..col_count {
                             let cn = col_names.get(ci).unwrap_or(&String::new()).clone();
-                            let int_val: Option<i64> = row.get::<_, Option<i64>>(ci).unwrap_or(None);
+                            let int_val: Option<i64> =
+                                row.get::<_, Option<i64>>(ci).unwrap_or(None);
                             let val = if let Some(v) = int_val {
                                 v.to_string()
                             } else {
-                                let str_val: Option<String> = row.get::<_, Option<String>>(ci).unwrap_or(None);
+                                let str_val: Option<String> =
+                                    row.get::<_, Option<String>>(ci).unwrap_or(None);
                                 match str_val {
                                     Some(s) => format!(r#""{}""#, json_escape(&s)),
                                     None => {
-                                        let float_val: Option<f64> = row.get::<_, Option<f64>>(ci).unwrap_or(None);
+                                        let float_val: Option<f64> =
+                                            row.get::<_, Option<f64>>(ci).unwrap_or(None);
                                         match float_val {
                                             Some(f) => format!("{}", f),
                                             None => "null".to_string(),
@@ -13674,7 +14959,10 @@ fn mdb_dl_batch(prefix: &str) -> String {
                     .collect()
                 }
                 Err(e) => {
-                    vec![format!(r#"{{"error":"query_failed","detail":"{}"}}"#, json_escape(&e.to_string()))]
+                    vec![format!(
+                        r#"{{"error":"query_failed","detail":"{}"}}"#,
+                        json_escape(&e.to_string())
+                    )]
                 }
             }
         } else {
@@ -13687,7 +14975,11 @@ fn mdb_dl_batch(prefix: &str) -> String {
             json_escape(table_name),
             count,
             rows_json.len(),
-            col_names.iter().map(|c| format!(r#""{}""#, json_escape(c))).collect::<Vec<_>>().join(","),
+            col_names
+                .iter()
+                .map(|c| format!(r#""{}""#, json_escape(c)))
+                .collect::<Vec<_>>()
+                .join(","),
             rows_json.join(",")
         ));
     }
@@ -14674,21 +15966,38 @@ unsafe fn exact_class_diagnostic(image: *const c_void, namespace: &str, name: &s
     let class_name = to_cstr(name);
     let class = find_class(image, ns.as_ptr(), class_name.as_ptr());
     if class.is_null() {
-        return format!(r#"{{"namespace":"{}","name":"{}","found":false}}"#, namespace, name);
+        return format!(
+            r#"{{"namespace":"{}","name":"{}","found":false}}"#,
+            namespace, name
+        );
     }
     format!(
         r#"{{"namespace":"{}","name":"{}","found":true,"fields":{},"methods":{}}}"#,
-        namespace, name, enumerate_class_fields(class), enumerate_class_methods(class)
+        namespace,
+        name,
+        enumerate_class_fields(class),
+        enumerate_class_methods(class)
     )
 }
 
 unsafe fn debug_race_random_program_exact() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
     let image = get_image();
-    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
     let model = exact_class_diagnostic(image, "Gallop", "SingleModeRaceRandomProgram");
-    let formatter = exact_class_diagnostic(image, "Gallop.MsgPack.Formatters", "SingleModeRaceRandomProgramFormatter");
-    format!(r#"{{"exact_lookup_only":true,"global_iteration":false,"model":{},"formatter":{}}}"#, model, formatter)
+    let formatter = exact_class_diagnostic(
+        image,
+        "Gallop.MsgPack.Formatters",
+        "SingleModeRaceRandomProgramFormatter",
+    );
+    format!(
+        r#"{{"exact_lookup_only":true,"global_iteration":false,"model":{},"formatter":{}}}"#,
+        model, formatter
+    )
 }
 
 /// v3.22.51: /debug/dumpclass","/debug/storydata?name=ClassName — Dump all fields of any IL2CPP class
@@ -15321,10 +16630,14 @@ unsafe fn il2cpp_read_single_field(class_name: &str, field_name: &str) -> String
 /// v3.22.51: /debug/ramenfields — Walk all ramen arrays, dump element class + fields
 /// For each array: read first element, get class from object header, dump all fields + hex
 unsafe fn inline_obscured_int_list_json(list_obj: *const c_void) -> String {
-    if list_obj.is_null() { return "[]".to_string(); }
+    if list_obj.is_null() {
+        return "[]".to_string();
+    }
     let base = list_obj as *const u8;
     let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if len > 200 { return "[]".to_string(); }
+    if len > 200 {
+        return "[]".to_string();
+    }
     let mut values = Vec::with_capacity(len);
     for i in 0..len {
         let elem = base.add(IL2CPP_LIST_ITEMS_OFF + i * OBSCURED_INT_SIZE);
@@ -15340,16 +16653,22 @@ unsafe fn ramen_object_list_json(
     fields: &[&str],
 ) -> String {
     let list = call_getter_on_instance(ds_class, ds_obj, getter);
-    if list.is_null() { return "[]".to_string(); }
+    if list.is_null() {
+        return "[]".to_string();
+    }
     let base = list as *const u8;
     let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if len > 200 { return "[]".to_string(); }
+    if len > 200 {
+        return "[]".to_string();
+    }
     let mut entries = Vec::with_capacity(len);
     for i in 0..len {
         let obj = std::ptr::read_unaligned::<*mut c_void>(
             base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
         );
-        if obj.is_null() { continue; }
+        if obj.is_null() {
+            continue;
+        }
         let mut parts = Vec::with_capacity(fields.len());
         for field in fields {
             let getter_name = format!("get_{}", field);
@@ -15364,69 +16683,133 @@ unsafe fn ramen_object_list_json(
 /// ★ v3.24.19: bounded diagnostic for the Ramen scenario -> DataSet path.
 /// Exact lookups and an eight-level parent walk only; no global class enumeration.
 unsafe fn debug_ramen_dataset_path() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
     let image = get_image();
-    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
 
-    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
-    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    let wdm_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkDataManager").as_ptr(),
+    );
+    if wdm_class.is_null() {
+        return r#"{"error":"no_wdm"}"#.to_string();
+    }
     let wdm = get_singleton(wdm_class);
-    if wdm.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    if wdm.is_null() {
+        return r#"{"error":"no_wdm_inst"}"#.to_string();
+    }
+    let sm_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeData").as_ptr(),
+    );
     let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
-    if sm.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
-    let declared_chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    if sm.is_null() {
+        return r#"{"error":"no_single_mode"}"#.to_string();
+    }
+    let declared_chara_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeCharaData").as_ptr(),
+    );
     let chara = call_getter_ref(sm_class, sm, "get_Character");
-    if chara.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+    if chara.is_null() {
+        return r#"{"error":"no_chara"}"#.to_string();
+    }
     let actual_chara_class = get_class_from_object(chara);
     let scenario_id = read_obscured_int_at(chara, 568);
 
     let get_method_fn: Option<FnClassGetMethodFromName> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let invoke_fn: Option<FnRuntimeInvoke> = {
         let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let get_name_fn: Option<FnClassGetName> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let get_ns_fn: Option<unsafe extern "C" fn(*mut c_void) -> *const c_char> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let get_parent_fn: Option<FnClassGetParent> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_parent");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let get_fields_fn: Option<FnClassGetFields> = {
         let p = resolve_il2cpp_symbol("il2cpp_class_get_fields");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let field_get_type_fn: Option<unsafe extern "C" fn(*const Il2CppFieldInfo) -> *const c_void> = {
         let p = resolve_il2cpp_symbol("il2cpp_field_get_type");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let type_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
         let p = resolve_il2cpp_symbol("il2cpp_type_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
 
     let class_name_of = |cls: *mut c_void| -> String {
-        if cls.is_null() { return "null".to_string(); }
+        if cls.is_null() {
+            return "null".to_string();
+        }
         if let Some(f) = get_name_fn {
             let p = f(cls);
-            if !p.is_null() { return CStr::from_ptr(p).to_string_lossy().into_owned(); }
+            if !p.is_null() {
+                return CStr::from_ptr(p).to_string_lossy().into_owned();
+            }
         }
         "?".to_string()
     };
     let ns_name_of = |cls: *mut c_void| -> String {
-        if cls.is_null() { return "null".to_string(); }
+        if cls.is_null() {
+            return "null".to_string();
+        }
         if let Some(f) = get_ns_fn {
             let p = f(cls);
-            if !p.is_null() { return CStr::from_ptr(p).to_string_lossy().into_owned(); }
+            if !p.is_null() {
+                return CStr::from_ptr(p).to_string_lossy().into_owned();
+            }
         }
         "".to_string()
     };
@@ -15443,7 +16826,8 @@ unsafe fn debug_ramen_dataset_path() -> String {
         let invoke_called = method_found && invoke_fn.is_some();
         let (result_ptr, exc_ptr) = if invoke_called {
             let mut exc: *mut c_void = ptr::null_mut();
-            let r = invoke_fn.unwrap()(method_info, chara as *mut c_void, ptr::null_mut(), &mut exc);
+            let r =
+                invoke_fn.unwrap()(method_info, chara as *mut c_void, ptr::null_mut(), &mut exc);
             (r, exc)
         } else {
             (ptr::null_mut(), ptr::null_mut())
@@ -15459,19 +16843,31 @@ unsafe fn debug_ramen_dataset_path() -> String {
         } else {
             "ok"
         };
-        let result_class = if result_ptr.is_null() { ptr::null_mut() } else { get_class_from_object(result_ptr) };
+        let result_class = if result_ptr.is_null() {
+            ptr::null_mut()
+        } else {
+            get_class_from_object(result_ptr)
+        };
         let mut entry = format!(
             r#"{{"getter":"{}","method_found":{},"method_info_ptr":"0x{:x}","invoke_called":{},"invoke_status":"{}","exception_ptr":"0x{:x}","result_ptr":"0x{:x}","result_class":"{}","result_namespace":"{}""#,
-            gname, method_found, method_info as usize, invoke_called, invoke_status,
-            exc_ptr as usize, result_ptr as usize,
-            json_escape(&class_name_of(result_class)), json_escape(&ns_name_of(result_class))
+            gname,
+            method_found,
+            method_info as usize,
+            invoke_called,
+            invoke_status,
+            exc_ptr as usize,
+            result_ptr as usize,
+            json_escape(&class_name_of(result_class)),
+            json_escape(&ns_name_of(result_class))
         );
 
         if !result_ptr.is_null() && !result_class.is_null() {
             let mut chain = Vec::new();
             let mut current = result_class;
             for depth in 0..8 {
-                if current.is_null() { break; }
+                if current.is_null() {
+                    break;
+                }
                 let owner_name = class_name_of(current);
                 let owner_ns = ns_name_of(current);
                 let dataset_method = if let Some(get_method) = get_method_fn {
@@ -15489,8 +16885,12 @@ unsafe fn debug_ramen_dataset_path() -> String {
                     let mut iter: *mut c_void = ptr::null_mut();
                     loop {
                         let fi = get_fields(current, &mut iter);
-                        if fi.is_null() { break; }
-                        if (*fi).name.is_null() { continue; }
+                        if fi.is_null() {
+                            break;
+                        }
+                        if (*fi).name.is_null() {
+                            continue;
+                        }
                         let fname = CStr::from_ptr((*fi).name).to_string_lossy();
                         if fname == "<DataSet>k__BackingField" || fname == "DataSet" {
                             field_found = true;
@@ -15498,27 +16898,50 @@ unsafe fn debug_ramen_dataset_path() -> String {
                             let ty = field_get_type_fn.map(|f| f(fi)).unwrap_or((*fi)._ty);
                             field_type_enum = il2cpp_type_get_type_enum(ty);
                             field_type_name = type_get_name_fn
-                                .and_then(|f| { let p = f(ty); if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) } })
+                                .and_then(|f| {
+                                    let p = f(ty);
+                                    if p.is_null() {
+                                        None
+                                    } else {
+                                        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+                                    }
+                                })
                                 .unwrap_or_else(|| type_enum_to_name(field_type_enum));
                             break;
                         }
                     }
                 }
 
-                let field_slot_readable = field_found && field_offset >= 0
-                    && is_readable_range((result_ptr as usize).saturating_add(field_offset as usize), std::mem::size_of::<usize>());
+                let field_slot_readable = field_found
+                    && field_offset >= 0
+                    && is_readable_range(
+                        (result_ptr as usize).saturating_add(field_offset as usize),
+                        std::mem::size_of::<usize>(),
+                    );
                 let field_ptr = if field_slot_readable {
-                    std::ptr::read_unaligned::<*mut c_void>((result_ptr as *const u8).add(field_offset as usize) as *const *mut c_void)
+                    std::ptr::read_unaligned::<*mut c_void>(
+                        (result_ptr as *const u8).add(field_offset as usize) as *const *mut c_void,
+                    )
                 } else {
                     ptr::null_mut()
                 };
-                let field_object_readable = !field_ptr.is_null() && is_readable_range(field_ptr as usize, 16);
-                let field_object_class = if field_object_readable { class_name_of(get_class_from_object(field_ptr)) } else { String::new() };
+                let field_object_readable =
+                    !field_ptr.is_null() && is_readable_range(field_ptr as usize, 16);
+                let field_object_class = if field_object_readable {
+                    class_name_of(get_class_from_object(field_ptr))
+                } else {
+                    String::new()
+                };
 
                 let dataset_invoke_called = has_get_dataset && invoke_fn.is_some();
                 let (ds_ptr, ds_exc) = if dataset_invoke_called {
                     let mut exc: *mut c_void = ptr::null_mut();
-                    let r = invoke_fn.unwrap()(dataset_method, result_ptr as *mut c_void, ptr::null_mut(), &mut exc);
+                    let r = invoke_fn.unwrap()(
+                        dataset_method,
+                        result_ptr as *mut c_void,
+                        ptr::null_mut(),
+                        &mut exc,
+                    );
                     (r, exc)
                 } else {
                     (ptr::null_mut(), ptr::null_mut())
@@ -15534,7 +16957,11 @@ unsafe fn debug_ramen_dataset_path() -> String {
                 } else {
                     "ok"
                 };
-                let ds_class = if ds_ptr.is_null() { String::new() } else { class_name_of(get_class_from_object(ds_ptr)) };
+                let ds_class = if ds_ptr.is_null() {
+                    String::new()
+                } else {
+                    class_name_of(get_class_from_object(ds_ptr))
+                };
                 chain.push(format!(
                     r#"{{"depth":{},"class":"{}","namespace":"{}","has_get_DataSet":{},"dataset_method_info_ptr":"0x{:x}","dataset_invoke_called":{},"dataset_invoke_status":"{}","dataset_invoke_ptr":"0x{:x}","dataset_invoke_exc":"0x{:x}","dataset_invoke_class":"{}","dataset_field_found":{},"dataset_field_offset":{},"dataset_field_type_enum":{},"dataset_field_type_name":"{}","dataset_field_slot_readable":{},"dataset_field_ptr":"0x{:x}","dataset_field_object_readable":{},"dataset_field_object_class":"{}"}}"#,
                     depth, json_escape(&owner_name), json_escape(&owner_ns), has_get_dataset,
@@ -15543,8 +16970,14 @@ unsafe fn debug_ramen_dataset_path() -> String {
                     field_type_enum, json_escape(&field_type_name), field_slot_readable,
                     field_ptr as usize, field_object_readable, json_escape(&field_object_class)
                 ));
-                if !ds_ptr.is_null() || field_object_readable { break; }
-                current = if let Some(get_parent) = get_parent_fn { get_parent(current) } else { ptr::null_mut() };
+                if !ds_ptr.is_null() || field_object_readable {
+                    break;
+                }
+                current = if let Some(get_parent) = get_parent_fn {
+                    get_parent(current)
+                } else {
+                    ptr::null_mut()
+                };
             }
             entry.push_str(&format!(",\"class_chain\":[{}]", chain.join(",")));
         }
@@ -15552,17 +16985,42 @@ unsafe fn debug_ramen_dataset_path() -> String {
         getter_results.push(entry);
     }
 
-    let ds_empty = find_class(image, to_cstr("").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
-    let ds_gallop = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
-    let ramen_gallop = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
-    let ramen_empty = find_class(image, to_cstr("").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
+    let ds_empty = find_class(
+        image,
+        to_cstr("").as_ptr(),
+        to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr(),
+    );
+    let ds_gallop = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr(),
+    );
+    let ramen_gallop = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeScenarioRamen").as_ptr(),
+    );
+    let ramen_empty = find_class(
+        image,
+        to_cstr("").as_ptr(),
+        to_cstr("WorkSingleModeScenarioRamen").as_ptr(),
+    );
     format!(
         r#"{{"ok":true,"endpoint":"ramen_dataset_path","schema_version":2,"scenario_id":{},"chara_ptr":"0x{:x}","declared_chara_class":"{}","actual_chara_class":"{}","actual_chara_namespace":"{}","getters":[{}],"dataset_class_empty_ns":{{"found":{},"ptr":"0x{:x}"}},"dataset_class_gallop_ns":{{"found":{},"ptr":"0x{:x}"}},"ramen_class_gallop":{{"found":{},"ptr":"0x{:x}"}},"ramen_class_empty":{{"found":{},"ptr":"0x{:x}"}},"native_crash_protected":false}}"#,
-        scenario_id, chara as usize, json_escape(&class_name_of(declared_chara_class)),
-        json_escape(&class_name_of(actual_chara_class)), json_escape(&ns_name_of(actual_chara_class)),
-        getter_results.join(","), !ds_empty.is_null(), ds_empty as usize,
-        !ds_gallop.is_null(), ds_gallop as usize, !ramen_gallop.is_null(), ramen_gallop as usize,
-        !ramen_empty.is_null(), ramen_empty as usize
+        scenario_id,
+        chara as usize,
+        json_escape(&class_name_of(declared_chara_class)),
+        json_escape(&class_name_of(actual_chara_class)),
+        json_escape(&ns_name_of(actual_chara_class)),
+        getter_results.join(","),
+        !ds_empty.is_null(),
+        ds_empty as usize,
+        !ds_gallop.is_null(),
+        ds_gallop as usize,
+        !ramen_gallop.is_null(),
+        ramen_gallop as usize,
+        !ramen_empty.is_null(),
+        ramen_empty as usize
     )
 }
 /// Bounded raw reader for Ramen acquisition-state lists.
@@ -15585,7 +17043,10 @@ unsafe fn ramen_raw_nested_object_array_json(array: *mut c_void) -> String {
             base.add(0x20 + index * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
         );
         if obj.is_null() || !is_readable_range(obj as usize, 0x10) {
-            items.push(format!(r#"{{"index":{},"status":"null_or_unreadable"}}"#, index));
+            items.push(format!(
+                r#"{{"index":{},"status":"null_or_unreadable"}}"#,
+                index
+            ));
             continue;
         }
         let class = get_class_from_object(obj);
@@ -15597,34 +17058,49 @@ unsafe fn ramen_raw_nested_object_array_json(array: *mut c_void) -> String {
                 if p.is_null() {
                     type_enum_to_name(type_enum)
                 } else {
-                    let f: unsafe extern "C" fn(*const c_void) -> *const c_char = std::mem::transmute(p);
+                    let f: unsafe extern "C" fn(*const c_void) -> *const c_char =
+                        std::mem::transmute(p);
                     let n = f(ty);
-                    if n.is_null() { type_enum_to_name(type_enum) } else { CStr::from_ptr(n).to_string_lossy().into_owned() }
+                    if n.is_null() {
+                        type_enum_to_name(type_enum)
+                    } else {
+                        CStr::from_ptr(n).to_string_lossy().into_owned()
+                    }
                 }
             };
             let value = if type_name.contains("ObscuredInt") {
                 read_obscured_int_at(obj, offset).to_string()
             } else {
                 match type_enum {
-                    IL2CPP_TYPE_BOOLEAN | IL2CPP_TYPE_I1 | IL2CPP_TYPE_U1 |
-                    IL2CPP_TYPE_I2 | IL2CPP_TYPE_U2 | IL2CPP_TYPE_I4 |
-                    IL2CPP_TYPE_U4 | IL2CPP_TYPE_I8 | IL2CPP_TYPE_U8 |
-                    IL2CPP_TYPE_R4 | IL2CPP_TYPE_R8 | IL2CPP_TYPE_STRING =>
-                        read_field_value_json(obj, offset, ty),
+                    IL2CPP_TYPE_BOOLEAN | IL2CPP_TYPE_I1 | IL2CPP_TYPE_U1 | IL2CPP_TYPE_I2
+                    | IL2CPP_TYPE_U2 | IL2CPP_TYPE_I4 | IL2CPP_TYPE_U4 | IL2CPP_TYPE_I8
+                    | IL2CPP_TYPE_U8 | IL2CPP_TYPE_R4 | IL2CPP_TYPE_R8 | IL2CPP_TYPE_STRING => {
+                        read_field_value_json(obj, offset, ty)
+                    }
                     _ => "null".to_string(),
                 }
             };
             raw_fields.push(format!(
                 r#"{{"raw_name":"{}","offset":{},"type":"{}","type_enum":{},"value":{}}}"#,
-                json_escape(&name), offset, json_escape(&type_name), type_enum, value,
+                json_escape(&name),
+                offset,
+                json_escape(&type_name),
+                type_enum,
+                value,
             ));
         }
         items.push(format!(
             r#"{{"index":{},"element_class":"{}","raw_fields":[{}]}}"#,
-            index, json_escape(&get_class_name_from_pointer(class)), raw_fields.join(","),
+            index,
+            json_escape(&get_class_name_from_pointer(class)),
+            raw_fields.join(","),
         ));
     }
-    format!(r#"{{"status":"ok","count":{},"items":[{}]}}"#, len, items.join(","))
+    format!(
+        r#"{{"status":"ok","count":{},"items":[{}]}}"#,
+        len,
+        items.join(",")
+    )
 }
 
 unsafe fn ramen_raw_object_list_json(
@@ -15634,16 +17110,26 @@ unsafe fn ramen_raw_object_list_json(
 ) -> String {
     let list = call_getter_on_instance(ds_class, ds_obj, getter);
     if list.is_null() {
-        return format!(r#"{{"getter":"{}","status":"null","count":0,"items":[]}}"#, getter);
+        return format!(
+            r#"{{"getter":"{}","status":"null","count":0,"items":[]}}"#,
+            getter
+        );
     }
     let base = list as *const u8;
     let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
     if len > 64 {
-        return format!(r#"{{"getter":"{}","status":"too_long","count":{},"items":[]}}"#, getter, len);
+        return format!(
+            r#"{{"getter":"{}","status":"too_long","count":{},"items":[]}}"#,
+            getter, len
+        );
     }
     let type_get_name: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
         let p = resolve_il2cpp_symbol("il2cpp_type_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
     let mut items = Vec::with_capacity(len);
     for index in 0..len {
@@ -15662,107 +17148,215 @@ unsafe fn ramen_raw_object_list_json(
             let type_name = type_get_name
                 .and_then(|f| {
                     let p = f(ty);
-                    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                    if p.is_null() {
+                        None
+                    } else {
+                        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+                    }
                 })
                 .unwrap_or_else(|| type_enum_to_name(type_enum));
             let value = if type_name.contains("ObscuredInt") {
                 read_obscured_int_at(obj, offset).to_string()
             } else {
                 match type_enum {
-                    IL2CPP_TYPE_BOOLEAN | IL2CPP_TYPE_I1 | IL2CPP_TYPE_U1 |
-                    IL2CPP_TYPE_I2 | IL2CPP_TYPE_U2 | IL2CPP_TYPE_I4 |
-                    IL2CPP_TYPE_U4 | IL2CPP_TYPE_I8 | IL2CPP_TYPE_U8 |
-                    IL2CPP_TYPE_R4 | IL2CPP_TYPE_R8 | IL2CPP_TYPE_STRING =>
-                        read_field_value_json(obj, offset, ty),
+                    IL2CPP_TYPE_BOOLEAN | IL2CPP_TYPE_I1 | IL2CPP_TYPE_U1 | IL2CPP_TYPE_I2
+                    | IL2CPP_TYPE_U2 | IL2CPP_TYPE_I4 | IL2CPP_TYPE_U4 | IL2CPP_TYPE_I8
+                    | IL2CPP_TYPE_U8 | IL2CPP_TYPE_R4 | IL2CPP_TYPE_R8 | IL2CPP_TYPE_STRING => {
+                        read_field_value_json(obj, offset, ty)
+                    }
                     29 if name.contains("FeelingTurnArray") => {
-                        let nested = std::ptr::read_unaligned::<*mut c_void>((obj as *const u8).add(offset as usize) as *const *mut c_void);
+                        let nested = std::ptr::read_unaligned::<*mut c_void>(
+                            (obj as *const u8).add(offset as usize) as *const *mut c_void,
+                        );
                         ramen_raw_nested_object_array_json(nested)
-                    },
+                    }
                     _ => "null".to_string(),
                 }
             };
             raw_fields.push(format!(
                 r#"{{"raw_name":"{}","offset":{},"type":"{}","type_enum":{},"value":{}}}"#,
-                json_escape(&name), offset, json_escape(&type_name), type_enum, value,
+                json_escape(&name),
+                offset,
+                json_escape(&type_name),
+                type_enum,
+                value,
             ));
         }
         items.push(format!(
             r#"{{"index":{},"element_class":"{}","raw_fields":[{}]}}"#,
-            index, json_escape(&get_class_name_from_pointer(class)), raw_fields.join(","),
+            index,
+            json_escape(&get_class_name_from_pointer(class)),
+            raw_fields.join(","),
         ));
     }
     format!(
         r#"{{"getter":"{}","status":"ok","count":{},"items":[{}]}}"#,
-        getter, len, items.join(","),
+        getter,
+        len,
+        items.join(","),
     )
 }
 
 unsafe fn debug_ramen_planner_state() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
     let image = get_image();
-    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
-    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
-    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
+    let wdm_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkDataManager").as_ptr(),
+    );
+    if wdm_class.is_null() {
+        return r#"{"error":"no_wdm"}"#.to_string();
+    }
     let wdm = get_singleton(wdm_class);
-    if wdm.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    if wdm.is_null() {
+        return r#"{"error":"no_wdm_inst"}"#.to_string();
+    }
+    let sm_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeData").as_ptr(),
+    );
     let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
-    if sm.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
-    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    if sm.is_null() {
+        return r#"{"error":"no_single_mode"}"#.to_string();
+    }
+    let chara_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeCharaData").as_ptr(),
+    );
     let chara = call_getter_ref(sm_class, sm, "get_Character");
-    if chara.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+    if chara.is_null() {
+        return r#"{"error":"no_chara"}"#.to_string();
+    }
     let scenario = try_get_scenario_obj(chara_class, chara, 14);
-    if scenario.is_null() { return r#"{"error":"not_in_ramen_scenario"}"#.to_string(); }
-    let scenario_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
-    if scenario_class.is_null() { return r#"{"error":"no_ramen_scenario_class"}"#.to_string(); }
+    if scenario.is_null() {
+        return r#"{"error":"not_in_ramen_scenario"}"#.to_string();
+    }
+    let scenario_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeScenarioRamen").as_ptr(),
+    );
+    if scenario_class.is_null() {
+        return r#"{"error":"no_ramen_scenario_class"}"#.to_string();
+    }
     let ds = call_getter_ref(scenario_class, scenario, "get_DataSet");
-    if ds.is_null() { return r#"{"error":"no_ramen_dataset"}"#.to_string(); }
-    let declared_dc = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
-    let dc = if declared_dc.is_null() { get_class_from_object(ds) } else { declared_dc };
+    if ds.is_null() {
+        return r#"{"error":"no_ramen_dataset"}"#.to_string();
+    }
+    let declared_dc = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr(),
+    );
+    let dc = if declared_dc.is_null() {
+        get_class_from_object(ds)
+    } else {
+        declared_dc
+    };
 
     let checkpoint_pt = call_getter_obscured_int(dc, ds, "get_CheckPointPt");
     let expected_checkpoint_pt = call_getter_obscured_int(dc, ds, "get_ExpectedCheckPointPt");
     let special_feeling_num = call_getter_obscured_int(dc, ds, "get_SpecialFeelingNum");
     let recommend_type = call_getter_obscured_int(dc, ds, "get_RecommendType");
-    let selected = inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_SelectedRegionIdArray"));
-    let all_selected = inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_AllSelectedRegionIdArray"));
-    let used_text = inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_UsedTwinkleTextIdArray"));
+    let selected =
+        inline_obscured_int_list_json(call_getter_on_instance(dc, ds, "get_SelectedRegionIdArray"));
+    let all_selected = inline_obscured_int_list_json(call_getter_on_instance(
+        dc,
+        ds,
+        "get_AllSelectedRegionIdArray",
+    ));
+    let used_text = inline_obscured_int_list_json(call_getter_on_instance(
+        dc,
+        ds,
+        "get_UsedTwinkleTextIdArray",
+    ));
 
-    let inventory_items = ramen_object_list_json(dc, ds, "get_FeelingInfoArray", &["FeelingIndex", "FeelingId"]);
+    let inventory_items = ramen_object_list_json(
+        dc,
+        ds,
+        "get_FeelingInfoArray",
+        &["FeelingIndex", "FeelingId"],
+    );
     let inventory_count = inventory_items.matches("FeelingIndex").count();
     let acquisition_gauges_raw = ramen_raw_object_list_json(dc, ds, "get_FeelingTurnInfoArray");
-    let feeling_reduce_turns_raw = ramen_raw_object_list_json(dc, ds, "get_FeelingReduceTurnInfoArray");
+    let feeling_reduce_turns_raw =
+        ramen_raw_object_list_json(dc, ds, "get_FeelingReduceTurnInfoArray");
     let reduce_base_turns_raw = ramen_raw_object_list_json(dc, ds, "get_ReduceBaseTurnInfoArray");
     let training_exec_raw = ramen_raw_object_list_json(dc, ds, "get_TrainingExecInfoArray");
-    let command_feelings = ramen_object_list_json(dc, ds, "get_CommandFeelingInfoArray", &["CommandType", "CommandId", "FeelingId"]);
-    let checkpoints = ramen_object_list_json(dc, ds, "get_CheckPointInfoArray", &["CheckPointType", "ResultState"]);
-    let active_effects = ramen_object_list_json(dc, ds, "get_ActiveEffectArray", &["EffectCategory", "EffectId", "EffectValue"]);
+    let command_feelings = ramen_object_list_json(
+        dc,
+        ds,
+        "get_CommandFeelingInfoArray",
+        &["CommandType", "CommandId", "FeelingId"],
+    );
+    let checkpoints = ramen_object_list_json(
+        dc,
+        ds,
+        "get_CheckPointInfoArray",
+        &["CheckPointType", "ResultState"],
+    );
+    let active_effects = ramen_object_list_json(
+        dc,
+        ds,
+        "get_ActiveEffectArray",
+        &["EffectCategory", "EffectId", "EffectValue"],
+    );
 
     let last = call_getter_on_instance(dc, ds, "get_LastTastingInfo");
     let last_tasting = if last.is_null() {
         "null".to_string()
     } else {
-        format!(r#"{{"feeling_id_1_num":{},"feeling_id_2_num":{},"feeling_id_3_num":{},"region_id":{}}}"#,
+        format!(
+            r#"{{"feeling_id_1_num":{},"feeling_id_2_num":{},"feeling_id_3_num":{},"region_id":{}}}"#,
             read_obscured_int_from_obj(last, "get_FeelingId1Num"),
             read_obscured_int_from_obj(last, "get_FeelingId2Num"),
             read_obscured_int_from_obj(last, "get_FeelingId3Num"),
-            read_obscured_int_from_obj(last, "get_RegionId"))
+            read_obscured_int_from_obj(last, "get_RegionId")
+        )
     };
     let uraf = call_getter_on_instance(dc, ds, "get_UrafEffectInfo");
-    let uraf_effect = if uraf.is_null() { "null".to_string() } else {
-        format!(r#"{{"type":{},"state":{}}}"#,
+    let uraf_effect = if uraf.is_null() {
+        "null".to_string()
+    } else {
+        format!(
+            r#"{{"type":{},"state":{}}}"#,
             read_obscured_int_from_obj(uraf, "get_UrafEffectType"),
-            read_obscured_int_from_obj(uraf, "get_UrafEffectState"))
+            read_obscured_int_from_obj(uraf, "get_UrafEffectState")
+        )
     };
 
-    format!(r#"{{"schema_version":2,"source":"runtime_observation","scenario_id":14,"checkpoint_pt":{},"expected_checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"selected_region_ids":{},"all_selected_region_ids":{},"inventory":{{"count":{},"max_count":10,"items":{}}},"acquisition_gauges_raw":{},"feeling_reduce_turns_raw":{},"reduce_base_turns_raw":{},"training_exec_raw":{},"acquisition_result_raw":null,"command_feelings":{},"last_tasting":{},"checkpoints":{},"active_effects":{},"uraf_effect":{},"used_twinkle_text_ids":{},"is_gauge_gained":{},"is_uraf_effect_select_event_checked":{},"is_not_gain_special_feeling":{},"unsafe_gauge_dictionary_skipped":true,"unsafe_get_gain_count_skipped":true,"raw_null_value_means_not_safely_decoded":true,"recipe_rules_included":false}}"#,
-        checkpoint_pt, expected_checkpoint_pt, special_feeling_num, recommend_type,
-        selected, all_selected, inventory_count, inventory_items,
-        acquisition_gauges_raw, feeling_reduce_turns_raw, reduce_base_turns_raw, training_exec_raw,
-        command_feelings, last_tasting, checkpoints, active_effects, uraf_effect, used_text,
+    format!(
+        r#"{{"schema_version":2,"source":"runtime_observation","scenario_id":14,"checkpoint_pt":{},"expected_checkpoint_pt":{},"special_feeling_num":{},"recommend_type":{},"selected_region_ids":{},"all_selected_region_ids":{},"inventory":{{"count":{},"max_count":10,"items":{}}},"acquisition_gauges_raw":{},"feeling_reduce_turns_raw":{},"reduce_base_turns_raw":{},"training_exec_raw":{},"acquisition_result_raw":null,"command_feelings":{},"last_tasting":{},"checkpoints":{},"active_effects":{},"uraf_effect":{},"used_twinkle_text_ids":{},"is_gauge_gained":{},"is_uraf_effect_select_event_checked":{},"is_not_gain_special_feeling":{},"unsafe_gauge_dictionary_skipped":true,"unsafe_get_gain_count_skipped":true,"raw_null_value_means_not_safely_decoded":true,"recipe_rules_included":false}}"#,
+        checkpoint_pt,
+        expected_checkpoint_pt,
+        special_feeling_num,
+        recommend_type,
+        selected,
+        all_selected,
+        inventory_count,
+        inventory_items,
+        acquisition_gauges_raw,
+        feeling_reduce_turns_raw,
+        reduce_base_turns_raw,
+        training_exec_raw,
+        command_feelings,
+        last_tasting,
+        checkpoints,
+        active_effects,
+        uraf_effect,
+        used_text,
         call_getter_bool(dc, ds, "get_IsGaugeGained"),
         call_getter_bool(dc, ds, "get_IsUrafEffectSelectEventChecked"),
-        call_getter_bool(dc, ds, "get_IsNotGainSpecialFeeling"))
+        call_getter_bool(dc, ds, "get_IsNotGainSpecialFeeling")
+    )
 }
 
 unsafe fn debug_ramenfields() -> String {
@@ -15921,10 +17515,14 @@ unsafe fn debug_ramenfields() -> String {
 /// executable bytes after validating /proc/self/maps.
 /// ★ v3.24.30: vector variant of inline_obscured_int_list_json for arithmetic.
 unsafe fn inline_obscured_int_list_vec(list_obj: *const c_void) -> Vec<i32> {
-    if list_obj.is_null() { return Vec::new(); }
+    if list_obj.is_null() {
+        return Vec::new();
+    }
     let base = list_obj as *const u8;
     let len = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if len > 200 { return Vec::new(); }
+    if len > 200 {
+        return Vec::new();
+    }
     let mut values = Vec::with_capacity(len);
     for i in 0..len {
         let elem = base.add(IL2CPP_LIST_ITEMS_OFF + i * OBSCURED_INT_SIZE);
@@ -15939,10 +17537,14 @@ unsafe fn inline_obscured_int_list_vec(list_obj: *const c_void) -> Vec<i32> {
 /// beyond MethodInfo name pointers.
 unsafe fn enum_method_names_containing(class: *mut c_void, needle: &str) -> Vec<String> {
     let mut names = Vec::new();
-    if class.is_null() { return names; }
+    if class.is_null() {
+        return names;
+    }
     let get_methods_ptr = resolve_il2cpp_symbol("il2cpp_class_get_methods");
     let get_name_ptr = resolve_il2cpp_symbol("il2cpp_method_get_name");
-    if get_methods_ptr.is_null() || get_name_ptr.is_null() { return names; }
+    if get_methods_ptr.is_null() || get_name_ptr.is_null() {
+        return names;
+    }
     let get_methods: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void =
         std::mem::transmute(get_methods_ptr);
     let get_name: unsafe extern "C" fn(*const c_void) -> *const c_char =
@@ -15950,12 +17552,20 @@ unsafe fn enum_method_names_containing(class: *mut c_void, needle: &str) -> Vec<
     let mut iter: *mut c_void = ptr::null_mut();
     loop {
         let m = get_methods(class, &mut iter);
-        if m.is_null() { break; }
+        if m.is_null() {
+            break;
+        }
         let name_ptr = get_name(m);
-        if name_ptr.is_null() { continue; }
+        if name_ptr.is_null() {
+            continue;
+        }
         let name = CStr::from_ptr(name_ptr).to_string_lossy().to_string();
-        if name.contains(needle) { names.push(name); }
-        if names.len() >= 64 { break; }
+        if name.contains(needle) {
+            names.push(name);
+        }
+        if names.len() >= 64 {
+            break;
+        }
     }
     names
 }
@@ -15969,7 +17579,10 @@ unsafe fn enum_method_names_containing(class: *mut c_void, needle: &str) -> Vec<
 /// ★ v3.24.32: callers MUST check `active_round_turn == total_turn` before
 /// presenting the pool as currently selectable — between selection rounds
 /// the pool is stale ("leftover from the last phase"), not selectable now.
-fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Option<i64>, Option<i64>, Vec<i64>, String) {
+fn ramen_derive_selectable_regions(
+    total_turn: i64,
+    all_selected: &[i32],
+) -> (Option<i64>, Option<i64>, Vec<i64>, String) {
     let mut round_types: Vec<(i64, i64)> = Vec::new(); // (turn, region_select_type)
     let mut pools: Vec<(i64, i64)> = Vec::new(); // (region_select_type, region_id)
     let mdb_path = match find_mdb_path() {
@@ -15980,9 +17593,13 @@ fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Op
         Ok(c) => c,
         Err(e) => return (None, None, Vec::new(), format!("error: mdb_open: {}", e)),
     };
-    if let Ok(mut stmt) = conn.prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn") {
+    if let Ok(mut stmt) = conn
+        .prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn")
+    {
         if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
-            for row in rows.flatten() { round_types.push(row); }
+            for row in rows.flatten() {
+                round_types.push(row);
+            }
         }
     }
     if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT region_select_type, region_id FROM single_mode_14_region_feeling ORDER BY region_select_type, region_id") {
@@ -15990,18 +17607,29 @@ fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Op
             for row in rows.flatten() { pools.push(row); }
         }
     }
-    if pools.is_empty() { return (None, None, Vec::new(), "error: empty_region_pools".to_string()); }
+    if pools.is_empty() {
+        return (
+            None,
+            None,
+            Vec::new(),
+            "error: empty_region_pools".to_string(),
+        );
+    }
     let mut active_type: Option<i64> = None;
     let mut active_turn: Option<i64> = None;
     for (t, ty) in &round_types {
-        if *t <= total_turn { active_type = Some(*ty); active_turn = Some(*t); }
+        if *t <= total_turn {
+            active_type = Some(*ty);
+            active_turn = Some(*t);
+        }
     }
     if active_type.is_none() {
         active_type = round_types.first().map(|(_, ty)| *ty);
         active_turn = round_types.first().map(|(t, _)| *t);
     }
     let candidates: Vec<i64> = match active_type {
-        Some(ty) => pools.iter()
+        Some(ty) => pools
+            .iter()
             .filter(|(pty, _)| *pty == ty)
             .map(|(_, rid)| *rid)
             .filter(|rid| !all_selected.contains(&(*rid as i32)))
@@ -16024,63 +17652,149 @@ fn ramen_derive_selectable_regions(total_turn: i64, all_selected: &[i32]) -> (Op
 /// are only enumerated by name so the existence of an official getter can be
 /// confirmed on-device before any future direct read.
 unsafe fn debug_ramen_region_select() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
     let image = get_image();
-    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
-    let wdm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkDataManager").as_ptr());
-    if wdm_class.is_null() { return r#"{"error":"no_wdm"}"#.to_string(); }
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
+    let wdm_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkDataManager").as_ptr(),
+    );
+    if wdm_class.is_null() {
+        return r#"{"error":"no_wdm"}"#.to_string();
+    }
     let wdm = get_singleton(wdm_class);
-    if wdm.is_null() { return r#"{"error":"no_wdm_inst"}"#.to_string(); }
-    let sm_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeData").as_ptr());
+    if wdm.is_null() {
+        return r#"{"error":"no_wdm_inst"}"#.to_string();
+    }
+    let sm_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeData").as_ptr(),
+    );
     let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
-    if sm.is_null() { return r#"{"error":"no_single_mode"}"#.to_string(); }
-    let chara_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeCharaData").as_ptr());
+    if sm.is_null() {
+        return r#"{"error":"no_single_mode"}"#.to_string();
+    }
+    let chara_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeCharaData").as_ptr(),
+    );
     let chara = call_getter_ref(sm_class, sm, "get_Character");
-    if chara.is_null() { return r#"{"error":"no_chara"}"#.to_string(); }
+    if chara.is_null() {
+        return r#"{"error":"no_chara"}"#.to_string();
+    }
     let scenario = try_get_scenario_obj(chara_class, chara, 14);
-    if scenario.is_null() { return r#"{"error":"not_in_ramen_scenario"}"#.to_string(); }
-    let scenario_class = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamen").as_ptr());
-    if scenario_class.is_null() { return r#"{"error":"no_ramen_scenario_class"}"#.to_string(); }
+    if scenario.is_null() {
+        return r#"{"error":"not_in_ramen_scenario"}"#.to_string();
+    }
+    let scenario_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeScenarioRamen").as_ptr(),
+    );
+    if scenario_class.is_null() {
+        return r#"{"error":"no_ramen_scenario_class"}"#.to_string();
+    }
     let ds = call_getter_ref(scenario_class, scenario, "get_DataSet");
-    if ds.is_null() { return r#"{"error":"no_ramen_dataset"}"#.to_string(); }
-    let declared_dc = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr());
-    let dc = if declared_dc.is_null() { get_class_from_object(ds) } else { declared_dc };
+    if ds.is_null() {
+        return r#"{"error":"no_ramen_dataset"}"#.to_string();
+    }
+    let declared_dc = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeScenarioRamenDataSet").as_ptr(),
+    );
+    let dc = if declared_dc.is_null() {
+        get_class_from_object(ds)
+    } else {
+        declared_dc
+    };
 
     // Decrypt and expose raw only. Do not compare it with MDB turn columns yet.
     let raw_total_turn_num = read_obscured_int_at(sm as *const c_void, 68);
-    let selected_vec = inline_obscured_int_list_vec(call_getter_on_instance(dc, ds, "get_SelectedRegionIdArray"));
-    let all_selected_vec = inline_obscured_int_list_vec(call_getter_on_instance(dc, ds, "get_AllSelectedRegionIdArray"));
+    let selected_vec =
+        inline_obscured_int_list_vec(call_getter_on_instance(dc, ds, "get_SelectedRegionIdArray"));
+    let all_selected_vec = inline_obscured_int_list_vec(call_getter_on_instance(
+        dc,
+        ds,
+        "get_AllSelectedRegionIdArray",
+    ));
     let region_methods = enum_method_names_containing(dc, "Region");
     let selectable_getter_found = region_methods.iter().any(|m| m.contains("Selectable"));
     let mut rounds_json = "[]".to_string();
     if let Some(mdb_path) = find_mdb_path() {
         if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-            if let Ok(mut stmt) = conn.prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn") {
-                if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn",
+            ) {
+                if let Ok(rows) =
+                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+                {
                     let mut rounds: Vec<String> = Vec::new();
                     for row in rows.flatten() {
-                        rounds.push(format!(r#"{{"region_select_type":{},"turn":{}}}"#, row.1, row.0));
+                        rounds.push(format!(
+                            r#"{{"region_select_type":{},"turn":{}}}"#,
+                            row.1, row.0
+                        ));
                     }
                     rounds_json = format!("[{}]", rounds.join(","));
                 }
             }
         }
     }
-    let selected_json = format!("[{}]", selected_vec.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
-    let all_selected_json = format!("[{}]", all_selected_vec.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
-    let methods_json = format!("[{}]", region_methods.iter().map(|m| format!("\"{}\"", json_escape(m))).collect::<Vec<_>>().join(","));
+    let selected_json = format!(
+        "[{}]",
+        selected_vec
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let all_selected_json = format!(
+        "[{}]",
+        all_selected_vec
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let methods_json = format!(
+        "[{}]",
+        region_methods
+            .iter()
+            .map(|m| format!("\"{}\"", json_escape(m)))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
 
-    format!(r#"{{"schema_version":2,"source":"runtime_observation+mdb_records","plugin_version":"{}","raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"unverified","runtime":{{"selected_region_ids":{},"all_selected_region_ids":{}}},"region_select_rounds_mdb":{},"active_region_select_type":null,"active_round_turn":null,"is_selection_turn":null,"candidate_region_ids_derived":[],"derivation_status":"disabled_until_turn_mapping_verified","runtime_candidate_list_status":"unknown_no_confirmed_runtime_getter","runtime_selectable_getter_found":{},"runtime_region_method_names":{}}}"#,
-        PLUGIN_VERSION, raw_total_turn_num, selected_json, all_selected_json,
-        rounds_json, selectable_getter_found, methods_json)
+    format!(
+        r#"{{"schema_version":2,"source":"runtime_observation+mdb_records","plugin_version":"{}","raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"unverified","runtime":{{"selected_region_ids":{},"all_selected_region_ids":{}}},"region_select_rounds_mdb":{},"active_region_select_type":null,"active_round_turn":null,"is_selection_turn":null,"candidate_region_ids_derived":[],"derivation_status":"disabled_until_turn_mapping_verified","runtime_candidate_list_status":"unknown_no_confirmed_runtime_getter","runtime_selectable_getter_found":{},"runtime_region_method_names":{}}}"#,
+        PLUGIN_VERSION,
+        raw_total_turn_num,
+        selected_json,
+        all_selected_json,
+        rounds_json,
+        selectable_getter_found,
+        methods_json
+    )
 }
 
 /// v3.24.33: metadata-only event-choice reward target inventory.
 /// Fixed allow-list; no runtime object reads, method calls, hooks, or mutation.
 unsafe fn debug_event_reward_targets() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
     let image = get_image();
-    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
 
     let get_methods_ptr = resolve_il2cpp_symbol("il2cpp_class_get_methods");
     let get_name_ptr = resolve_il2cpp_symbol("il2cpp_method_get_name");
@@ -16097,9 +17811,17 @@ unsafe fn debug_event_reward_targets() -> String {
     let get_param_count: unsafe extern "C" fn(*const c_void) -> u32 =
         std::mem::transmute(get_param_count_ptr);
     let get_return_type: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> =
-        if get_return_type_ptr.is_null() { None } else { Some(std::mem::transmute(get_return_type_ptr)) };
+        if get_return_type_ptr.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(get_return_type_ptr))
+        };
     let type_get_name: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> =
-        if type_get_name_ptr.is_null() { None } else { Some(std::mem::transmute(type_get_name_ptr)) };
+        if type_get_name_ptr.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(type_get_name_ptr))
+        };
 
     const TARGETS: &[&str] = &[
         "SingleModeGetChoiceRewardResponse",
@@ -16124,8 +17846,18 @@ unsafe fn debug_event_reward_targets() -> String {
         "StoryChoiceController",
     ];
     const KEYWORDS: &[&str] = &[
-        "Choice", "Reward", "Branch", "Gain", "Effect", "Param",
-        "Motivation", "Vital", "Hp", "Skill", "Hint", "Status",
+        "Choice",
+        "Reward",
+        "Branch",
+        "Gain",
+        "Effect",
+        "Param",
+        "Motivation",
+        "Vital",
+        "Hp",
+        "Skill",
+        "Hint",
+        "Status",
     ];
 
     let mut classes = Vec::with_capacity(TARGETS.len());
@@ -16142,25 +17874,39 @@ unsafe fn debug_event_reward_targets() -> String {
         let mut iter: *mut c_void = ptr::null_mut();
         loop {
             let method = get_methods(class, &mut iter);
-            if method.is_null() || methods.len() >= 64 { break; }
+            if method.is_null() || methods.len() >= 64 {
+                break;
+            }
             let name_ptr = get_name(method);
-            if name_ptr.is_null() { continue; }
+            if name_ptr.is_null() {
+                continue;
+            }
             let name = CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
-            if !KEYWORDS.iter().any(|word| name.contains(word)) { continue; }
+            if !KEYWORDS.iter().any(|word| name.contains(word)) {
+                continue;
+            }
             let param_count = get_param_count(method).min(32);
             let return_type = get_return_type
                 .and_then(|f| {
                     let ty = f(method);
-                    if ty.is_null() { return None; }
+                    if ty.is_null() {
+                        return None;
+                    }
                     type_get_name.and_then(|name_fn| {
                         let p = name_fn(ty);
-                        if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                        if p.is_null() {
+                            None
+                        } else {
+                            Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+                        }
                     })
                 })
                 .unwrap_or_else(|| "unknown".to_string());
             methods.push(format!(
                 r#"{{"name":"{}","param_count":{},"return_type":"{}"}}"#,
-                json_escape(&name), param_count, json_escape(&return_type)
+                json_escape(&name),
+                param_count,
+                json_escape(&return_type)
             ));
         }
         classes.push(format!(
@@ -16170,7 +17916,10 @@ unsafe fn debug_event_reward_targets() -> String {
     }
     format!(
         r#"{{"ok":true,"schema_version":1,"plugin_version":"{}","source":"current_runtime_il2cpp_metadata","read_only":true,"runtime_object_reads":false,"runtime_invokes":false,"hooks_installed":false,"target_count":{},"found_count":{},"method_cap_per_class":64,"classes":[{}]}}"#,
-        PLUGIN_VERSION, TARGETS.len(), found_count, classes.join(",")
+        PLUGIN_VERSION,
+        TARGETS.len(),
+        found_count,
+        classes.join(",")
     )
 }
 
@@ -16199,16 +17948,36 @@ unsafe fn debug_ramen_formula_targets() -> String {
     let get_param_count: unsafe extern "C" fn(*const c_void) -> u32 =
         std::mem::transmute(get_param_count_ptr);
     let get_return_type: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> =
-        if get_return_type_ptr.is_null() { None } else { Some(std::mem::transmute(get_return_type_ptr)) };
+        if get_return_type_ptr.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(get_return_type_ptr))
+        };
     let type_get_name: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> =
-        if type_get_name_ptr.is_null() { None } else { Some(std::mem::transmute(type_get_name_ptr)) };
+        if type_get_name_ptr.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(type_get_name_ptr))
+        };
 
     let targets: [(&str, &str, u32); 5] = [
         ("ServingPracticeRegionEffectBonusVO", "Apply", 1),
-        ("ServingPracticeRegionEffectRepository", "GetWithCheckPointPt", 2),
+        (
+            "ServingPracticeRegionEffectRepository",
+            "GetWithCheckPointPt",
+            2,
+        ),
         ("ServingPracticeEffectVO", "CreateRegionEffect", 4),
-        ("ServingPracticeEffectRepositoryUtil", "GetTrainingMatchingObtain", 1),
-        ("ServingPracticeTransactionEntity", "IsBonusEffectTraining", 1),
+        (
+            "ServingPracticeEffectRepositoryUtil",
+            "GetTrainingMatchingObtain",
+            1,
+        ),
+        (
+            "ServingPracticeTransactionEntity",
+            "IsBonusEffectTraining",
+            1,
+        ),
     ];
     let maps = match std::fs::read_to_string("/proc/self/maps") {
         Ok(v) => v,
@@ -16278,13 +18047,26 @@ unsafe fn debug_ramen_formula_targets() -> String {
                 Some(v) => v,
                 None => continue,
             };
-            let start = match usize::from_str_radix(start_text, 16) { Ok(v) => v, Err(_) => continue };
-            let end = match usize::from_str_radix(end_text, 16) { Ok(v) => v, Err(_) => continue };
+            let start = match usize::from_str_radix(start_text, 16) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let end = match usize::from_str_radix(end_text, 16) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
             if method_addr < start || method_addr >= end {
                 continue;
             }
-            let file_offset = match usize::from_str_radix(parts[2], 16) { Ok(v) => v, Err(_) => continue };
-            let path = if parts.len() > 5 { parts[5..].join(" ") } else { String::new() };
+            let file_offset = match usize::from_str_radix(parts[2], 16) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let path = if parts.len() > 5 {
+                parts[5..].join(" ")
+            } else {
+                String::new()
+            };
             mapping = Some((start, end, file_offset, parts[1].to_string(), path));
             break;
         }
@@ -16318,14 +18100,23 @@ unsafe fn debug_ramen_formula_targets() -> String {
             continue;
         }
         let bytes = std::slice::from_raw_parts(method_addr as *const u8, byte_count);
-        let first_bytes_hex = bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let first_bytes_hex = bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
         let return_type_name = get_return_type
             .and_then(|f| {
                 let t = f(method_info);
-                if t.is_null() { return None; }
+                if t.is_null() {
+                    return None;
+                }
                 type_get_name.and_then(|name_fn| {
                     let p = name_fn(t);
-                    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                    if p.is_null() {
+                        None
+                    } else {
+                        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+                    }
                 })
             })
             .unwrap_or_else(|| "unknown".to_string());
@@ -16537,9 +18328,13 @@ unsafe fn debug_il2cpp_collection(collection: *mut c_void, max_items: usize) -> 
 /// support-card position roster. Non-matches remain unknown_nondeck; this
 /// endpoint does not infer that every non-deck participant is a scenario NPC.
 unsafe fn debug_ramen_participants_inner() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
     let image = get_image();
-    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
     let wdm_class = find_class_by_short_name(image, "WorkDataManager");
     let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
     let home_class = find_class_by_short_name(image, "WorkSingleModeHomeInfoData");
@@ -16548,68 +18343,102 @@ unsafe fn debug_ramen_participants_inner() -> String {
         return r#"{"error":"required_class_null"}"#.to_string();
     }
     let wdm = get_singleton(wdm_class);
-    if wdm.is_null() { return r#"{"error":"wdm_null"}"#.to_string(); }
+    if wdm.is_null() {
+        return r#"{"error":"wdm_null"}"#.to_string();
+    }
     let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
-    if sm.is_null() { return r#"{"error":"sm_null"}"#.to_string(); }
+    if sm.is_null() {
+        return r#"{"error":"sm_null"}"#.to_string();
+    }
     let home = call_getter_on_instance(sm_class, sm, "get_HomeInfoData");
     let chara = call_getter_ref(sm_class, sm, "get_Character");
-    if home.is_null() || chara.is_null() { return r#"{"error":"home_or_chara_null"}"#.to_string(); }
+    if home.is_null() || chara.is_null() {
+        return r#"{"error":"home_or_chara_null"}"#.to_string();
+    }
 
     let supports = call_getter_on_instance(chara_class, chara, "get_EquipSupportCardArray");
     let mut deck: Vec<(i32, i32)> = Vec::new();
     if !supports.is_null() {
         let base = supports as *const u8;
-        let count = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        let count =
+            std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
         if count <= 6 {
             for i in 0..count {
                 let obj = std::ptr::read_unaligned::<*mut c_void>(
-                    base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+                    base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
+                        as *const *mut c_void,
                 );
-                if obj.is_null() { continue; }
+                if obj.is_null() {
+                    continue;
+                }
                 let position = read_obscured_int_at(obj, 0x10);
                 let card_id = read_obscured_int_at(obj, 0x24);
-                if (1..=6).contains(&position) && card_id > 0 { deck.push((position, card_id)); }
+                if (1..=6).contains(&position) && card_id > 0 {
+                    deck.push((position, card_id));
+                }
             }
         }
     }
     deck.sort_by_key(|entry| entry.0);
-    let deck_json = deck.iter().map(|(position, card_id)| format!(
-        r#"{{"position":{},"support_card_id":{}}}"#, position, card_id,
-    )).collect::<Vec<_>>().join(",");
+    let deck_json = deck
+        .iter()
+        .map(|(position, card_id)| {
+            format!(
+                r#"{{"position":{},"support_card_id":{}}}"#,
+                position, card_id,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
 
     let commands = read_field_value(home_class, home, "CommandInfoArray");
-    if commands.is_null() { return r#"{"error":"command_info_array_null"}"#.to_string(); }
+    if commands.is_null() {
+        return r#"{"error":"command_info_array_null"}"#.to_string();
+    }
     let base = commands as *const u8;
     let count = std::ptr::read_unaligned::<usize>(base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if count > 16 { return format!(r#"{{"error":"command_count_too_large","count":{}}}"#, count); }
+    if count > 16 {
+        return format!(r#"{{"error":"command_count_too_large","count":{}}}"#, count);
+    }
     let mut command_json = Vec::new();
     for i in 0..count {
         let command = std::ptr::read_unaligned::<*mut c_void>(
             base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
         );
-        if command.is_null() { continue; }
+        if command.is_null() {
+            continue;
+        }
         let command_id = read_obscured_int_at(command, 36);
-        if !matches!(command_id, 101 | 102 | 103 | 105 | 106) { continue; }
+        if !matches!(command_id, 101 | 102 | 103 | 105 | 106) {
+            continue;
+        }
         let partners = read_ptr_at(command, TRAINING_PARTNER_ARRAY_OFF);
         let mut items = Vec::new();
         let mut deck_count = 0usize;
         let mut unknown_count = 0usize;
         if !partners.is_null() {
             let pbase = partners as *const u8;
-            let pcount = std::ptr::read_unaligned::<usize>(pbase.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+            let pcount =
+                std::ptr::read_unaligned::<usize>(pbase.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
             if pcount <= 16 {
                 for slot in 0..pcount {
                     let value = pbase.add(IL2CPP_LIST_ITEMS_OFF + slot * OBSCURED_INT_SIZE);
                     let partner_id = read_obscured_int_at(value as *const c_void, 0);
-                    if partner_id <= 0 { continue; }
-                    if let Some((position, card_id)) = deck.iter().find(|(position, _)| *position == partner_id) {
+                    if partner_id <= 0 {
+                        continue;
+                    }
+                    if let Some((position, card_id)) =
+                        deck.iter().find(|(position, _)| *position == partner_id)
+                    {
                         deck_count += 1;
                         items.push(format!(r#"{{"slot":{},"partner_id":{},"classification":"deck_support","deck_position":{},"support_card_id":{}}}"#,
                             slot, partner_id, position, card_id));
                     } else {
                         unknown_count += 1;
-                        items.push(format!(r#"{{"slot":{},"partner_id":{},"classification":"unknown_nondeck"}}"#,
-                            slot, partner_id));
+                        items.push(format!(
+                            r#"{{"slot":{},"partner_id":{},"classification":"unknown_nondeck"}}"#,
+                            slot, partner_id
+                        ));
                     }
                 }
             }
@@ -16619,8 +18448,11 @@ unsafe fn debug_ramen_participants_inner() -> String {
             command_id, items.len(), deck_count, unknown_count, items.join(","),
         ));
     }
-    format!(r#"{{"schema_version":1,"source":"runtime_observation","read_only":true,"participant_layer":"final_training_partner_array","deck_roster":[{}],"commands":[{}],"classification_rule":"partner_id matched against equipped support position only","nondeck_is_scenario_npc_confirmed":false,"assigned_before_capacity_raw":null,"pointers_persisted":false}}"#,
-        deck_json, command_json.join(","))
+    format!(
+        r#"{{"schema_version":1,"source":"runtime_observation","read_only":true,"participant_layer":"final_training_partner_array","deck_roster":[{}],"commands":[{}],"classification_rule":"partner_id matched against equipped support position only","nondeck_is_scenario_npc_confirmed":false,"assigned_before_capacity_raw":null,"pointers_persisted":false}}"#,
+        deck_json,
+        command_json.join(",")
+    )
 }
 
 fn debug_ramen_participants() -> String {
@@ -16633,7 +18465,8 @@ fn debug_ramen_participants() -> String {
     SIGSEGV_RECOVERY.store(true, Ordering::Relaxed);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         debug_ramen_participants_inner()
-    })).unwrap_or_else(|_| r#"{"error":"panic_caught"}"#.to_string());
+    }))
+    .unwrap_or_else(|_| r#"{"error":"panic_caught"}"#.to_string());
     SIGSEGV_RECOVERY.store(false, Ordering::Relaxed);
     result
 }
@@ -17277,13 +19110,28 @@ unsafe fn read_win_saddle_analysis() -> String {
                 let get_method_fn = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
                 let invoke_fn = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
                 if !get_method_fn.is_null() && !invoke_fn.is_null() {
-                    type FnGetMethod = unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *mut c_void;
-                    type FnInvoke = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
+                    type FnGetMethod =
+                        unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *mut c_void;
+                    type FnInvoke = unsafe extern "C" fn(
+                        *mut c_void,
+                        *mut c_void,
+                        *mut c_void,
+                        *mut c_void,
+                    ) -> *mut c_void;
                     let f: FnGetMethod = std::mem::transmute(get_method_fn);
                     let inv: FnInvoke = std::mem::transmute(invoke_fn);
-                    let m = f(saddle_class, to_cstr("IsRelationBonusWinSaddle").as_ptr(), 0);
+                    let m = f(
+                        saddle_class,
+                        to_cstr("IsRelationBonusWinSaddle").as_ptr(),
+                        0,
+                    );
                     if !m.is_null() {
-                        let ret = inv(m, elem_ptr as *mut c_void, std::ptr::null_mut(), std::ptr::null_mut());
+                        let ret = inv(
+                            m,
+                            elem_ptr as *mut c_void,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        );
                         ret as i32 != 0
                     } else {
                         false
@@ -17300,13 +19148,24 @@ unsafe fn read_win_saddle_analysis() -> String {
                 let get_method_fn = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
                 let invoke_fn = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
                 if !get_method_fn.is_null() && !invoke_fn.is_null() {
-                    type FnGetMethod = unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *mut c_void;
-                    type FnInvoke = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
+                    type FnGetMethod =
+                        unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *mut c_void;
+                    type FnInvoke = unsafe extern "C" fn(
+                        *mut c_void,
+                        *mut c_void,
+                        *mut c_void,
+                        *mut c_void,
+                    ) -> *mut c_void;
                     let f: FnGetMethod = std::mem::transmute(get_method_fn);
                     let inv: FnInvoke = std::mem::transmute(invoke_fn);
                     let m = f(saddle_class, to_cstr("GetRelationPoint").as_ptr(), 0);
                     if !m.is_null() {
-                        let ret = inv(m, elem_ptr as *mut c_void, std::ptr::null_mut(), std::ptr::null_mut());
+                        let ret = inv(
+                            m,
+                            elem_ptr as *mut c_void,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        );
                         if !ret.is_null() {
                             std::ptr::read_unaligned::<i32>(ret as *const i32)
                         } else {
@@ -17393,8 +19252,13 @@ unsafe fn read_win_saddle_analysis() -> String {
                         continue;
                     }
                     let name = if !saddle_class.is_null() {
-                        let n = call_getter_string(saddle_class, elem_ptr as *mut c_void, "get_Name");
-                        if n.is_null() { String::new() } else { read_il2cpp_string(n) }
+                        let n =
+                            call_getter_string(saddle_class, elem_ptr as *mut c_void, "get_Name");
+                        if n.is_null() {
+                            String::new()
+                        } else {
+                            read_il2cpp_string(n)
+                        }
                     } else {
                         String::new()
                     };
@@ -18494,11 +20358,17 @@ unsafe fn debug_paramsincdec() -> String {
 /// 一键查找训练种子：WorkDataManager → WorkSingleModeData → _fixedTurnCharaSeed
 /// 自动完成 /singletons + read_mem(offset 96) + read_mem(offset 408) 的手动3步流程
 unsafe fn debug_training_seed() -> String {
-    if API.is_null() { return r#"{"error":"api_null"}"#.to_string(); }
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
     let image = get_image();
-    if image.is_null() { return r#"{"error":"image_null"}"#.to_string(); }
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
     let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
-    if wdm_cls.is_null() { return r#"{"error":"wdm_class_not_found"}"#.to_string(); }
+    if wdm_cls.is_null() {
+        return r#"{"error":"wdm_class_not_found"}"#.to_string();
+    }
     let wdm_inst = get_singleton(wdm_cls);
     if wdm_inst.is_null() {
         return r#"{"error":"wdm_null","hint":"game_not_loaded"}"#.to_string();
@@ -18536,21 +20406,37 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
     }));
 }
 unsafe fn read_training_context_inner() -> (i32, i32) {
-    if API.is_null() { return (-1, -1); }
+    if API.is_null() {
+        return (-1, -1);
+    }
     let image = get_image();
-    if image.is_null() { return (-1, -1); }
+    if image.is_null() {
+        return (-1, -1);
+    }
     let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
-    if wdm_cls.is_null() { return (-1, -1); }
+    if wdm_cls.is_null() {
+        return (-1, -1);
+    }
     let wdm_inst = get_singleton(wdm_cls);
-    if wdm_inst.is_null() { return (-1, -1); }
+    if wdm_inst.is_null() {
+        return (-1, -1);
+    }
     let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
-    if sm_ptr == 0 { return (-1, -1); }
+    if sm_ptr == 0 {
+        return (-1, -1);
+    }
     // WorkSingleModeData._totalTurnNum is an ObscuredInt, not a plain i32.
     let turn = read_obscured_int_at(sm_ptr as *const c_void, 68);
     let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
-    if sm_class.is_null() { return (turn, -1); }
+    if sm_class.is_null() {
+        return (turn, -1);
+    }
     let chara = call_getter_on_instance(sm_class, sm_ptr as *const c_void, "get_Character");
-    let scenario_id = if chara.is_null() { -1 } else { read_obscured_int_at(chara, 568) };
+    let scenario_id = if chara.is_null() {
+        -1
+    } else {
+        read_obscured_int_at(chara, 568)
+    };
     (turn, scenario_id)
 }
 
@@ -18700,7 +20586,9 @@ fn start_auto_update_thread() {
         // files/ura_auto_update.flag to enable; /update stays manual.
         let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
         let pkg = String::from_utf8_lossy(&pkg_raw)
-            .trim_matches(char::from(0)).trim().to_string();
+            .trim_matches(char::from(0))
+            .trim()
+            .to_string();
         let flag = format!("/data/user/0/{}/files/ura_auto_update.flag", pkg);
         if !std::path::Path::new(&flag).exists() {
             if let Ok(mut status) = AUTO_UPDATE_STATUS.lock() {
@@ -19506,7 +21394,11 @@ unsafe fn il2cpp_list_methods(class_name: &str) -> String {
 
     let type_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
         let p = resolve_il2cpp_symbol("il2cpp_type_get_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute(p))
+        }
     };
 
     // il2cpp_method_get_flags 获取方法标志
@@ -19588,7 +21480,11 @@ unsafe fn il2cpp_list_methods(class_name: &str) -> String {
             type_get_name_fn
                 .and_then(|f| {
                     let p = f(return_type_ptr);
-                    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+                    if p.is_null() {
+                        None
+                    } else {
+                        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+                    }
                 })
                 .unwrap_or_else(|| return_type_str.clone())
         };
@@ -19610,7 +21506,6 @@ unsafe fn il2cpp_list_methods(class_name: &str) -> String {
             is_static,
             is_own_method
         ));
-
     }
     format!(
         r#"{{"ok":true,"requested":"{}","found":"{}","method_count":{},"methods":[{}]}}"#,
