@@ -1,0 +1,67 @@
+name: Fix md5log routes
+
+on:
+  push:
+    branches:
+      - workbench/fix-md5log-routes
+    paths:
+      - .github/workflows/fix-md5log-routes.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/fix-md5log-routes
+      - name: Repair route matching and install result scope
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('hachimi_ura_plugin/src/lib.rs')
+          s = p.read_text()
+
+          old = '} else if path.starts_with("/api/md5log") {'
+          new = '} else if path == "/api/md5log" {'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one generic md5log route, found {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''    } else if path == "/api/md5log/install" {
+        // Manually trigger MakeMd5 hook installation (useful if auto-install failed at boot)
+        unsafe {'''
+          new = '''    } else if path == "/api/md5log/install" {
+        // Keep early error returns local to this String-producing route expression,
+        // rather than returning String from handle_http(), whose return type is ().
+        (|| -> String {
+        unsafe {'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one install route opening, found {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''            }
+        }
+    } else if path == "/api/sniff" {'''
+          new = '''            }
+        }
+        })()
+    } else if path == "/api/sniff" {'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one install route closing, found {s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          cargo check --manifest-path hachimi_ura_plugin/Cargo.toml
+      - name: Commit fix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add hachimi_ura_plugin/src/lib.rs
+          git commit -m "fix: compile and route md5log diagnostics"
+          git push origin HEAD:workbench/fix-md5log-routes
