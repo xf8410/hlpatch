@@ -7266,6 +7266,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/sniff/diag",
             "/api/sniff/toggle",
             "/api/sniff/clear",
+            "/api/md5log",
+            "/api/md5log/clear",
+            "/api/md5log/install",
             "/api/event/choices",
             "/api/event/observations",
             "/api/event/observations/clear",
@@ -7553,6 +7556,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // ★ v3.24.40: lazy retry for fallback-mode installs.
         unsafe {
             install_api_sniff_hooks();
+        }
+        // ★ If hooks installed successfully, game is ready — set GAME_INITIALIZED
+        let any_hooked = unsafe {
+            COMPRESS_REQUEST_ADDR != 0
+                || DECOMPRESS_RESPONSE_ADDR != 0
+                || POST_ADDR != 0
+                || MAKEMD5_ADDR != 0
+        };
+        if any_hooked && !GAME_INITIALIZED.load(Ordering::Relaxed) {
+            GAME_INITIALIZED.store(true, Ordering::Relaxed);
+            unsafe {
+                ura_log(3, "sniff/toggle: GAME_INITIALIZED set (hooks installed via toggle)");
+            }
         }
         let requested = parse_query(&full_uri, "enabled");
         let new_val = match requested.as_str() {
