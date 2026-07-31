@@ -8052,7 +8052,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             interceptor_available,
             has_get_method_addr
         )
-    } else if path.starts_with("/api/md5log") {
+    } else if path == "/api/md5log" {
         let log = MD5_LOG.lock().unwrap();
         let entries: Vec<String> = log.iter()
             .enumerate()
@@ -8070,7 +8070,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         MD5_LOG.lock().unwrap().clear();
         r#"{"ok":true,"cleared":true}"#.to_string()
     } else if path == "/api/md5log/install" {
-        // Manually trigger MakeMd5 hook installation (useful if auto-install failed at boot)
+        // Scope early String returns to this route, not handle_http() -> ().
+        (|| -> String {
         unsafe {
             if MAKEMD5_ADDR != 0 {
                 format!(r#"{{"ok":true,"already_hooked":true,"addr":"0x{:x}"}}"#, MAKEMD5_ADDR)
@@ -8119,6 +8120,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 }
             }
         }
+        })()
     } else if path == "/api/sniff" {
         let _lock = SNIFF_MUTEX.lock();
         unsafe {
