@@ -33,19 +33,16 @@ jobs:
       - name: Verify tag and source version
         env:
           TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git rev-parse -q --verify "refs/tags/$TAG" >/dev/null
           VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)
           test "$TAG" = "v$VERSION"
-          # Never mutate an already published release or replace its assets.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists; refusing to overwrite it" >&2
             exit 1
           fi
-        env:
-          TAG: ${{ inputs.tag }}
-          GH_TOKEN: ${{ github.token }}
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
@@ -67,7 +64,7 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: cargo build --locked --target aarch64-linux-android --release
 
-      - name: Generate and verify release metadata
+      - name: Generate release metadata
         id: meta
         run: |
           set -euo pipefail
@@ -114,13 +111,10 @@ jobs:
           Verify after downloading with SHA256SUMS. Assets for an existing tag are never overwritten.
           EOF
           )
-          gh release create "$TAG" \
-            --verify-tag \
-            --title "$TAG" \
-            --notes "$NOTES" \
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes "$NOTES" \
             "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
 
-      - name: Verify published asset digests
+      - name: Verify published asset digest
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
