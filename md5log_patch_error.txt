@@ -1,0 +1,2 @@
+rc=1
+MakeMd5 unconditional logging: expected exactly one match, got 0
