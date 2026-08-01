@@ -1,0 +1,259 @@
+name: Patch md5log hooks on workbench
+
+on:
+  push:
+    branches:
+      - workbench/fix-md5log-hooks
+    paths:
+      - .github/workflows/patch-md5log-workbench.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/fix-md5log-hooks
+
+      - name: Apply targeted md5log diagnostics and HashCore hook
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('hachimi_ura_plugin/src/lib.rs')
+          s = p.read_text()
+
+          def once(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, got {n}')
+              s = s.replace(old, new, 1)
+
+          once(
+              '''static mut COMPUTEHASH_ADDR: usize = 0;
+static MD5_LOG: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // (input, output)''',
+              '''static mut COMPUTEHASH_ADDR: usize = 0;
+// Concrete System.Security.Cryptography MD5 HashCore target. Unlike
+// Gallop.Cryptographer.ComputeHash(string), MakeMd5 reaches this byte-oriented
+// implementation through the hash object's virtual table.
+static mut MD5_HASHCORE_ADDR: usize = 0;
+static MAKEMD5_HITS: AtomicU64 = AtomicU64::new(0);
+static CRYPTO_COMPUTEHASH_HITS: AtomicU64 = AtomicU64::new(0);
+static MD5_HASHCORE_HITS: AtomicU64 = AtomicU64::new(0);
+static MD5_LOG: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // (input, output)''',
+              'md5 statics',
+          )
+
+          once(
+              '''extern "C" fn makemd5_hook_handler(input: *mut c_void) -> *mut c_void {
+    let result = std::panic::catch_unwind''',
+              '''extern "C" fn makemd5_hook_handler(input: *mut c_void) -> *mut c_void {
+    MAKEMD5_HITS.fetch_add(1, Ordering::Relaxed);
+    let result = std::panic::catch_unwind''',
+              'MakeMd5 hit counter',
+          )
+
+          once(
+              '''        // Log input + output
+        if !input_str.is_empty() {
+            if let Ok(mut log) = MD5_LOG.lock() {
+                if log.len() >= 100 {
+                    log.remove(0);
+                }
+                log.push((input_str, output_str));
+            }
+        }
+
+        ret''',
+              '''        // Always log a hook hit. Previously an IL2CPP string-layout/read
+        // failure silently discarded the event and made /api/md5log look as if
+        // the hook never ran.
+        if let Ok(mut log) = MD5_LOG.lock() {
+            if log.len() >= 100 {
+                log.remove(0);
+            }
+            let shown_input = if input_str.is_empty() {
+                format!("MM:<unreadable@{:p}>", input)
+            } else {
+                format!("MM:{}", input_str)
+            };
+            log.push((shown_input, output_str));
+        }
+
+        ret''',
+              'MakeMd5 unconditional logging',
+          )
+
+          once(
+              '''extern "C" fn computehash_hook_handler(input: *mut c_void) -> *mut c_void {
+    let result = std::panic::catch_unwind''',
+              '''extern "C" fn computehash_hook_handler(input: *mut c_void) -> *mut c_void {
+    CRYPTO_COMPUTEHASH_HITS.fetch_add(1, Ordering::Relaxed);
+    let result = std::panic::catch_unwind''',
+              'Cryptographer.ComputeHash hit counter',
+          )
+
+          marker = '// ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]'
+          if s.count(marker) != 1:
+              raise SystemExit(f'HashCore handler marker count={s.count(marker)}')
+          handler = r'''
+// Concrete MD5 implementation hook. Signature follows the proven Hachimi
+// netinspect convention: only managed parameters are declared.
+// HashCore(byte[] array, int ibStart, int cbSize) is an instance method.
+type Md5HashCoreFn = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, i32);
+
+unsafe fn read_bounded_byte_array(array: *mut c_void, start: i32, count: i32) -> Option<Vec<u8>> {
+    if array.is_null() || start < 0 || count < 0 || count > 4096 {
+        return None;
+    }
+    // IL2CPP 64-bit array: object header 0x10, bounds 0x10,
+    // max_length at 0x18, vector data at 0x20.
+    let length = std::ptr::read_unaligned::<usize>((array as *const u8).add(0x18) as *const usize);
+    let start = start as usize;
+    let count = count as usize;
+    if length > 1024 * 1024 || start > length || count > length.saturating_sub(start) {
+        return None;
+    }
+    Some(std::slice::from_raw_parts((array as *const u8).add(0x20 + start), count).to_vec())
+}
+
+fn bytes_hex(data: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(data.len() * 2);
+    for &b in data {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+extern "C" fn md5_hashcore_hook_handler(
+    this_obj: *mut c_void,
+    array: *mut c_void,
+    start: i32,
+    count: i32,
+) {
+    MD5_HASHCORE_HITS.fetch_add(1, Ordering::Relaxed);
+    let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        read_bounded_byte_array(array, start, count)
+    }))
+    .ok()
+    .flatten();
+
+    unsafe {
+        let trampoline = interceptor_get_trampoline(md5_hashcore_hook_handler as usize);
+        if trampoline == 0 {
+            set_hook_status("sniff.md5_hashcore", "hit but trampoline=0");
+            return;
+        }
+        let original: Md5HashCoreFn = std::mem::transmute(trampoline);
+        original(this_obj, array, start, count);
+    }
+
+    if let Some(data) = captured {
+        // Keep binary-safe hex and a lossy preview. This reveals the exact MD5
+        // material even when the new salt is not printable UTF-8.
+        let preview = String::from_utf8_lossy(&data);
+        if let Ok(mut log) = MD5_LOG.lock() {
+            if log.len() >= 100 {
+                log.remove(0);
+            }
+            log.push((
+                format!("HC:{}", preview),
+                format!("len={};hex={}", data.len(), bytes_hex(&data)),
+            ));
+        }
+    }
+}
+
+'''
+          s = s.replace(marker, handler + marker, 1)
+
+          # Install the byte-oriented hook independently of Gallop.Cryptographer.
+          install_marker = '    let umamusume = get_asm(to_cstr("umamusume.dll").as_ptr());'
+          if s.count(install_marker) != 1:
+              raise SystemExit(f'install marker count={s.count(install_marker)}')
+          installer = r'''    // MakeMd5 does not call Gallop.Cryptographer.ComputeHash(string): it
+    // dispatches HashAlgorithm.ComputeHash(byte[]) virtually. Hook the concrete
+    // implementation's HashCore(byte[], int, int), whose overload is unambiguous.
+    if MD5_HASHCORE_ADDR == 0 {
+        let mscorlib = get_asm(to_cstr("mscorlib.dll").as_ptr());
+        if mscorlib.is_null() {
+            set_hook_status("sniff.md5_hashcore", "failed: mscorlib.dll not found");
+        } else {
+            let candidates = ["MD5CryptoServiceProvider", "MD5Managed"];
+            let mut resolved_any = false;
+            for candidate in candidates {
+                let cls = get_class(
+                    mscorlib,
+                    to_cstr("System.Security.Cryptography").as_ptr(),
+                    to_cstr(candidate).as_ptr(),
+                );
+                if cls.is_null() {
+                    continue;
+                }
+                let addr = get_method_addr(cls as usize, to_cstr("HashCore").as_ptr(), 3);
+                if addr == 0 {
+                    continue;
+                }
+                resolved_any = true;
+                if interceptor_hook(addr, md5_hashcore_hook_handler as usize) {
+                    MD5_HASHCORE_ADDR = addr;
+                    set_hook_status(
+                        "sniff.md5_hashcore",
+                        &format!("hooked {}.HashCore@0x{:x}", candidate, addr),
+                    );
+                    ura_log(3, &format!("MD5 HashCore hooked: {} @0x{:x}", candidate, addr));
+                    break;
+                }
+            }
+            if MD5_HASHCORE_ADDR == 0 {
+                set_hook_status(
+                    "sniff.md5_hashcore",
+                    if resolved_any {
+                        "failed: interceptor_hook"
+                    } else {
+                        "failed: no concrete MD5 HashCore candidate"
+                    },
+                );
+            }
+        }
+    }
+
+'''
+          s = s.replace(install_marker, installer + install_marker, 1)
+
+          old_response = '''        format!(r#"{{\"count\":{},\"entries\":[{}]}}"#, entries.len(), entries.join(","))'''
+          new_response = '''        format!(
+            r#"{{\"count\":{},\"makemd5_hits\":{},\"cryptographer_computehash_hits\":{},\"md5_hashcore_hits\":{},\"makemd5_addr\":\"0x{:x}\",\"cryptographer_computehash_addr\":\"0x{:x}\",\"md5_hashcore_addr\":\"0x{:x}\",\"entries\":[{}]}}"#,
+            entries.len(),
+            MAKEMD5_HITS.load(Ordering::Relaxed),
+            CRYPTO_COMPUTEHASH_HITS.load(Ordering::Relaxed),
+            MD5_HASHCORE_HITS.load(Ordering::Relaxed),
+            unsafe { MAKEMD5_ADDR },
+            unsafe { COMPUTEHASH_ADDR },
+            unsafe { MD5_HASHCORE_ADDR },
+            entries.join(",")
+        )'''
+          once(old_response, new_response, 'md5log diagnostic response')
+
+          p.write_text(s)
+          PY
+
+      - name: Format and check
+        working-directory: hachimi_ura_plugin
+        run: |
+          cargo fmt --check
+          cargo check --locked
+
+      - name: Commit patched source
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add hachimi_ura_plugin/src/lib.rs
+          git commit -m "fix: make md5log observable and hook concrete MD5 HashCore"
+          git push origin HEAD:workbench/fix-md5log-hooks
