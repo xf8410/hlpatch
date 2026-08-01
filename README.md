@@ -1,318 +1,327 @@
-# Hachimi URA Plugin — 赛马娘育成内存读取插件
+# hlpatch
 
-基于 [Hachimi](https://github.com/akemiko/hachimi) 框架的赛马娘育成辅助插件，通过注入游戏进程读取 IL2CPP 内存数据，提供 HTTP 端点查询与自动推送能力。
+**赛马娘 Android 本地运行时观测与诊断插件**
 
-> **2026-07-26（v3.24.68）**
-> - 新增 `GET /ramen` 轻量端点：拉面杯数据（回合+盛況度/素材/隠し味/地区），浮窗轮询专用
-> - 修正盛況度档位为 MDB `check_point_pt_effect` 真实 11 档（250/500/1000/1500/2000/2500/3000/3500/4000/5000），旧阈值为猜测值
->
-> **2026-07-23（v3.24.32）**
-> - HTTP 服务仅绑定 `127.0.0.1:18765`；局域网/电脑调试请用 `adb forward tcp:18765 tcp:18765`
-> - 拉面杯候选地区池只在选择回合（3/24/48）以 `selectable_region_ids_derived` 输出；其余回合移至 `region_pool_for_latest_selection_phase_derived` 并标 `currently_selectable_status`
-> - 体积数据导出（reverse/ 下 19 个 JSON/TXT，211MB）已迁移至 [uma-data exports/](https://github.com/xf8410/uma-data/tree/main/exports)（LFS）；仓库历史已重写瘦身，旧 commit SHA 失效，请按 tag 检索
+`hlpatch` 是运行在 Hachimi 插件环境中的 ARM64 Android 原生插件。它在用户自己的设备上连接游戏 IL2CPP 运行时，将经过约束的育成状态、事件观测、Hook 诊断和协议元数据通过本机 HTTP 服务提供给调试页面、`uma-juece`、Agora Workbench 等本地客户端。
 
-## 功能亮点
+本仓库当前的核心产物是：
 
-- **实时属性读取**：速度/耐力/力量/毅力/贤、体力/体力上限/技能Pt/粉丝数/干劲
-- **训练增益计算**：自动解析各训练项目的属性增益与体力消耗，含训练等级提升
-- **Buff 状态映射**：CharaEffectId → 可读名称（夜鷹/怠け/肌荒れ/練習上手 等）
-- **評価点计算**：per-stat独立查表+cubic外推，支持0-2300全量属性范围
-- **技能评分**：计算skill_score合并属性评估点
-- **HTTP 端点**：20+端点覆盖育成数据/类结构/字段偏移/方法枚举/配置
-- **自动推送**：push_loop定时向浮窗App推送数据，内置错误冷却退避
-- **IL2CPP自省**：`/fields`/`/methods`/`/classes` 端点可直接探查游戏类结构
-
-## HTTP 端点总览
-
-插件端口：`18765`（可通过 `/config` 修改）
-
-### 育成数据端点
-
-| 端点 | 用途 |
-|------|------|
-| `GET /summary` | 完整育成状态（属性/训练/Buff/支援卡/評価点/技能评分） |
-| `GET /ramen` | 拉面杯轻量数据（回合/盛況度11档/素材槽/隠し味/已选地区） |
-| `GET /data` | 原始训练数据 |
-| `GET /scenario` | 剧本详情（Ramen等特殊剧本字段） |
-| `GET /log` | 训练日志 |
-| `GET /carddb` | 卡片数据库 |
-| `GET /skilldata` | 技能数据 |
-| `GET /hall` | 殿堂马数据（評価点+属性+rankScore） |
-| `GET /ranking` | 排行榜数据（服务端拉取） |
-| `GET /saddles` | 鞍一览 |
-| `GET /saddles-dl` | 鞍数据下载 |
-
-### IL2CPP 探查端点（逆向核心）
-
-| 端点 | 用途 | 示例 |
-|------|------|------|
-| `GET /classes/search/{keyword}` | 按关键词搜索类名 | `/classes/search/SingleMode` |
-| `GET /fields/{ClassName}` | 列出类所有字段+偏移量 | `/fields/SingleModeStoryData` |
-| `GET /methods/{ClassName}` | 列出类所有方法 | `/methods/SingleModeStoryData` |
-| `GET /scan` | 扫描所有IL2CPP类 | |
-| `GET /singletons` | 查找所有单例 | |
-| `GET /find_method/{name}` | 在所有类中搜索方法 | `/find_method/get_Title` |
-
-### 调试与配置
-
-| 端点 | 用途 |
-|------|------|
-| `GET /status` | 插件运行状态（game_initialized / last_phase） |
-| `GET /health` | 健康检查+版本号 |
-| `GET /debug/params` | 调试参数增减 |
-| `GET /debug/breeders` | 调试训练师队伍 |
-| `GET /config` | 当前配置 |
-| `POST /config` | 更新配置（JSON body） |
-| `GET /config.html` | 配置页面（浏览器直接打开） |
-
-## IL2CPP 事件数据类结构（已验证偏移）
-
-以下是赛马娘育成事件系统的完整类层级和字段偏移，通过 `/fields` 端点实测获取。
-
-### 类层级关系
-
-```
-MasterStoryDatabase                    ← 总库（所有故事/事件容器）
-├── MasterSingleModeStoryData          ← 事件元数据表（Master查询器）
-│   └── SingleModeStoryData            ← 事件元数据行（33字段）
-├── MasterSingleModeEventChoiceReward  ← 选择肢奖励表（Master查询器）
-│   └── SingleModeEventChoiceReward    ← 选择肢奖励行（5字段）
-├── EventChoiceBranchReward            ← 分支奖励（_gainParamArray）
-│   └── EventChoiceRewardGainParam     ← 属性增益（4字段，ObscuredInt）
-├── SingleModeEventConclusion          ← 事件结局（3字段，动画数据）
-├── SingleModeEventPlayTiming          ← 事件触发时机（枚举）
-├── MasterSingleModeStoryConditionSet  ← 事件触发条件表
-└── SingleModeEventAccesor            ← 运行时读事件数据
+```text
+libhachimi_ura.so
 ```
 
-### SingleModeStoryData — 事件元数据（33字段）
+> 本项目是持续演进的个人研究与实机诊断工程，不是官方插件，也不是通用游戏修改框架。运行时结构会随游戏版本变化；源码可编译不代表所有 Hook 已通过当前游戏版本的实机验证。
 
-| 字段 | 偏移 | 说明 |
-|------|------|------|
-| Id | 16 | 主键 |
-| StoryId | 20 | 事件ID |
-| ShortStoryId | 24 | 短事件ID |
-| CardId | 28 | 角色卡ID |
-| CardCharaId | 32 | 角色卡角色ID |
-| **SupportCardId** | **36** | **支援卡ID（匹配事件到卡的关键字段）** |
-| SupportCharaId | 40 | 支援卡角色ID |
-| ShowProgress1 | 44 | 出现时机1 |
-| ShowProgress2 | 48 | 出现时机2 |
-| ShowProgress3 | 52 | 出现时机3 |
-| ShowClear | 56 | 通关时出现 |
-| ShowSuccession | 60 | 继承时出现 |
-| EventTitleStyle | 64 | 标题样式 |
-| EventTitleDressIcon | 68 | 标题服装图标 |
-| EventTitleCharaIcon | 72 | 标题角色图标 |
-| SeChange | 76 | SE变化 |
-| EndingType | 80 | 结局类型 |
-| RaceEventFlag | 84 | 比赛事件标记 |
-| MiniGameResult | 88 | 小游戏结果 |
-| GalleryMainScenario | 92 | 画廊主剧本 |
-| GalleryFlag | 96 | 画廊标记 |
-| GalleryListId | 100 | 画廊列表ID |
-| GalleryGruopId | 104 | 画廊分组ID（原文拼写） |
-| GallerySort | 108 | 画廊排序 |
-| GalleryCondition | 112 | 画廊条件 |
-| GallerySuggestEvent | 116 | 画廊推荐事件 |
-| AvailableGalleryKey | 120 | 可用画廊键 |
-| PastRaceId | 124 | 过去比赛ID |
-| PastRaceId2 | 128 | 过去比赛ID2 |
-| PastRaceId3 | 132 | 过去比赛ID3 |
-| PastRaceId4 | 136 | 过去比赛ID4 |
-| ForceUseRaceDress | 140 | 强制比赛服装 |
-| **EventCategory** | **141** | **事件分类（区分训练/友情/连续事件等）** |
+## 项目定位
 
-**关键方法**（getter属性，不在字段中）：
-- `get_Title()` — 事件标题
-- `get_CategoryForSkip()` — 跳过用分类
-- `IsHintEvent()` — 是否提示事件
-- `IsOnsenEvent()` — 是否温泉事件
-- `CheckEndingType()` — 检查结局类型
+hlpatch 目前承担四类工作：
 
-### SingleModeEventChoiceReward — 选择肢奖励（5字段）
+1. **育成状态观测**
+   - 读取角色属性、体力、干劲、技能点、粉丝、回合和训练候选等本地运行时状态。
+   - 提供通用育成摘要及部分剧本专用的有界快照。
 
-| 字段 | 偏移 | 说明 |
-|------|------|------|
-| Id | 16 | 主键（关联StoryId） |
-| DispType | 20 | 显示类型（byte） |
-| EffectValueType0 | 21 | 效果值类型0（byte：Speed/Stamina/Power/Guts/Wisdom等枚举） |
-| EffectValueType1 | 22 | 效果值类型1 |
-| EffectValueType2 | 23 | 效果值类型2 |
+2. **事件与剧本诊断**
+   - 记录事件选项、选择后的时间关联观测和 Hook 安装状态。
+   - 为拉面杯等剧本保留专用的结构化观测，但不把候选映射或时间相关性冒充为已证实因果。
 
-**DispType + EffectValueType → 决定效果含义**：DispType标识奖励展示方式，EffectValueType标识具体属性类型。
+3. **IL2CPP 定点自省**
+   - 对明确指定的类名、字段名或方法名进行目标化查询。
+   - 用于游戏升级后的结构核对、字段链验证和低风险诊断。
 
-### EventChoiceBranchReward — 分支奖励（1字段）
+4. **本地协议观测**
+   - 维护有界请求/响应缓存和脱敏元数据。
+   - 支持请求路径、方向、大小、时间和本地关联 ID 等诊断信息。
+   - 原始正文可能包含账号或会话敏感信息，不应上传到聊天、GitHub 或公开日志。
 
-| 字段 | 偏移 | 说明 |
-|------|------|------|
-| _gainParamArray | 16 | 指向 EventChoiceRewardGainParam[] 数组 |
+## 当前版本与真实性来源
 
-### EventChoiceRewardGainParam — 属性增益（4字段）
+Rust crate 的当前版本定义在：
 
-| 字段 | 偏移 | 说明 |
-|------|------|------|
-| _displayId | 16 | 显示ID |
-| _effectValue0 | 36 | 效果值0（增益量） |
-| _effectValue1 | 56 | 效果值1 |
-| _effectValue2 | 76 | 效果值2 |
-
-**⚠️ ObscuredInt加密**：offset 36/56/76间距20字节（正常int间距4字节），说明_effectValue0/1/2使用了ObscuredInt加密，每个占20字节。
-
-### SingleModeEventConclusion — 事件结局（3字段）
-
-| 字段 | 偏移 | 说明 |
-|------|------|------|
-| Id | 16 | 主键 |
-| CharaId | 20 | 角色ID |
-| CharaMotionSetId | 24 | 角色动作集ID（播放动画用） |
-
-### SingleModeEventPlayTiming — 事件触发时机（枚举）
-
-枚举值（value__偏移16），表示事件在什么时机触发：
-
-| 枚举值 | 说明 |
-|--------|------|
-| None | 无 |
-| TurnStart | 回合开始 |
-| RaceStart | 比赛开始 |
-| RaceEnd | 比赛结束 |
-| TurnEnd | 回合结束 |
-| ModeEnd | 育成结束 |
-| CommandStart | 指令开始（训练选择后） |
-| Continue | 继续 |
-| MiniGameEnd | 小游戏结束 |
-| TeamRaceEnd | 团队赛结束 |
-| TeamRaceAfterEvent | 团队赛后事件 |
-| TeamRaceAfterTeamParameterRankUp | 团队赛参数升级后 |
-| LiveEnd | Live结束 |
-| GRSEnd | GRS剧本结束 |
-| ArcEnd | Arc剧本结束 |
-| SportCompetitoionEnd | 运动竞技结束 |
-| CookTastingEnd | 料理品尝结束 |
-| MechaEnd | 机甲剧本结束 |
-| LegendScenarioRaceEnd | 传说剧本比赛结束 |
-| LegendLastScenarioRaceEnd | 传说最终剧本比赛结束 |
-| PioneerCheckPointEnd | 先驱者检查点结束 |
-| OnsenCheckPointEnd | 温泉检查点结束 |
-| BreedersTeamReviewEnd | 训练师队伍审查结束 |
-| BreedersBeforeBCRaceCard | 训练师BC赛马卡前 |
-| **RamenCheckPointEnd** | **拉面剧本检查点结束** |
-
-## IL2CPP 加速相关类（已识别）
-
-| 类 | 用途 | 备注 |
-|----|------|------|
-| RaceTimeController | 比赛时间控制器 | 比赛内加速 |
-| CourseTimescaleParam | 赛道TimeScale参数 | Hachimi已覆盖 |
-| DialogReduceTimeJobsOne | 对话加速完成 | 游戏内原生加速 |
-| DialogReduceTimeJobs | 对话加速批量 | 游戏内原生加速 |
-| PartsReduceTimeJobsControl | 加速等待控制 | 读条/等待 |
-| SingleModeResultPassBaseRemainTimeModel | 育成结果等待时间 | 结果界面 |
-| CutinTimeScaleCurve | 过场TimeScale曲线 | 动画 |
-| TimelineKeyTimeScaleData | 时间轴TimeScale数据 | Live/Cutin |
-
-**⚠️ 注意**：Hachimi已有10倍速UI和TimeScale控制，加速插件不要碰全局TimeScale，重点做Hachimi没覆盖的：跳训练动画、快进读条、自动选事件。
-
-## 逆向探查教程
-
-### 1. 搜索类名
-
-```
-http://127.0.0.1:18765/classes/search/SingleMode
+```text
+hachimi_ura_plugin/Cargo.toml
 ```
 
-返回匹配的类列表（字符串匹配，不依赖metadata解密）。
+当前 main 显示：
 
-### 2. 查看字段偏移
-
-```
-http://127.0.0.1:18765/fields/SingleModeStoryData
+```text
+3.25.1
 ```
 
-返回所有字段名、偏移量、所属类（含父类字段）。
+但版本号、main 源码、Actions Artifact 和 GitHub Release 是四个不同概念：
 
-**⚠️ 路径注意**：正确路径是 `/fields/ClassName`，**不是** `/classes/search/ClassName/fields`！
+- main 提交代表当前源码；
+- `Build Hachimi URA Plugin` 生成该提交的测试 Artifact；
+-版本标签固定某个不可变源码提交；
+- `Release Hachimi URA Plugin` 只从已存在的版本标签重新构建并发布不可覆盖的 Release。
 
-### 3. 查看方法列表
+安装或比较 SO 时，应同时核对：
 
+- Git tag
+- `source_commit`
+- Cargo version
+- 文件大小
+- SHA-256
+- Actions run ID
+
+Release 中的 `BUILD-MANIFEST.txt` 和 `SHA256SUMS` 是二进制来源的主要依据。不要仅凭文件名或“Latest”标记判断新旧。
+
+## 架构
+
+```text
+赛马娘 Android 进程
+  └─ Hachimi 插件宿主
+      └─ libhachimi_ura.so
+          ├─ IL2CPP 定点读取与运行时缓存
+          ├─ 事件/剧本 Hook 与有界观测环
+          ├─ 协议 Hook、脱敏元数据和诊断
+          ├─ 本机 HTTP 服务 127.0.0.1:18765
+          └─ 可选本地客户端
+              ├─ 手机浏览器（人工诊断）
+              ├─ uma-juece
+              └─ Agora Workbench
 ```
-http://127.0.0.1:18765/methods/SingleModeStoryData
+
+主要源码：
+
+```text
+hachimi_ura_plugin/src/lib.rs
 ```
 
-返回所有方法名和所属类。getter属性（如`get_Title`）不出现在fields里，但可以在methods里看到。
+当前源码规模较大且仍偏单体化。后续应按 HTTP 路由、IL2CPP、自省、育成摘要、事件、协议、剧本和发布元数据逐步拆分模块；README 不再把历史版本积累的每个字段偏移当成永久 API 文档。
 
-### 4. 类名规则
+## 本机服务
 
-| 模式 | 含义 | 用途 |
-|------|------|------|
-| `MasterXxxData` | Master表查询器 | 用`Get()`查数据行，只有SQLite基类字段 |
-| `XxxData` | 数据行 | **有业务字段和偏移，探查时用这个** |
-| `XxxAccessor` | 运行时访问器 | 读当前游戏实例 |
-| `IXxxData` | 接口 | 查实现类 |
+默认地址：
 
-### 5. 常用搜索关键词
+```text
+http://127.0.0.1:18765
+```
 
-| 搜索词 | 用途 |
-|--------|------|
-| `SingleMode` | 育成相关所有类 |
-| `CharaStatus` | 角色属性 |
-| `TimeScale` | 加速/时间缩放 |
-| `EventChoice` | 事件选择肢 |
-| `Rank` | 排行 |
-| `Score` | 评分 |
-| `Effect` | 效果/Buff |
-| `WorkData` | 育成运行时数据 |
+基础检查：
 
-### 6. metadata加密说明
+```text
+GET /health
+GET /status
+```
 
-Cy加密了IL2CPP metadata，导致：
-- ✅ `/classes/search/` 正常工作（字符串匹配）
-- ✅ `/fields/` 正常工作（运行时反射，绕过metadata）
-- ✅ `/methods/` 正常工作（同上）
-- ❌ 静态il2cppdumper无法直接dump（需Zygisk-Il2CppDumper绕过加密）
+常用的低风险、有界接口类别：
 
-**结论**：URA插件的运行时反射端点已绕过metadata加密，无需il2cppdumper即可获取字段偏移。
+- 育成摘要和当前状态
+- 已完成事件观测
+- Hook 诊断
+- 协议脱敏元数据
+- 明确类名的字段或方法查询
 
-## 关联项目
+具体路由以当前源码和 `/health` 返回的版本为准。游戏版本升级后，应先检查健康状态和 Hook 诊断，再判断某项数据是否可信。
 
-- [uma-juece](https://github.com/xf8410/uma-juece) — 浮窗App（Java/Android），接收推送+AI决策推荐
-- [uma-train](https://github.com/xf8410/uma-train) — 训练框架（Python），MCTS+神经网络
-- [uma-data](https://github.com/xf8410/uma-data) — 事件数据（JSON），支援卡事件选择肢+奖励
+## 安全分级
 
-## 环境要求
+### 日常可用
 
-- Hachimi 框架（插件宿主环境）
-- 赛马娘日服客户端
-- GitHub Actions 自动编译（或本地 Rust + NDK）
+- `/health`、`/status`
+- 有界摘要和结构变化
+- 已完成事件观测
+- Hook 安装诊断
+- 脱敏协议元数据
+- 明确类名的定点只读查询
+
+### 仅人工诊断
+
+仓库中仍可能保留原始 sniff、配置写入、文件诊断、较大响应或实验性探针。它们不应默认交给 AI，也不应在不了解参数和数据范围时调用。
+
+### 禁止常规使用
+
+- 全量 IL2CPP 类扫描
+- 全量 singleton 或大型对象遍历
+- 任意裸内存读取
+- 任意方法调用
+- 未知 getter 自动执行
+- 递归对象 dump
+- 将原始请求、响应、认证头、Cookie、SID、Token 或私有文件上传到 GitHub/聊天
+
+这些能力即使在历史源码中存在，也不代表是推荐接口。后续重构目标是将危险能力显式隔离、默认关闭，并让服务在版本或参数不明确时 fail closed。
+
+## 协议数据说明
+
+协议观测分为两层：
+
+### 脱敏元数据
+
+可用于普通诊断，典型字段包括：
+
+- 本地 observation ID
+- request ID
+- 时间
+- 请求或响应方向
+- 去除 query 的路径
+- 大小
+
+### 原始缓存
+
+可能包含：
+
+- 请求/响应正文
+- 账号标识
+- 会话信息
+- 设备信息
+- 其他认证数据
+
+原始缓存仅允许用户在本机明确打开并短时检查。不得复制到 Issue、README、AI 对话、Actions 日志或上下文归档。
+
+## IL2CPP 查询原则
+
+推荐流程：
+
+1. 先使用同一游戏构建的离线索引确定精确候选类名。
+2. 在手机运行时只搜索具体关键词或查询一个明确类。
+3. 分开读取字段和方法，不自动调用方法。
+4. 对结果标记来源和游戏版本。
+5. 对大类设置条目上限，禁止整类大输出进入聊天。
+
+必须区分：
+
+- 找到类名
+- 找到字段/方法元数据
+- 成功安装 Hook
+- 实机获得合理值
+- 已验证业务语义
+
+前四项中的任何一项都不能自动证明最后一项。
 
 ## 构建
 
-使用 GitHub Actions 自动编译，产物在 Releases 页面下载。
+### GitHub Actions
 
-本地构建：
-```bash
-cd hachimi_ura_plugin
-cargo build --release --target aarch64-linux-android
+主工作流：
+
+```text
+.github/workflows/build-ura.yml
 ```
 
-产物：`target/aarch64-linux-android/release/libhachimi_ura.so`
+它会从精确检出的源码构建 ARM64 Android Release，并上传：
 
-## 安装
+- `libhachimi_ura.so`
+- `SHA256SUMS`
+- `BUILD-MANIFEST.txt`
 
-1. 下载对应版本的 SO 文件，重命名为 `libhachimi_ura_vX.Y.Z.so`
-2. 放入 Hachimi 插件目录
-3. 启动游戏，插件自动加载
-4. 浏览器访问 `http://127.0.0.1:18765/health` 确认运行
+Artifact 名包含完整 commit SHA。普通 main 或手动构建不会修改 GitHub Release。
 
-## 故障排查
+### 本地构建
 
-- **游戏闪退**：访问 `/status`，查看 `last_phase` 定位崩溃阶段
-- **浮窗无数据**：确认 `/status` 返回 `game_initialized: true`
-- **属性全部为0**：确认插件版本 ≥ 3.14.1，Int32字段已修复
-- **/fields 返回空**：确认用的是 `/fields/ClassName` 而非 `/classes/search/ClassName/fields`
-- **类搜不到**：尝试不同关键词，部分类名可能拼写不同
+需要 Rust、Android NDK r26c 和 ARM64 Android target：
 
-## 许可证
+```bash
+rustup target add aarch64-linux-android
+cd hachimi_ura_plugin
+cargo build --locked --release --target aarch64-linux-android
+```
 
-本项目仅供学习研究使用，请勿用于商业用途。
+产物：
+
+```text
+hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+```
+
+## 发布
+
+发布工作流：
+
+```text
+.github/workflows/release-ura.yml
+```
+
+当前规则：
+
+1. 先创建与 Cargo version 一致的不可变 tag，例如 `v3.25.2`。
+2. 发布工作流只检出该 tag。
+3. 从标签源码重新构建。
+4. 如果同名 Release 已存在则拒绝覆盖。
+5. 发布后验证 GitHub 资产 digest 与本地 SHA-256 一致。
+
+旧版本曾出现源码、标签和 Release 二进制不一致的问题，因此禁止恢复“同 tag 覆盖上传”或可变 Latest 二进制流程。
+
+## 安装与验证
+
+1. 从本仓库对应版本 Release 下载 `libhachimi_ura.so`、`SHA256SUMS` 和 `BUILD-MANIFEST.txt`。
+2. 在手机本地核对 SHA-256。
+3. 按 Hachimi 当前插件目录规范放置 SO；升级前保留旧版本备份。
+4. 启动游戏后访问：
+
+```text
+http://127.0.0.1:18765/health
+```
+
+5. 核对运行版本，再检查：
+
+```text
+http://127.0.0.1:18765/status
+```
+
+6. 如涉及 Hook，必须查看对应诊断状态；不能只根据 HTTP 服务已启动判断 Hook 成功。
+
+## 常见问题
+
+### HTTP 无法连接
+
+- 确认游戏进程仍在运行。
+- 确认 Hachimi 已加载插件。
+- 确认当前配置端口为 18765。
+- 服务默认只供本机访问，不应暴露到局域网或公网。
+
+### 数据为零或为空
+
+- 当前可能不在育成场景。
+- 游戏升级后类名、方法或对象链发生变化。
+- Hook 未安装成功。
+- 数据仍处于 unknown，不能为了显示而填入猜测值。
+
+### 构建成功但实机无效
+
+CI 成功只证明 Rust/NDK 构建通过，不证明：
+
+- ABI 假设正确
+- Hook 地址正确
+- 方法签名正确
+- 当前游戏版本兼容
+- 业务语义已经验证
+
+需要结合 `/health`、`/status`、Hook 诊断和有界实机样本判断。
+
+### 文件看起来还是旧版本
+
+不要只看 SO 文件名。核对 Release tag、manifest 中的 source commit、文件 SHA-256 和运行时 `/health` 版本。
+
+## 仓库目录
+
+```text
+hachimi_ura_plugin/   Rust 插件主体
+.github/workflows/    构建与不可变发布流程
+config/               本地 Hook/HTTP 示例配置
+docs/                 历史研究记录和工作单
+reverse/              有界逆向索引与报告
+data/                 项目数据和辅助资料
+native/               原生实验代码
+third_party/          第三方依赖
+```
+
+历史资料可能包含已过期假设。源码当前行为、不可变构建清单和带证据的最新项目归档优先级更高。
+
+## 关联项目边界
+
+- `hlpatch`：只负责 SO、Hook、IL2CPP、运行时缓存和本机服务。
+- `Agora-Workbench`：属于独立 Android 客户端项目；其对话、Token、白屏、GitHub 工具、APK 和 Release 问题不得写入本仓库的 SO 技术文档。
+- `uma-juece`：独立浮窗/决策客户端。
+- `uma-data`：独立数据仓库。
+- `uma-train`：独立模拟与训练项目。
+- `uma-ai-context`：上下文归档；hlpatch 内容应放在 `projects/uma-so/`。
+
+跨项目集成必须分别记录两侧实现，不能再把 Agora 客户端故障和 SO 运行时问题写进同一归档文件。
+
+## 隐私与免责声明
+
+- 仅在你有权测试的设备、账号和环境中使用。
+- 不提供生产服务任意发包、认证绕过、凭据导出或规避安全机制的使用指导。
+- 插件运行在游戏进程中，错误的 Hook、ABI 或指针读取可能导致崩溃和数据损坏；升级前务必备份并保留可回退版本。
+- 不要公开原始协议正文、认证数据、私有文件或崩溃日志中的敏感内容。
+
+本 README 描述当前魔改项目的真实定位、构建来源和安全边界，不再把历史字段偏移、全量扫描端点或旧版功能清单当作永久承诺。
