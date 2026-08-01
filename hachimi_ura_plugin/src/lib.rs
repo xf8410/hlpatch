@@ -141,6 +141,13 @@ static mut UNITY_SEND_ADDR: usize = 0;
 // MakeMd5 hook
 static mut MAKEMD5_ADDR: usize = 0;
 static mut COMPUTEHASH_ADDR: usize = 0;
+// Concrete System.Security.Cryptography MD5 HashCore target. Unlike
+// Gallop.Cryptographer.ComputeHash(string), MakeMd5 reaches this byte-oriented
+// implementation through the hash object's virtual table.
+static mut MD5_HASHCORE_ADDR: usize = 0;
+static MAKEMD5_HITS: AtomicU64 = AtomicU64::new(0);
+static CRYPTO_COMPUTEHASH_HITS: AtomicU64 = AtomicU64::new(0);
+static MD5_HASHCORE_HITS: AtomicU64 = AtomicU64::new(0);
 static MD5_LOG: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // (input, output)
 static UNITY_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
 const UNITY_OBSERVATIONS_MAX: usize = 256;
@@ -7571,7 +7578,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
         if any_hooked && !GAME_INITIALIZED.load(Ordering::Relaxed) {
             GAME_INITIALIZED.store(true, Ordering::Relaxed);
             unsafe {
-                ura_log(3, "sniff/toggle: GAME_INITIALIZED set (hooks installed via toggle)");
+                ura_log(
+                    3,
+                    "sniff/toggle: GAME_INITIALIZED set (hooks installed via toggle)",
+                );
             }
         }
         let requested = parse_query(&full_uri, "enabled");
@@ -8078,7 +8088,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
         )
     } else if path == "/api/md5log" {
         let log = MD5_LOG.lock().unwrap();
-        let entries: Vec<String> = log.iter()
+        let entries: Vec<String> = log
+            .iter()
             .enumerate()
             .map(|(i, (input, output))| {
                 format!(
@@ -8089,61 +8100,71 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 )
             })
             .collect();
-        format!(r#"{{"count":{},"entries":[{}]}}"#, entries.len(), entries.join(","))
+        format!(
+            r#"{{"count":{},"makemd5_hits":{},"cryptographer_computehash_hits":{},"md5_hashcore_hits":{},"makemd5_addr":"0x{:x}","cryptographer_computehash_addr":"0x{:x}","md5_hashcore_addr":"0x{:x}","entries":[{}]}}"#,
+            entries.len(),
+            MAKEMD5_HITS.load(Ordering::Relaxed),
+            CRYPTO_COMPUTEHASH_HITS.load(Ordering::Relaxed),
+            MD5_HASHCORE_HITS.load(Ordering::Relaxed),
+            unsafe { MAKEMD5_ADDR },
+            unsafe { COMPUTEHASH_ADDR },
+            unsafe { MD5_HASHCORE_ADDR },
+            entries.join(",")
+        )
     } else if path == "/api/md5log/clear" {
         MD5_LOG.lock().unwrap().clear();
         r#"{"ok":true,"cleared":true}"#.to_string()
     } else if path == "/api/md5log/install" {
         // Scope early String returns to this route, not handle_http() -> ().
         (|| -> String {
-        unsafe {
-            if MAKEMD5_ADDR != 0 {
-                format!(r#"{{"ok":true,"already_hooked":true,"addr":"0x{:x}"}}"#, MAKEMD5_ADDR)
-            } else if API.is_null() || (*API).interceptor == 0 {
-                r#"{"ok":false,"error":"interceptor_unavailable"}"#.to_string()
-            } else {
-                let get_asm = match (*API).il2cpp_get_assembly_image_fn {
-                    Some(f) => f,
-                    None => return r#"{"ok":false,"error":"no_get_asm"}"#.to_string(),
-                };
-                let get_class = match (*API).il2cpp_get_class_fn {
-                    Some(f) => f,
-                    None => return r#"{"ok":false,"error":"no_get_class"}"#.to_string(),
-                };
-                let get_method_addr = match (*API).il2cpp_get_method_addr_fn {
-                    Some(f) => f,
-                    None => return r#"{"ok":false,"error":"no_get_method_addr"}"#.to_string(),
-                };
-
-                let img = get_asm(to_cstr("umamusume.dll").as_ptr());
-                if img.is_null() {
-                    return r#"{"ok":false,"error":"umamusume_dll_not_found"}"#.to_string();
-                }
-                let cls = get_class(
-                    img,
-                    to_cstr("Gallop").as_ptr(),
-                    to_cstr("Cryptographer").as_ptr(),
-                );
-                if cls.is_null() {
-                    return r#"{"ok":false,"error":"cryptographer_class_not_found"}"#.to_string();
-                }
-                let addr = get_method_addr(
-                    cls as usize,
-                    to_cstr("MakeMd5").as_ptr(),
-                    1,
-                );
-                if addr == 0 {
-                    return r#"{"ok":false,"error":"makemd5_method_not_found"}"#.to_string();
-                }
-                if interceptor_hook(addr, makemd5_hook_handler as usize) {
-                    MAKEMD5_ADDR = addr;
-                    set_hook_status("sniff.makemd5", &format!("hooked@0x{:x}", addr));
-                    format!(r#"{{"ok":true,"hooked":true,"addr":"0x{:x}"}}"#, addr)
+            unsafe {
+                if MAKEMD5_ADDR != 0 {
+                    format!(
+                        r#"{{"ok":true,"already_hooked":true,"addr":"0x{:x}"}}"#,
+                        MAKEMD5_ADDR
+                    )
+                } else if API.is_null() || (*API).interceptor == 0 {
+                    r#"{"ok":false,"error":"interceptor_unavailable"}"#.to_string()
                 } else {
-                    r#"{"ok":false,"error":"interceptor_hook_failed"}"#.to_string()
+                    let get_asm = match (*API).il2cpp_get_assembly_image_fn {
+                        Some(f) => f,
+                        None => return r#"{"ok":false,"error":"no_get_asm"}"#.to_string(),
+                    };
+                    let get_class = match (*API).il2cpp_get_class_fn {
+                        Some(f) => f,
+                        None => return r#"{"ok":false,"error":"no_get_class"}"#.to_string(),
+                    };
+                    let get_method_addr = match (*API).il2cpp_get_method_addr_fn {
+                        Some(f) => f,
+                        None => return r#"{"ok":false,"error":"no_get_method_addr"}"#.to_string(),
+                    };
+
+                    let img = get_asm(to_cstr("umamusume.dll").as_ptr());
+                    if img.is_null() {
+                        return r#"{"ok":false,"error":"umamusume_dll_not_found"}"#.to_string();
+                    }
+                    let cls = get_class(
+                        img,
+                        to_cstr("Gallop").as_ptr(),
+                        to_cstr("Cryptographer").as_ptr(),
+                    );
+                    if cls.is_null() {
+                        return r#"{"ok":false,"error":"cryptographer_class_not_found"}"#
+                            .to_string();
+                    }
+                    let addr = get_method_addr(cls as usize, to_cstr("MakeMd5").as_ptr(), 1);
+                    if addr == 0 {
+                        return r#"{"ok":false,"error":"makemd5_method_not_found"}"#.to_string();
+                    }
+                    if interceptor_hook(addr, makemd5_hook_handler as usize) {
+                        MAKEMD5_ADDR = addr;
+                        set_hook_status("sniff.makemd5", &format!("hooked@0x{:x}", addr));
+                        format!(r#"{{"ok":true,"hooked":true,"addr":"0x{:x}"}}"#, addr)
+                    } else {
+                        r#"{"ok":false,"error":"interceptor_hook_failed"}"#.to_string()
+                    }
                 }
             }
-        }
         })()
     } else if path == "/api/sniff" {
         let _lock = SNIFF_MUTEX.lock();
@@ -8668,7 +8689,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let p3 = parse_query(&full_uri, "p3").parse::<i64>().unwrap_or(0);
         let p4 = parse_query(&full_uri, "p4").parse::<i64>().unwrap_or(0);
         let param_count = parse_query(&full_uri, "n").parse::<i32>().unwrap_or(5);
-        unsafe { il2cpp_call_static_method(&class_name, &method_name, p0, p1, p2, p3, p4, param_count) }
+        unsafe {
+            il2cpp_call_static_method(&class_name, &method_name, p0, p1, p2, p3, p4, param_count)
+        }
     } else if path.starts_with("/il2cpp/call") {
         // v3.22.89: 调用单例上的getter方法
         let class_name = parse_query(&full_uri, "class");
@@ -8817,41 +8840,41 @@ fn handle_http(mut stream: std::net::TcpStream) {
         il2cpp_read_mem(&addr_str, &size_str)
     } else if path.starts_with("/il2cpp/read_string") {
         (|| -> String {
-        // ★ Read IL2CPP string at address (or via pointer indirection)
-        // ?addr=0x...       → addr points to Il2CppString object directly
-        // ?ptr=0x...        → read 8 bytes at ptr to get Il2CppString*, then read string
-        let addr_str = parse_query(&full_uri, "addr");
-        let ptr_str = parse_query(&full_uri, "ptr");
-        let target = if !ptr_str.is_empty() {
-            // Indirection: read pointer at ptr_str, then read string
-            let ptr_addr = usize::from_str_radix(ptr_str.trim_start_matches("0x"), 16).unwrap_or(0);
-            if ptr_addr == 0 {
-                return r#"{"error":"invalid_ptr_addr"}"#.to_string();
+            // ★ Read IL2CPP string at address (or via pointer indirection)
+            // ?addr=0x...       → addr points to Il2CppString object directly
+            // ?ptr=0x...        → read 8 bytes at ptr to get Il2CppString*, then read string
+            let addr_str = parse_query(&full_uri, "addr");
+            let ptr_str = parse_query(&full_uri, "ptr");
+            let target = if !ptr_str.is_empty() {
+                // Indirection: read pointer at ptr_str, then read string
+                let ptr_addr =
+                    usize::from_str_radix(ptr_str.trim_start_matches("0x"), 16).unwrap_or(0);
+                if ptr_addr == 0 {
+                    return r#"{"error":"invalid_ptr_addr"}"#.to_string();
+                }
+                unsafe {
+                    let p = std::ptr::read::<u64>(ptr_addr as *const u64);
+                    p as usize
+                }
+            } else if !addr_str.is_empty() {
+                usize::from_str_radix(addr_str.trim_start_matches("0x"), 16).unwrap_or(0)
+            } else {
+                return r#"{"error":"need_addr_or_ptr"}"#.to_string();
+            };
+            if target == 0 {
+                return r#"{"error":"invalid_target"}"#.to_string();
             }
-            unsafe {
-                let p = std::ptr::read::<u64>(ptr_addr as *const u64);
-                p as usize
-            }
-        } else if !addr_str.is_empty() {
-            usize::from_str_radix(addr_str.trim_start_matches("0x"), 16).unwrap_or(0)
-        } else {
-            return r#"{"error":"need_addr_or_ptr"}"#.to_string();
-        };
-        if target == 0 {
-            return r#"{"error":"invalid_target"}"#.to_string();
-        }
-        let s = unsafe { read_il2cpp_string(target as *const c_void) };
-        // Also dump raw bytes for debugging
-        let raw_len = unsafe {
-            std::ptr::read::<i32>((target as *const u8).offset(16) as *const i32)
-        };
-        format!(
-            r#"{{"addr":"0x{:x}","length":{},"string":"{}","raw_len":{}}}"#,
-            target,
-            s.len(),
-            s.replace('\\', "\\\\").replace('"', "\\\""),
-            raw_len
-        )
+            let s = unsafe { read_il2cpp_string(target as *const c_void) };
+            // Also dump raw bytes for debugging
+            let raw_len =
+                unsafe { std::ptr::read::<i32>((target as *const u8).offset(16) as *const i32) };
+            format!(
+                r#"{{"addr":"0x{:x}","length":{},"string":"{}","raw_len":{}}}"#,
+                target,
+                s.len(),
+                s.replace('\\', "\\\\").replace('"', "\\\""),
+                raw_len
+            )
         })()
     } else if path == "/il2cpp/search_methods_page" {
         // v3.22.89: 搜索方法名HTML页面（A-Z分组）
@@ -9742,6 +9765,7 @@ extern "C" fn unity_send_hook_handler(this: *mut c_void) -> *mut c_void {
 // MakeMd5(string input) -> string
 // Hook to capture MD5 input (contains salt) and output
 extern "C" fn makemd5_hook_handler(input: *mut c_void) -> *mut c_void {
+    MAKEMD5_HITS.fetch_add(1, Ordering::Relaxed);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         // Read input string before calling original
         let input_str = if !input.is_null() {
@@ -9749,7 +9773,7 @@ extern "C" fn makemd5_hook_handler(input: *mut c_void) -> *mut c_void {
         } else {
             String::new()
         };
-        
+
         let trampoline = interceptor_get_trampoline(makemd5_hook_handler as usize);
         if trampoline == 0 {
             return std::ptr::null_mut();
@@ -9757,24 +9781,28 @@ extern "C" fn makemd5_hook_handler(input: *mut c_void) -> *mut c_void {
         type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
         let original: FnType = std::mem::transmute(trampoline);
         let ret = original(input);
-        
+
         // Read output string
         let output_str = if !ret.is_null() {
             read_il2cpp_string(ret)
         } else {
             String::new()
         };
-        
-        // Log input + output
-        if !input_str.is_empty() {
-            if let Ok(mut log) = MD5_LOG.lock() {
-                if log.len() >= 100 {
-                    log.remove(0);
-                }
-                log.push((input_str, output_str));
+        // Always log a hook hit. Previously an IL2CPP string-layout/read
+        // failure silently discarded the event and made /api/md5log look as if
+        // the hook never ran.
+        if let Ok(mut log) = MD5_LOG.lock() {
+            if log.len() >= 100 {
+                log.remove(0);
             }
+            let shown_input = if input_str.is_empty() {
+                format!("MM:<unreadable@{:p}>", input)
+            } else {
+                format!("MM:{}", input_str)
+            };
+            log.push((shown_input, output_str));
         }
-        
+
         ret
     }));
     result.unwrap_or(std::ptr::null_mut())
@@ -9784,6 +9812,7 @@ extern "C" fn makemd5_hook_handler(input: *mut c_void) -> *mut c_void {
 // Hook to capture intermediate data — if MakeMd5 calls ComputeHash internally,
 // the input here will be the salted string (input + salt)
 extern "C" fn computehash_hook_handler(input: *mut c_void) -> *mut c_void {
+    CRYPTO_COMPUTEHASH_HITS.fetch_add(1, Ordering::Relaxed);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let input_str = if !input.is_null() {
             read_il2cpp_string(input)
@@ -9818,6 +9847,71 @@ extern "C" fn computehash_hook_handler(input: *mut c_void) -> *mut c_void {
         ret
     }));
     result.unwrap_or(std::ptr::null_mut())
+}
+
+// Concrete MD5 implementation hook. Signature follows the proven Hachimi
+// netinspect convention: only managed parameters are declared.
+// HashCore(byte[] array, int ibStart, int cbSize) is an instance method.
+type Md5HashCoreFn = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, i32);
+
+unsafe fn read_bounded_byte_array(array: *mut c_void, start: i32, count: i32) -> Option<Vec<u8>> {
+    if array.is_null() || start < 0 || count < 0 || count > 4096 {
+        return None;
+    }
+    let length = std::ptr::read_unaligned::<usize>((array as *const u8).add(0x18) as *const usize);
+    let start = start as usize;
+    let count = count as usize;
+    if length > 1024 * 1024 || start > length || count > length.saturating_sub(start) {
+        return None;
+    }
+    Some(std::slice::from_raw_parts((array as *const u8).add(0x20 + start), count).to_vec())
+}
+
+fn bytes_hex(data: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(data.len() * 2);
+    for &b in data {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+extern "C" fn md5_hashcore_hook_handler(
+    this_obj: *mut c_void,
+    array: *mut c_void,
+    start: i32,
+    count: i32,
+) {
+    MD5_HASHCORE_HITS.fetch_add(1, Ordering::Relaxed);
+    let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        read_bounded_byte_array(array, start, count)
+    }))
+    .ok()
+    .flatten();
+
+    unsafe {
+        let trampoline = interceptor_get_trampoline(md5_hashcore_hook_handler as usize);
+        if trampoline == 0 {
+            set_hook_status("sniff.md5_hashcore", "hit but trampoline=0");
+            return;
+        }
+        let original: Md5HashCoreFn = std::mem::transmute(trampoline);
+        original(this_obj, array, start, count);
+    }
+
+    if let Some(data) = captured {
+        let preview = String::from_utf8_lossy(&data);
+        if let Ok(mut log) = MD5_LOG.lock() {
+            if log.len() >= 100 {
+                log.remove(0);
+            }
+            log.push((
+                format!("HC:{}", preview),
+                format!("len={};hex={}", data.len(), bytes_hex(&data)),
+            ));
+        }
+    }
 }
 
 // ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]
@@ -10844,33 +10938,84 @@ unsafe fn install_api_sniff_hooks() {
                 to_cstr("Cryptographer").as_ptr(),
             );
             if !crypto_class.is_null() {
-                let addr = get_method_addr(
-                    crypto_class as usize,
-                    to_cstr("MakeMd5").as_ptr(),
-                    1,
-                );
+                let addr = get_method_addr(crypto_class as usize, to_cstr("MakeMd5").as_ptr(), 1);
                 if addr != 0 {
                     if interceptor_hook(addr, makemd5_hook_handler as usize) {
                         MAKEMD5_ADDR = addr;
                         set_hook_status("sniff.makemd5", &format!("hooked@0x{:x}", addr));
-                        ura_log(3, &format!("API sniff: Cryptographer.MakeMd5 hooked at 0x{:x}", addr));
+                        ura_log(
+                            3,
+                            &format!("API sniff: Cryptographer.MakeMd5 hooked at 0x{:x}", addr),
+                        );
                     } else {
                         set_hook_status("sniff.makemd5", "failed: interceptor_hook");
                     }
                 }
                 // Also hook ComputeHash to capture intermediate data (salted input)
-                let ch_addr = get_method_addr(
-                    crypto_class as usize,
-                    to_cstr("ComputeHash").as_ptr(),
-                    1,
-                );
+                let ch_addr =
+                    get_method_addr(crypto_class as usize, to_cstr("ComputeHash").as_ptr(), 1);
                 if ch_addr != 0 {
                     if interceptor_hook(ch_addr, computehash_hook_handler as usize) {
                         COMPUTEHASH_ADDR = ch_addr;
                         set_hook_status("sniff.computehash", &format!("hooked@0x{:x}", ch_addr));
-                        ura_log(3, &format!("API sniff: Cryptographer.ComputeHash hooked at 0x{:x}", ch_addr));
+                        ura_log(
+                            3,
+                            &format!(
+                                "API sniff: Cryptographer.ComputeHash hooked at 0x{:x}",
+                                ch_addr
+                            ),
+                        );
                     }
                 }
+            }
+        }
+    }
+
+    // MakeMd5 dispatches HashAlgorithm.ComputeHash(byte[]) virtually;
+    // Gallop.Cryptographer.ComputeHash(string) is a separate method.
+    if MD5_HASHCORE_ADDR == 0 {
+        let mscorlib = get_asm(to_cstr("mscorlib.dll").as_ptr());
+        if mscorlib.is_null() {
+            set_hook_status("sniff.md5_hashcore", "failed: mscorlib.dll not found");
+        } else {
+            let candidates = ["MD5CryptoServiceProvider", "MD5Managed"];
+            let mut resolved_any = false;
+            for candidate in candidates {
+                let cls = get_class(
+                    mscorlib,
+                    to_cstr("System.Security.Cryptography").as_ptr(),
+                    to_cstr(candidate).as_ptr(),
+                );
+                if cls.is_null() {
+                    continue;
+                }
+                let addr = get_method_addr(cls as usize, to_cstr("HashCore").as_ptr(), 3);
+                if addr == 0 {
+                    continue;
+                }
+                resolved_any = true;
+                if interceptor_hook(addr, md5_hashcore_hook_handler as usize) {
+                    MD5_HASHCORE_ADDR = addr;
+                    set_hook_status(
+                        "sniff.md5_hashcore",
+                        &format!("hooked {}.HashCore@0x{:x}", candidate, addr),
+                    );
+                    ura_log(
+                        3,
+                        &format!("MD5 HashCore hooked: {} @0x{:x}", candidate, addr),
+                    );
+                    break;
+                }
+            }
+            if MD5_HASHCORE_ADDR == 0 {
+                set_hook_status(
+                    "sniff.md5_hashcore",
+                    if resolved_any {
+                        "failed: interceptor_hook"
+                    } else {
+                        "failed: no concrete MD5 HashCore candidate"
+                    },
+                );
             }
         }
     }
@@ -16642,7 +16787,9 @@ unsafe fn il2cpp_call_static_method(
     let mut method_addr: usize = 0;
     for &n in &[param_count, 5, 4, 6, 3, 2, 1, 0] {
         method_addr = get_method_addr(class as usize, to_cstr(method_name).as_ptr(), n);
-        if method_addr != 0 { break; }
+        if method_addr != 0 {
+            break;
+        }
     }
     if method_addr == 0 {
         return format!(
@@ -16654,38 +16801,36 @@ unsafe fn il2cpp_call_static_method(
     // ARM64 ABI: 参数 x0-x4, static 方法无 this 指针
     // 参数1-4 是 int (w寄存器), 参数5 是指针 (x寄存器)
     // p4=0 表示 null delegate
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        match param_count {
-            0 => {
-                type F = unsafe extern "C" fn() -> *mut c_void;
-                let f: F = std::mem::transmute(method_addr);
-                f()
-            }
-            1 => {
-                type F = unsafe extern "C" fn(i64) -> *mut c_void;
-                let f: F = std::mem::transmute(method_addr);
-                f(p0)
-            }
-            2 => {
-                type F = unsafe extern "C" fn(i64, i64) -> *mut c_void;
-                let f: F = std::mem::transmute(method_addr);
-                f(p0, p1)
-            }
-            3 => {
-                type F = unsafe extern "C" fn(i64, i64, i64) -> *mut c_void;
-                let f: F = std::mem::transmute(method_addr);
-                f(p0, p1, p2)
-            }
-            4 => {
-                type F = unsafe extern "C" fn(i64, i64, i64, i64) -> *mut c_void;
-                let f: F = std::mem::transmute(method_addr);
-                f(p0, p1, p2, p3)
-            }
-            _ => {
-                type F = unsafe extern "C" fn(i64, i64, i64, i64, i64) -> *mut c_void;
-                let f: F = std::mem::transmute(method_addr);
-                f(p0, p1, p2, p3, p4)
-            }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match param_count {
+        0 => {
+            type F = unsafe extern "C" fn() -> *mut c_void;
+            let f: F = std::mem::transmute(method_addr);
+            f()
+        }
+        1 => {
+            type F = unsafe extern "C" fn(i64) -> *mut c_void;
+            let f: F = std::mem::transmute(method_addr);
+            f(p0)
+        }
+        2 => {
+            type F = unsafe extern "C" fn(i64, i64) -> *mut c_void;
+            let f: F = std::mem::transmute(method_addr);
+            f(p0, p1)
+        }
+        3 => {
+            type F = unsafe extern "C" fn(i64, i64, i64) -> *mut c_void;
+            let f: F = std::mem::transmute(method_addr);
+            f(p0, p1, p2)
+        }
+        4 => {
+            type F = unsafe extern "C" fn(i64, i64, i64, i64) -> *mut c_void;
+            let f: F = std::mem::transmute(method_addr);
+            f(p0, p1, p2, p3)
+        }
+        _ => {
+            type F = unsafe extern "C" fn(i64, i64, i64, i64, i64) -> *mut c_void;
+            let f: F = std::mem::transmute(method_addr);
+            f(p0, p1, p2, p3, p4)
         }
     }));
     match result {
@@ -16693,8 +16838,7 @@ unsafe fn il2cpp_call_static_method(
             let ret_addr = ret as usize;
             format!(
                 r#"{{"ok":true,"class":"{}","method":"{}","method_addr":"0x{:x}","params":[{},{},{},{},{}],"ret":"0x{:x}"}}"#,
-                class_name, method_name, method_addr,
-                p0, p1, p2, p3, p4, ret_addr
+                class_name, method_name, method_addr, p0, p1, p2, p3, p4, ret_addr
             )
         }
         Err(_) => format!(
