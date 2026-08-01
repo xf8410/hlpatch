@@ -140,6 +140,7 @@ static mut POST_ADDR: usize = 0;
 static mut UNITY_SEND_ADDR: usize = 0;
 // MakeMd5 hook
 static mut MAKEMD5_ADDR: usize = 0;
+static mut COMPUTEHASH_ADDR: usize = 0;
 static MD5_LOG: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // (input, output)
 static UNITY_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
 const UNITY_OBSERVATIONS_MAX: usize = 256;
@@ -7565,6 +7566,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 || DECOMPRESS_RESPONSE_ADDR != 0
                 || POST_ADDR != 0
                 || MAKEMD5_ADDR != 0
+                || COMPUTEHASH_ADDR != 0
         };
         if any_hooked && !GAME_INITIALIZED.load(Ordering::Relaxed) {
             GAME_INITIALIZED.store(true, Ordering::Relaxed);
@@ -8053,20 +8055,24 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let post_addr = unsafe { POST_ADDR };
         let makemd5_hooked = unsafe { MAKEMD5_ADDR != 0 };
         let makemd5_addr = unsafe { MAKEMD5_ADDR };
+        let computehash_hooked = unsafe { COMPUTEHASH_ADDR != 0 };
+        let computehash_addr = unsafe { COMPUTEHASH_ADDR };
         let interceptor_available = unsafe { !API.is_null() && (*API).interceptor != 0 };
         let has_get_method_addr =
             unsafe { !API.is_null() && (*API).il2cpp_get_method_addr_fn.is_some() };
         format!(
-            r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"post_hooked":{},"makemd5_hooked":{},"compress_addr":"0x{:x}","decompress_addr":"0x{:x}","post_addr":"0x{:x}","makemd5_addr":"0x{:x}","interceptor_available":{},"get_method_addr_available":{}}}"#,
+            r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"post_hooked":{},"makemd5_hooked":{},"computehash_hooked":{},"compress_addr":"0x{:x}","decompress_addr":"0x{:x}","post_addr":"0x{:x}","makemd5_addr":"0x{:x}","computehash_addr":"0x{:x}","interceptor_available":{},"get_method_addr_available":{}}}"#,
             SNIFF_ENABLED.load(Ordering::Relaxed),
             req_hooked,
             resp_hooked,
             post_hooked,
             makemd5_hooked,
+            computehash_hooked,
             req_addr,
             resp_addr,
             post_addr,
             makemd5_addr,
+            computehash_addr,
             interceptor_available,
             has_get_method_addr
         )
@@ -9774,6 +9780,46 @@ extern "C" fn makemd5_hook_handler(input: *mut c_void) -> *mut c_void {
     result.unwrap_or(std::ptr::null_mut())
 }
 
+// ComputeHash(string input) -> string
+// Hook to capture intermediate data — if MakeMd5 calls ComputeHash internally,
+// the input here will be the salted string (input + salt)
+extern "C" fn computehash_hook_handler(input: *mut c_void) -> *mut c_void {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let input_str = if !input.is_null() {
+            read_il2cpp_string(input)
+        } else {
+            String::new()
+        };
+
+        let trampoline = interceptor_get_trampoline(computehash_hook_handler as usize);
+        if trampoline == 0 {
+            return std::ptr::null_mut();
+        }
+        type FnType = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+        let original: FnType = std::mem::transmute(trampoline);
+        let ret = original(input);
+
+        let output_str = if !ret.is_null() {
+            read_il2cpp_string(ret)
+        } else {
+            String::new()
+        };
+
+        // Log with "CH:" prefix to distinguish from MakeMd5 entries
+        if !input_str.is_empty() {
+            if let Ok(mut log) = MD5_LOG.lock() {
+                if log.len() >= 100 {
+                    log.remove(0);
+                }
+                log.push((format!("CH:{}", input_str), output_str));
+            }
+        }
+
+        ret
+    }));
+    result.unwrap_or(std::ptr::null_mut())
+}
+
 // ★ v3.23.3: Hook handler for CompressRequest(byte[] data) -> byte[]
 // Parks the uncompressed request body, keyed by the compressed byte array returned by the original.
 // WWWRequest.Post will match it later.
@@ -10810,6 +10856,19 @@ unsafe fn install_api_sniff_hooks() {
                         ura_log(3, &format!("API sniff: Cryptographer.MakeMd5 hooked at 0x{:x}", addr));
                     } else {
                         set_hook_status("sniff.makemd5", "failed: interceptor_hook");
+                    }
+                }
+                // Also hook ComputeHash to capture intermediate data (salted input)
+                let ch_addr = get_method_addr(
+                    crypto_class as usize,
+                    to_cstr("ComputeHash").as_ptr(),
+                    1,
+                );
+                if ch_addr != 0 {
+                    if interceptor_hook(ch_addr, computehash_hook_handler as usize) {
+                        COMPUTEHASH_ADDR = ch_addr;
+                        set_hook_status("sniff.computehash", &format!("hooked@0x{:x}", ch_addr));
+                        ura_log(3, &format!("API sniff: Cryptographer.ComputeHash hooked at 0x{:x}", ch_addr));
                     }
                 }
             }
