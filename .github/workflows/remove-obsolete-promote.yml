@@ -1,0 +1,24 @@
+name: Remove obsolete mutable release promoter
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Remove obsolete promoter and this cleanup workflow
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/promote-unified-ura.yml
+          git rm .github/workflows/remove-obsolete-promote.yml
+          git commit -m "ci: remove obsolete workflow that force-moved tags and clobbered releases"
+          git push origin HEAD:main
