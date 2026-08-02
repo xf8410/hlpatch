@@ -7226,6 +7226,142 @@ fn meta_dump_endpoint() -> String {
     }
 }
 
+
+// SAFE_METADATA_PROBE_V1
+// Bounded, serialized process-memory scanner. It never dereferences candidate
+// addresses and never invokes IL2CPP while scanning.
+static SAFE_MEM_SCAN_LOCK: Mutex<()> = Mutex::new(());
+const SAFE_SCAN_CHUNK: usize = 256 * 1024;
+const SAFE_SCAN_MAX_BYTES: u64 = 256 * 1024 * 1024;
+const SAFE_SCAN_MAX_MAP: u64 = 64 * 1024 * 1024;
+const SAFE_SCAN_BUDGET_MS: u128 = 2500;
+
+#[derive(Clone)]
+struct SafeMap { start: u64, end: u64, perms: String, path: String }
+
+fn safe_json(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
+}
+
+fn safe_query(req: &str, key: &str) -> Option<String> {
+    let uri = req.lines().next()?.split_whitespace().nth(1)?;
+    let q = uri.split_once('?')?.1;
+    q.split('&').find_map(|p| {
+        let (k, v) = p.split_once('=').unwrap_or((p, ""));
+        if k == key { Some(v.to_string()) } else { None }
+    })
+}
+
+fn safe_hex(s: &str) -> Option<Vec<u8>> {
+    if s.is_empty() || s.len() > 128 || s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i+2], 16).ok()).collect()
+}
+
+fn safe_maps() -> std::io::Result<Vec<SafeMap>> {
+    let text = std::fs::read_to_string("/proc/self/maps")?;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut p = line.split_whitespace();
+        let range = match p.next() { Some(v) => v, None => continue };
+        let perms = match p.next() { Some(v) => v.to_string(), None => continue };
+        let _offset = p.next(); let _dev = p.next(); let _inode = p.next();
+        let path = p.collect::<Vec<_>>().join(" ");
+        let (a,b) = match range.split_once('-') { Some(v) => v, None => continue };
+        let (start,end) = match (u64::from_str_radix(a,16),u64::from_str_radix(b,16)) { (Ok(a),Ok(b)) if b>a => (a,b), _ => continue };
+        out.push(SafeMap { start, end, perms, path });
+    }
+    Ok(out)
+}
+
+fn safe_read(addr: u64, dst: &mut [u8]) -> isize {
+    if dst.is_empty() { return 0; }
+    let local = libc::iovec { iov_base: dst.as_mut_ptr() as *mut c_void, iov_len: dst.len() };
+    let remote = libc::iovec { iov_base: addr as usize as *mut c_void, iov_len: dst.len() };
+    unsafe { libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) }
+}
+
+fn safe_metadata_header(addr: u64) -> Option<(u32,u64)> {
+    let mut h = [0u8; 0x200];
+    if safe_read(addr, &mut h) < 0x40 { return None; }
+    if h[0..4] != [0xaf,0x1b,0xb1,0xfa] { return None; }
+    let version = u32::from_le_bytes(h[4..8].try_into().ok()?);
+    if !(16..=40).contains(&version) { return None; }
+    let mut max_end = 0u64;
+    // Metadata headers are offset/size pairs after sanity+version. This is a
+    // bounded plausibility estimate, not permission to dump arbitrary memory.
+    for off in (8..h.len()-7).step_by(8) {
+        let a = u32::from_le_bytes(h[off..off+4].try_into().ok()?) as u64;
+        let z = u32::from_le_bytes(h[off+4..off+8].try_into().ok()?) as u64;
+        if a == 0 && z == 0 { continue; }
+        if a < 8 || a > 256*1024*1024 || z > 256*1024*1024 { continue; }
+        let e = a.checked_add(z)?;
+        if e <= 256*1024*1024 { max_end = max_end.max(e); }
+    }
+    if max_end < 0x1000 { return None; }
+    Some((version,max_end))
+}
+
+fn safe_mem_scan(req: &str, metadata_only: bool) -> String {
+    let _guard = match SAFE_MEM_SCAN_LOCK.try_lock() {
+        Ok(g) => g,
+        Err(_) => return r#"{"ok":false,"error":"scan_busy","retry_after_ms":3000}"#.to_string(),
+    };
+    let needle = if metadata_only { vec![0xaf,0x1b,0xb1,0xfa] } else {
+        match safe_query(req,"hex").and_then(|v| safe_hex(&v)) {
+            Some(v) => v,
+            None => return r#"{"ok":false,"error":"invalid_hex","max_hex_chars":128}"#.to_string(),
+        }
+    };
+    let max_hits = safe_query(req,"max").and_then(|v| v.parse::<usize>().ok()).unwrap_or(8).clamp(1,32);
+    let maps = match safe_maps() { Ok(v) => v, Err(e) => return format!(r#"{{"ok":false,"error":"maps_read_failed","detail":"{}"}}"#, safe_json(&e.to_string())) };
+    let started = std::time::Instant::now();
+    let mut selected=0u64; let mut attempted=0u64; let mut scanned=0u64; let mut failures=0u64; let mut truncated=false;
+    let mut hits: Vec<String> = Vec::new();
+    let mut buf = vec![0u8; SAFE_SCAN_CHUNK + needle.len().saturating_sub(1)];
+    'maps: for m in &maps {
+        if !m.perms.starts_with('r') { continue; }
+        if m.path.starts_with("/dev/") || m.path=="[vvar]" || m.path=="[vdso]" { continue; }
+        let map_len = m.end-m.start;
+        if map_len == 0 || map_len > SAFE_SCAN_MAX_MAP { continue; }
+        selected += 1;
+        let mut pos=m.start; let mut carry=0usize;
+        while pos<m.end {
+            if attempted>=SAFE_SCAN_MAX_BYTES || started.elapsed().as_millis()>=SAFE_SCAN_BUDGET_MS { truncated=true; break 'maps; }
+            let want=((m.end-pos) as usize).min(SAFE_SCAN_CHUNK).min((SAFE_SCAN_MAX_BYTES-attempted) as usize);
+            attempted += want as u64;
+            let n=safe_read(pos,&mut buf[carry..carry+want]);
+            if n<=0 { failures+=1; break; }
+            let n=n as usize; scanned+=n as u64; let total=carry+n;
+            if total>=needle.len() {
+                for i in 0..=total-needle.len() {
+                    if buf[i..i+needle.len()]==needle[..] {
+                        let addr=pos.saturating_sub(carry as u64)+i as u64;
+                        let meta=safe_metadata_header(addr);
+                        if !metadata_only || meta.is_some() {
+                            let extra=meta.map(|(v,z)| format!(r#",\"version\":{},\"size_estimate\":{}"#,v,z)).unwrap_or_default();
+                            hits.push(format!(r#"{{\"addr\":\"0x{:x}\",\"map_start\":\"0x{:x}\",\"map_end\":\"0x{:x}\",\"perms\":\"{}\",\"path\":\"{}\"{}}}"#,addr,m.start,m.end,safe_json(&m.perms),safe_json(&m.path),extra));
+                            if hits.len()>=max_hits { break 'maps; }
+                        }
+                    }
+                }
+            }
+            carry=needle.len().saturating_sub(1).min(total);
+            if carry>0 { buf.copy_within(total-carry..total,0); }
+            pos+=n as u64;
+            if n<want { failures+=1; break; }
+        }
+    }
+    format!(r#"{{"ok":true,"safe":true,"metadata_only":{},"maps_total":{},"maps_selected":{},"bytes_attempted":{},"bytes_scanned":{},"read_failures":{},"elapsed_ms":{},"truncated":{},"hits":{},"locations":[{}]}}"#,
+        metadata_only,maps.len(),selected,attempted,scanned,failures,started.elapsed().as_millis(),truncated,hits.len(),hits.join(","))
+}
+
+fn safe_maps_summary() -> String {
+    let maps=match safe_maps(){Ok(v)=>v,Err(e)=>return format!(r#"{{"ok":false,"error":"maps_read_failed","detail":"{}"}}"#,safe_json(&e.to_string()))};
+    let readable=maps.iter().filter(|m|m.perms.starts_with('r')).count();
+    let sample=maps.iter().filter(|m|m.perms.starts_with('r')).take(64).map(|m|format!(r#"{{"start":"0x{:x}","end":"0x{:x}","size":{},"perms":"{}","path":"{}"}}"#,m.start,m.end,m.end-m.start,safe_json(&m.perms),safe_json(&m.path))).collect::<Vec<_>>().join(",");
+    format!(r#"{{"ok":true,"maps_total":{},"readable":{},"sample_limited":true,"maps":[{}]}}"#,maps.len(),readable,sample)
+}
+
 fn handle_http(mut stream: std::net::TcpStream) {
     use std::io::{Read, Write};
     let mut buf = [0u8; 8192];
@@ -7355,7 +7491,13 @@ fn handle_http(mut stream: std::net::TcpStream) {
     let dl_name = parse_query(&full_uri, "name");
     let dl_enabled = !dl_flag.is_empty() && dl_flag != "0" && DL_ALLOWED.iter().any(|p| path == *p);
 
-    let body = if path == "/" || path == "/health" {
+    let body = if path == "/debug/global_metadata_probe" {
+        safe_mem_scan(req, true)
+    } else if path == "/debug/mem_scan_hex" {
+        safe_mem_scan(req, false)
+    } else if path == "/debug/mem_maps" {
+        safe_maps_summary()
+    } else if path == "/" || path == "/health" {
         format!(
             r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#,
             PLUGIN_VERSION
