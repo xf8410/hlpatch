@@ -1,0 +1,38 @@
+name: Publish v3.25.2 from main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Verify and create immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v3.25.2
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)
+          test "$TAG" = "v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; refusing to move it" >&2
+            exit 1
+          fi
+          SHA=$(git rev-parse HEAD)
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$SHA"
+
+      - name: Dispatch immutable release builder
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-ura.yml --ref main -f tag=v3.25.2
