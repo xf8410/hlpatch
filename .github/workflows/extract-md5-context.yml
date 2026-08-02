@@ -1,0 +1,55 @@
+name: Extract MD5 hook source context
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/makemd5-tls-probe-v3253
+      - name: Extract bounded relevant source context
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('hachimi_ura_plugin/src/lib.rs')
+          lines = p.read_text().splitlines()
+          needles = [
+              'fn makemd5_hook_handler',
+              'fn computehash_hook_handler',
+              'fn install_sniff_hooks',
+              '/api/md5log/install',
+              '/api/md5log/clear',
+              '/api/sniff/diag',
+              'URA plugin v3.24.9 loaded',
+          ]
+          ranges=[]
+          for i,line in enumerate(lines):
+              if any(n in line for n in needles):
+                  ranges.append((max(0,i-45), min(len(lines),i+120)))
+          ranges.sort()
+          merged=[]
+          for a,b in ranges:
+              if merged and a <= merged[-1][1]:
+                  merged[-1]=(merged[-1][0],max(merged[-1][1],b))
+              else:
+                  merged.append((a,b))
+          out=[]
+          for a,b in merged:
+              out.append(f'===== lines {a+1}-{b} =====')
+              out.extend(f'{j+1:07d}: {lines[j]}' for j in range(a,b))
+          Path('diagnostics').mkdir(exist_ok=True)
+          Path('diagnostics/md5_hook_context.txt').write_text('\n'.join(out)+'\n')
+          PY
+      - name: Commit context
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add diagnostics/md5_hook_context.txt
+          git commit -m "diagnostic: capture bounded md5 hook source context"
+          git push origin HEAD:workbench/makemd5-tls-probe-v3253
