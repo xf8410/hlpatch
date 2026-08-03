@@ -1,0 +1,79 @@
+name: Publish immutable Ramen v3.25.3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 68aecf85d4b4dccb3dee7196001acf064b166453
+          fetch-depth: 0
+
+      - name: Verify immutable source and version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "68aecf85d4b4dccb3dee7196001acf064b166453"
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.25.3"
+          ! git ls-remote --exit-code --tags origin refs/tags/v3.25.3
+          ! gh release view v3.25.3
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build exact source
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --locked --target aarch64-linux-android --release
+
+      - name: Create immutable tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=68aecf85d4b4dccb3dee7196001acf064b166453
+          cargo_version=3.25.3
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.25.3
+          workflow_run=$GITHUB_RUN_ID
+          EOF
+          git tag v3.25.3 68aecf85d4b4dccb3dee7196001acf064b166453
+          git push origin refs/tags/v3.25.3
+          gh release create v3.25.3 --verify-tag --title v3.25.3 \
+            --notes "Immutable Ramen timeline and bounded transition observation build. Source: 68aecf85d4b4dccb3dee7196001acf064b166453" \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+
+      - name: Verify published SO digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LOCAL=$(sha256sum hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so | cut -d' ' -f1)
+          REMOTE=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.25.3 --jq '.assets[] | select(.name == "libhachimi_ura.so") | .digest')
+          test "$REMOTE" = "sha256:$LOCAL"
