@@ -12,9 +12,6 @@ fn main() {
 
     let mut source = fs::read_to_string("src/lib.rs").expect("read legacy runtime");
 
-    // entry.rs owns crate-level attributes. Inner docs/attributes cannot appear
-    // inside include!, so convert the leading module documentation and remove
-    // the legacy crate attribute from the generated item stream.
     while source.starts_with("//!") {
         let end = source.find('\n').expect("leading doc line newline");
         source.replace_range(..=end, "");
@@ -26,8 +23,6 @@ fn main() {
         "crate attribute",
     );
 
-    // Stop treating display month/half as a logical turn. The AI remains
-    // disabled unless the named common runtime method returns a usable value.
     replace_once(
         &mut source,
         "let turn = std::cmp::min((mon - 1) * 2 + (half - 1), 71);",
@@ -35,11 +30,10 @@ fn main() {
         "calendar-derived turn",
     );
 
-    // Insert bounded, read-only endpoints ahead of /summary.
     replace_once(
         &mut source,
         "} else if path == \"/summary\" {\n        read_summary()",
-        "} else if path == \"/single_mode/timeline\" {\n        ramen_observation::read_timeline_json()\n    } else if path == \"/ramen/state\" {\n        ramen_observation::read_ramen_state_json()\n    } else if path == \"/summary\" {\n        read_summary()",
+        "} else if path == \"/single_mode/timeline\" {\n        ramen_observation::read_timeline_json()\n    } else if path == \"/ramen/state\" {\n        ramen_observation::read_ramen_state_json()\n    } else if path == \"/ramen/transitions\" {\n        ramen_observation::read_ramen_transitions_json()\n    } else if path == \"/summary\" {\n        read_summary()",
         "summary route",
     );
 
