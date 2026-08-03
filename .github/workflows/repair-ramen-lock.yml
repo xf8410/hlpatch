@@ -1,0 +1,33 @@
+name: Repair Ramen branch lockfile
+
+on:
+  push:
+    branches:
+      - workbench/ramen-timeline-observation-v2
+    paths:
+      - "hachimi_ura_plugin/Cargo.lock"
+      - ".github/workflows/repair-ramen-lock.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair-lock:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/ramen-timeline-observation-v2
+      - name: Regenerate lockfile from manifest
+        working-directory: hachimi_ura_plugin
+        run: cargo generate-lockfile
+      - name: Commit only the repaired lockfile
+        run: |
+          set -euo pipefail
+          git add hachimi_ura_plugin/Cargo.lock
+          git diff --cached --quiet && exit 0
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "chore: regenerate Cargo.lock for v3.25.3"
+          git push origin HEAD:workbench/ramen-timeline-observation-v2
