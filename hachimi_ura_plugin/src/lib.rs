@@ -125,6 +125,8 @@ struct SniffMetadata {
     direction: &'static str,
     path: String,
     size: usize,
+    body_hex: String,
+    headers: Vec<(String, String)>,
 }
 static mut SNIFF_METADATA: Vec<SniffMetadata> = Vec::new();
 // Bounded temporal FIFO; unmatched responses are reported with request_id=0.
@@ -136,7 +138,7 @@ static mut PENDING_REQ_ID: u64 = 0;
 static mut COMPRESS_REQUEST_ADDR: usize = 0;
 static mut DECOMPRESS_RESPONSE_ADDR: usize = 0;
 static mut POST_ADDR: usize = 0;
-// UnityWebRequest request-entry observer. Metadata only: no headers, bodies, tokens, or query strings.
+// UnityWebRequest request-entry observer. Full capture: headers, bodies, tokens and query strings.
 static mut UNITY_SEND_ADDR: usize = 0;
 // MakeMd5 hook
 static mut MAKEMD5_ADDR: usize = 0;
@@ -177,8 +179,16 @@ fn sniff_path(url: &str) -> String {
     no_query.to_string()
 }
 
-unsafe fn push_sniff_metadata(request_id: u64, direction: &'static str, url: &str, size: usize) {
+unsafe fn push_sniff_metadata(
+    request_id: u64,
+    direction: &'static str,
+    url: &str,
+    size: usize,
+    body: &[u8],
+    headers: Vec<(String, String)>,
+) {
     let id = SNIFF_METADATA_ID.fetch_add(1, Ordering::Relaxed);
+    let body_hex = body.iter().map(|b| format!("{:02x}", b)).collect::<String>();
     SNIFF_METADATA.push(SniffMetadata {
         id,
         request_id,
@@ -186,6 +196,8 @@ unsafe fn push_sniff_metadata(request_id: u64, direction: &'static str, url: &st
         direction,
         path: sniff_path(url),
         size,
+        body_hex,
+        headers,
     });
     if SNIFF_METADATA.len() > SNIFF_METADATA_MAX {
         SNIFF_METADATA.remove(0);
@@ -7684,8 +7696,14 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe {
             let entries: Vec<String> = SNIFF_METADATA.iter()
                 .filter(|m| m.id > after_id)
-                .map(|m| format!(r#"{{"id":{},"request_id":{},"timestamp_ms":{},"direction":"{}","path":"{}","size":{}}}"#,
-                    m.id, m.request_id, m.timestamp_ms, m.direction, json_escape(&m.path), m.size))
+                .map(|m| {
+                    let headers_json: String = m.headers.iter()
+                        .map(|(k, v)| format!(r#"{{"key":"{}","value":"{}"}}"#, json_escape(k), json_escape(v)))
+                        .collect::<Vec<String>>()
+                        .join(",");
+                    format!(r#"{{"id":{},"request_id":{},"timestamp_ms":{},"direction":"{}","path":"{}","size":{},"body_hex":"{}","headers":[{}]}}"#,
+                        m.id, m.request_id, m.timestamp_ms, m.direction, json_escape(&m.path), m.size, m.body_hex, headers_json)
+                })
                 .collect();
             let last_id = SNIFF_METADATA.last().map(|m| m.id).unwrap_or(after_id);
             format!(
@@ -10047,7 +10065,7 @@ extern "C" fn decompress_response_hook_handler(data: *mut c_void) -> *mut c_void
                 } else {
                     SNIFF_RESPONSE_QUEUE.remove(0)
                 };
-                push_sniff_metadata(rid, "response", &response_url, bytes.len());
+                push_sniff_metadata(rid, "response", &response_url, bytes.len(), &bytes, Vec::new());
                 SNIFF_RESPONSES.push((rid, bytes));
                 if SNIFF_RESPONSES.len() > SNIFF_RAW_MAX {
                     SNIFF_RESPONSES.remove(0);
@@ -10103,7 +10121,7 @@ extern "C" fn post_hook_handler(
             let url_str = game_url.clone().unwrap_or_default();
             {
                 let _lock = SNIFF_MUTEX.lock();
-                push_sniff_metadata(rid, "request", &url_str, body.len());
+                push_sniff_metadata(rid, "request", &url_str, body.len(), &body, req_headers.clone());
                 SNIFF_RESPONSE_QUEUE.push((rid, url_str.clone()));
                 if SNIFF_RESPONSE_QUEUE.len() > SNIFF_METADATA_MAX {
                     SNIFF_RESPONSE_QUEUE.remove(0);
