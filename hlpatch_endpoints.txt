@@ -1,0 +1,158 @@
+================================================================================
+hlpatch SO 插件完整端点清单 (142 个)
+版本: main 分支 2026-08-05
+基址: http://127.0.0.1:18765
+================================================================================
+
+=== 核心 (6) ===
+  /health                      — SO 版本和健康检查
+  /status                      — 初始化/状态快照
+  /config                      — 配置页面
+  /config.html                 — 配置页面 HTML
+  /update                      — 更新检查
+  /update/status               — 更新状态
+
+=== Sniff / 协议观测 (14) ===
+  /api/sniff                   — sniff 总入口
+  /api/sniff/metadata          — ★完整协议观测 (body_hex + headers + path + size)
+  /api/sniff/status            — sniff 状态 (enabled, count)
+  /api/sniff/toggle            — 开关 sniff
+  /api/sniff/clear             — 清空 sniff 缓冲
+  /api/sniff/diag              — hook 诊断 (compress/decompress/post)
+  /api/sniff/unity             — Unity 请求观测 (body_hex + method + path)
+  /api/md5log                  — ★MakeMd5 input→output 对
+  /api/md5log/clear            — 清空 MD5 日志
+  /api/md5log/install          — 手动安装 MakeMd5 hook
+  /api/event/choices           — 事件选择肢快照
+  /api/event/clear             — 清空事件
+  /api/event/observations     — 完成的事件观测
+  /api/event/observations/clear — 清空事件观测
+
+=== IL2CPP (33) ===
+  /il2cpp/call                 — ★调用 singleton getter
+  /il2cpp/call_static          — 调用 static 方法
+  /il2cpp/classes              — 完整类列表
+  /il2cpp/tree                 — 类字段结构 dump
+  /il2cpp/methods             — 类方法列表
+  /il2cpp/field                — 读字段
+  /il2cpp/static               — ★读 static 字段 (含账号id)
+  /il2cpp/read_mem             — ★读原始进程内存
+  /il2cpp/read_mem_dl          — 读内存 (下载)
+  /il2cpp/read_string          — ★读 IL2CPP string 对象
+  /il2cpp/disassemble          — 反汇编方法
+  /il2cpp/disassemble_dl       — 反汇编 (下载)
+  /il2cpp/disassemble_addr     — 按地址反汇编
+  /il2cpp/disassemble_addr_dl  — 按地址反汇编 (下载)
+  /il2cpp/dump                 — dump
+  /il2cpp/dump_all_methods     — dump 所有方法
+  /il2cpp/dump_all_methods_dl — dump 所有方法 (下载)
+  /il2cpp/search_float         — 搜索 float
+  /il2cpp/search_float_dl      — 搜索 float (下载)
+  /il2cpp/search_int           — 搜索 int
+  /il2cpp/search_int_dl        — 搜索 int (下载)
+  /il2cpp/search_methods       — 搜索方法
+  /il2cpp/search_methods_dl    — 搜索方法 (下载)
+  /il2cpp/search_methods_page  — 搜索方法 (分页)
+  /scan                        — 类扫描
+  /classes/                    — 类名搜索
+  /fields/                     — 字段读取
+  /methods/                    — 方法读取
+  /find_method/                — 方法搜索
+
+=== Debug (61) ===
+  /debug/all                   — 全部调试数据
+  /debug/laststep              — 最后一步 buffer
+  /debug/params                — 参数
+  /debug/paramsincdec          — 参数增减
+  /debug/breeders              — 育成师
+  /debug/cmdinfo               — 命令信息
+  /debug/training_partners     — 训练伙伴
+  /debug/training_seed          — 训练种子
+  /debug/training_log          — 训练日志
+  /debug/training_log_dl       — 训练日志 (下载)
+  /debug/turn_probe            — 回合探针
+  /debug/gauge                 — 量表1
+  /debug/gauge2                — 量表2
+  /debug/hint_gain             — 提示增益
+  /debug/sc_effect             — SC 效果
+  /debug/unique_skills         — 独特技能
+  /debug/unique_detail         — 独特详情
+  /debug/rameninfo             — 拉面信息
+  /debug/ramenfields           — 拉面字段
+  /debug/ramengains            — 拉面增益
+  /debug/ramen_participants    — 拉面参与者
+  /debug/ramen_planner_state   — 拉面规划器状态
+  /debug/ramen_region_select   — 拉面区域选择
+  /debug/ramen_dataset_path    — 拉面数据集路径
+  /debug/ramen_formula_targets — 拉面公式目标
+  /debug/ramen_transition      — 拉面过渡
+  /debug/event_reward_targets  — 事件奖励目标
+  /debug/storydata             — 故事数据
+  /debug/dump                  — dump
+  /debug/dumpclass             — dump 类
+  /debug/crashlog              — 崩溃日志
+  /debug/upload                — 上传
+  /debug/hookdiag              — hook 诊断
+  /debug/hooklog               — hook 日志
+  /debug/mdb_all_tables        — MDB 所有表
+  /debug/mdb_schema_dump       — MDB schema dump
+  /debug/download_table        — 下载表
+  /debug/push_table            — 推送表
+  /debug/table                 — 表
+  /debug/maps_list             — ★内存映射列表
+  /debug/mem_maps              — 内存映射
+  /debug/mem_scan_hex          — ★内存搜索 (hex 模式)
+  /debug/mem_scan_sqlite       — 内存搜索 (SQLite)
+  /debug/mem_scan_zdict        — 内存搜索 (ZDict)
+  /debug/file_scan_hex         — 文件搜索 (hex)
+  /debug/file_range_hex        — 文件范围 (hex)
+  /debug/file_dl               — 文件下载
+  /debug/meta_dump             — metadata dump
+  /debug/global_metadata_probe — 全局 metadata 探测
+  /debug/resource_reads        — 资源读取
+  /debug/resource_storage     — 资源存储
+  /debug/resource_db_keys     — 资源 DB keys
+  /debug/resource_meta_key     — 资源 meta key
+  /debug/resource_meta_schema  — 资源 meta schema
+  /debug/resource_meta_probe  — 资源 meta 探测
+  /debug/resource_meta_dl     — 资源 meta 下载
+  /debug/resource_file_dl     — 资源文件下载
+  /debug/resource_crypto_symbols — 资源加密符号
+  /debug/private_file_inventory — ★私有文件清单
+  /debug/private_file_dl      — ★私有文件下载
+  /debug/race_random_program_exact — 比赛随机程序精确值
+
+=== 游戏数据 (28) ===
+  /summary                     — ★当前训练状态摘要 (含账号id)
+  /data                        — 游戏数据
+  /scenario                    — 剧本
+  /event/recommend             — 事件推荐
+  /events                      — 事件列表
+  /hall                        — 大厅
+  /ranking                     — 排名
+  /saddles                     — 赛鞍
+  /saddles-dl                  — 赛鞍 (下载)
+  /saddle-analysis             — 赛鞍分析
+  /ramen                       — 拉面
+  /action/latest               — 最新行动
+  /log                         — 日志
+  /log/turn                    — 回合日志
+  /training/result             — 训练结果
+  /inherit/compat              — 继承兼容
+  /seed/history                — 种子历史
+  /seed/stats                  — 种子统计
+  /carddb                      — 卡牌数据库
+  /skilldata                   — 技能数据
+  /mdb                         — MDB 数据库
+  /mdb/raw                     — MDB 原始
+  /mdb/schema                  — MDB schema
+  /mdb/search                  — MDB 搜索
+  /mdb/dl_batch                — MDB 批量下载
+  /tables                      — 表列表
+  /singletons                  — 单例列表
+  /dev/                        — 开发入口
+
+================================================================================
+★ = 花落重点关注 (协议逆向/发包相关)
+所有端点均为 GET 请求, 基址 http://127.0.0.1:18765
+================================================================================
