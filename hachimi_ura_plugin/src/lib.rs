@@ -153,6 +153,7 @@ struct UnityRequestObservation {
     method: String,
     path: String,
     body_size: usize,
+    body_hex: String,
     content_type: String,
 }
 static UNITY_OBSERVATIONS: Mutex<Vec<UnityRequestObservation>> = Mutex::new(Vec::new());
@@ -8193,9 +8194,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             .unwrap_or(0);
         let entries = UNITY_OBSERVATIONS.lock().map(|g| {
         g.iter().filter(|x| x.id > after_id).map(|x| format!(
-            r#"{{"id":{},"timestamp_ms":{},"method":"{}","path":"{}","body_size":{},"content_type":"{}"}}"#,
+            r#"{{"id":{},"timestamp_ms":{},"method":"{}","path":"{}","body_size":{},"body_hex":"{}","content_type":"{}"}}"#,
             x.id, x.timestamp_ms, json_escape(&x.method), json_escape(&x.path),
-            x.body_size, json_escape(&x.content_type)
+            x.body_size, x.body_hex, json_escape(&x.content_type)
         )).collect::<Vec<_>>()
     }).unwrap_or_default();
         format!(
@@ -9852,8 +9853,8 @@ unsafe fn observe_unity_web_request(request: *mut c_void) {
     } else {
         call_getter_ref(request_class, request, "get_uploadHandler")
     };
-    let (body_size, content_type) = if upload.is_null() {
-        (0, String::new())
+    let (body_size, body_hex, content_type) = if upload.is_null() {
+        (0, String::new(), String::new())
     } else {
         let upload_class = get_class_from_object(upload);
         let data = if upload_class.is_null() {
@@ -9861,8 +9862,11 @@ unsafe fn observe_unity_web_request(request: *mut c_void) {
         } else {
             call_getter_on_instance(upload_class, upload, "get_data")
         };
+        let body_bytes = read_il2cpp_byte_array(data);
+        let body_hex = body_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
         (
-            read_il2cpp_byte_array(data).len(),
+            body_bytes.len(),
+            body_hex,
             unity_get_string(upload, "get_contentType"),
         )
     };
@@ -9872,6 +9876,7 @@ unsafe fn observe_unity_web_request(request: *mut c_void) {
         method,
         path: unity_observer_path(&url),
         body_size,
+        body_hex,
         content_type,
     };
     if let Ok(mut entries) = UNITY_OBSERVATIONS.lock() {
