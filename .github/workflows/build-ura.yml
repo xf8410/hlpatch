@@ -12,13 +12,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 5d85f185b69626ed6f864fa6def36c69a2b9f3be
+          ref: workbench/add-il2cpp-signature-and-invoke-guards-20260806
 
-      - name: Validate release identity
+      - name: Capture exact source identity
+        id: source
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "5d85f185b69626ed6f864fa6def36c69a2b9f3be"
-          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.4"
+          SOURCE_SHA=$(git rev-parse HEAD)
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)
+          test "$VERSION" = "3.27.4"
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
@@ -30,7 +33,7 @@ jobs:
           ndk-version: r26c
           link-to-sdk: true
 
-      - name: Build exact v3.27.4 source
+      - name: Build exact checked-out source
         working-directory: hachimi_ura_plugin
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -41,6 +44,8 @@ jobs:
         run: cargo build --locked --target aarch64-linux-android --release
 
       - name: Prepare release files
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           set -euo pipefail
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
@@ -49,7 +54,7 @@ jobs:
           SIZE=$(stat -c%s "$ASSET")
           printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
           cat > BUILD-MANIFEST.txt <<EOF
-          source_commit=5d85f185b69626ed6f864fa6def36c69a2b9f3be
+          source_commit=$SOURCE_SHA
           cargo_version=3.27.4
           binary_size=$SIZE
           binary_sha256=$SHA256
@@ -57,31 +62,28 @@ jobs:
           workflow_run=${GITHUB_RUN_ID}
           EOF
 
-      - name: Create release and server-side tag
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           set -euo pipefail
-          if gh release view v3.27.4 >/dev/null 2>&1; then
-            echo "release v3.27.4 already exists" >&2
-            exit 1
-          fi
-          REMOTE_TAG=$(git ls-remote --tags origin refs/tags/v3.27.4 | awk '{print $1}')
-          if [ -n "$REMOTE_TAG" ]; then
-            gh release create v3.27.4 --verify-tag --title v3.27.4 \
-              --notes "IL2CPP live parameter signatures, declaring-type nested-class lookup, and guarded static invocation. Source commit: 5d85f185b69626ed6f864fa6def36c69a2b9f3be" \
-              hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so SHA256SUMS BUILD-MANIFEST.txt
-          else
-            gh release create v3.27.4 --target 5d85f185b69626ed6f864fa6def36c69a2b9f3be --title v3.27.4 \
-              --notes "IL2CPP live parameter signatures, declaring-type nested-class lookup, and guarded static invocation. Source commit: 5d85f185b69626ed6f864fa6def36c69a2b9f3be" \
-              hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so SHA256SUMS BUILD-MANIFEST.txt
-          fi
+          test -z "$(gh release list --limit 100 --json tagName --jq '.[] | select(.tagName == "v3.27.4") | .tagName')"
+          gh release create v3.27.4 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target workbench/add-il2cpp-signature-and-invoke-guards-20260806 \
+            --title v3.27.4 \
+            --notes "IL2CPP live parameter signatures, declaring-type nested-class lookup, and guarded static invocation. Source commit: $SOURCE_SHA" \
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so \
+            SHA256SUMS \
+            BUILD-MANIFEST.txt
 
-      - name: Verify release assets
+      - name: Verify published files
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release view v3.27.4 --json assets --jq '.assets[].name' | grep -Fx libhachimi_ura.so
-          gh release view v3.27.4 --json assets --jq '.assets[].name' | grep -Fx SHA256SUMS
-          gh release view v3.27.4 --json assets --jq '.assets[].name' | grep -Fx BUILD-MANIFEST.txt
+          NAMES=$(gh release view v3.27.4 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          grep -Fx libhachimi_ura.so <<< "$NAMES"
+          grep -Fx SHA256SUMS <<< "$NAMES"
+          grep -Fx BUILD-MANIFEST.txt <<< "$NAMES"
