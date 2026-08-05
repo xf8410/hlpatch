@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing immutable version tag, for example v3.25.2"
+        description: "Immutable version tag, for example v3.27.3"
+        required: true
+        type: string
+      source_sha:
+        description: "Exact source commit to tag and release"
         required: true
         type: string
 
@@ -15,30 +19,37 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate requested tag
+      - name: Validate inputs
         env:
           TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "tag must look like v3.25.2" >&2
-            exit 1
-          }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.source_sha }}
           fetch-depth: 0
 
-      - name: Verify tag and source version
+      - name: Create immutable version tag
         env:
           TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null
           VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)
           test "$TAG" = "v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            test "$(git rev-list -n1 "$TAG")" = "$SOURCE_SHA"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" "$SOURCE_SHA" -m "Release $TAG"
+            git push origin "refs/tags/$TAG"
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists; refusing to overwrite it" >&2
             exit 1
@@ -107,8 +118,6 @@ jobs:
           Binary size: $SIZE bytes
           SHA-256: $SHA256
           Workflow run: $GITHUB_RUN_ID
-
-          Verify after downloading with SHA256SUMS. Assets for an existing tag are never overwritten.
           EOF
           )
           gh release create "$TAG" --verify-tag --title "$TAG" --notes "$NOTES" \
