@@ -16843,32 +16843,28 @@ unsafe fn il2cpp_invoke_static_method(
         );
     }
 
-    // 获取 System.Int32 class 用于装箱 int 参数
+    // 尝试获取 System.Int32 class 用于装箱 int 参数
+    // Int32 可能在 mscorlib.dll 而非当前 image, 找不到时跳过装箱
     let int32_class = find_class_by_short_name(image, "Int32");
-    if int32_class.is_null() {
-        return r#"{"error":"int32_class_not_found"}"#.to_string();
-    }
-
     let object_new_fn: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void> = {
         let p = resolve_il2cpp_symbol("il2cpp_object_new");
         if p.is_null() { None } else { Some(std::mem::transmute(p)) }
     };
-    if object_new_fn.is_none() {
-        return r#"{"error":"object_new_not_found"}"#.to_string();
-    }
 
-    // 构造 argv[]: 每个参数装箱为 Int32
+    // 构造 argv[]: 如果有 Int32 class 就装箱, 没有就传 null 让 runtime 处理异常
     let raw_args = [p0, p1, p2, p3, p4];
     let n = param_count as usize;
     let mut boxed_args: [*mut c_void; 5] = [ptr::null_mut(); 5];
-    for i in 0..n.min(5) {
-        let boxed = object_new_fn.unwrap()(int32_class);
-        if !boxed.is_null() {
-            std::ptr::write_unaligned::<i32>(
-                (boxed as *mut u8).add(16) as *mut i32,
-                raw_args[i] as i32,
-            );
-            boxed_args[i] = boxed;
+    if !int32_class.is_null() && object_new_fn.is_some() {
+        for i in 0..n.min(5) {
+            let boxed = object_new_fn.unwrap()(int32_class);
+            if !boxed.is_null() {
+                std::ptr::write_unaligned::<i32>(
+                    (boxed as *mut u8).add(16) as *mut i32,
+                    raw_args[i] as i32,
+                );
+                boxed_args[i] = boxed;
+            }
         }
     }
 
@@ -16951,31 +16947,26 @@ unsafe fn il2cpp_invoke_instance_method(
         );
     }
 
-    // 获取 System.Int32 class 用于装箱 int 参数
+    // 尝试获取 System.Int32 class 用于装箱 int 参数
     let int32_class = find_class_by_short_name(image, "Int32");
-    if int32_class.is_null() {
-        return r#"{"error":"int32_class_not_found"}"#.to_string();
-    }
-
     let object_new_fn: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void> = {
         let p = resolve_il2cpp_symbol("il2cpp_object_new");
         if p.is_null() { None } else { Some(std::mem::transmute(p)) }
     };
-    if object_new_fn.is_none() {
-        return r#"{"error":"object_new_not_found"}"#.to_string();
-    }
 
     let raw_args = [p0, p1, p2, p3, p4];
     let n = param_count as usize;
     let mut boxed_args: [*mut c_void; 5] = [ptr::null_mut(); 5];
-    for i in 0..n.min(5) {
-        let boxed = object_new_fn.unwrap()(int32_class);
-        if !boxed.is_null() {
-            std::ptr::write_unaligned::<i32>(
-                (boxed as *mut u8).add(16) as *mut i32,
-                raw_args[i] as i32,
-            );
-            boxed_args[i] = boxed;
+    if !int32_class.is_null() && object_new_fn.is_some() {
+        for i in 0..n.min(5) {
+            let boxed = object_new_fn.unwrap()(int32_class);
+            if !boxed.is_null() {
+                std::ptr::write_unaligned::<i32>(
+                    (boxed as *mut u8).add(16) as *mut i32,
+                    raw_args[i] as i32,
+                );
+                boxed_args[i] = boxed;
+            }
         }
     }
 
