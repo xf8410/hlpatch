@@ -1304,7 +1304,7 @@ unsafe fn call_getter_int_with_arg(
         img if !img.is_null() => img,
         _ => return -1,
     };
-    let int32_class = find_class(image, to_cstr("System").as_ptr(), to_cstr("Int32").as_ptr());
+    let int32_class = find_class_by_short_name(image, "Int32");
     if int32_class.is_null() {
         ura_log(2, "call_int_with_arg: Int32 class not found");
         return -1;
@@ -16844,7 +16844,7 @@ unsafe fn il2cpp_invoke_static_method(
     }
 
     // 获取 System.Int32 class 用于装箱 int 参数
-    let int32_class = find_class(image, to_cstr("System").as_ptr(), to_cstr("Int32").as_ptr());
+    let int32_class = find_class_by_short_name(image, "Int32");
     if int32_class.is_null() {
         return r#"{"error":"int32_class_not_found"}"#.to_string();
     }
@@ -16952,7 +16952,7 @@ unsafe fn il2cpp_invoke_instance_method(
     }
 
     // 获取 System.Int32 class 用于装箱 int 参数
-    let int32_class = find_class(image, to_cstr("System").as_ptr(), to_cstr("Int32").as_ptr());
+    let int32_class = find_class_by_short_name(image, "Int32");
     if int32_class.is_null() {
         return r#"{"error":"int32_class_not_found"}"#.to_string();
     }
