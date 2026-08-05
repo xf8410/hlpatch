@@ -1,6 +1,9 @@
 name: Apply IL2CPP Signature Patch
 
 on:
+  push:
+    branches:
+      - workbench/add-il2cpp-signature-and-invoke-guards-20260806
   workflow_dispatch:
 
 permissions:
@@ -26,7 +29,6 @@ jobs:
           p = Path('hachimi_ura_plugin/src/lib.rs')
           s = p.read_text()
 
-          # 1. Replace the complete short-name resolver by function boundaries.
           pattern = re.compile(r'unsafe fn find_class_by_short_name\(.*?\n\}\n(?=\n/// Slow fallback:)', re.S)
           replacement = r'''unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
     // Compiler-generated nested classes repeat their short names. Accept
@@ -35,22 +37,16 @@ jobs:
         let count_ptr = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
         let class_ptr = resolve_il2cpp_symbol("il2cpp_image_get_class");
         let declaring_ptr = resolve_il2cpp_symbol("il2cpp_class_get_declaring_type");
-        if count_ptr.is_null() || class_ptr.is_null() || declaring_ptr.is_null() {
-            return ptr::null_mut();
-        }
+        if count_ptr.is_null() || class_ptr.is_null() || declaring_ptr.is_null() { return ptr::null_mut(); }
         let get_count: FnImageGetClassCount = std::mem::transmute(count_ptr);
         let get_class: FnImageGetClass = std::mem::transmute(class_ptr);
         let get_declaring: unsafe extern "C" fn(*mut c_void) -> *mut c_void = std::mem::transmute(declaring_ptr);
         let requested_short = declaring_requested.rsplit('.').next().unwrap_or(declaring_requested);
         for index in 0..get_count(image) {
             let candidate = get_class(image, index);
-            if candidate.is_null() || get_class_name_from_pointer(candidate) != nested_requested {
-                continue;
-            }
+            if candidate.is_null() || get_class_name_from_pointer(candidate) != nested_requested { continue; }
             let declaring = get_declaring(candidate);
-            if declaring.is_null() || get_class_name_from_pointer(declaring) != requested_short {
-                continue;
-            }
+            if declaring.is_null() || get_class_name_from_pointer(declaring) != requested_short { continue; }
             if declaring_requested.contains('.') {
                 let namespace_ptr = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
                 if namespace_ptr.is_null() { return ptr::null_mut(); }
@@ -76,11 +72,9 @@ jobs:
           s, count = pattern.subn(replacement, s, count=1)
           assert count == 1, f'find_class replacement count={count}'
 
-          # Work only inside the method-list function.
           list_start = s.index('unsafe fn il2cpp_list_methods(')
           list_end = s.index('/// 辅助函数：IL2CPP类型枚举转可读名称', list_start)
           prefix, body, suffix = s[:list_start], s[list_start:list_end], s[list_end:]
-
           anchor = '    // il2cpp_method_get_return_type 获取返回类型\n'
           assert body.count(anchor) == 1, f'parameter API anchor count={body.count(anchor)}'
           parameter_api = '''    // Read exact parameter types and names from the live MethodInfo.
@@ -95,7 +89,6 @@ jobs:
 
 '''
           body = body.replace(anchor, parameter_api + anchor, 1)
-
           push_pattern = re.compile(r'        methods\.push\(format!\(\n            r#"\{\{"name":.*?\n        \)\);', re.S)
           push_replacement = r'''        let mut parameter_items = Vec::new();
         for index in 0..param_count {
@@ -105,31 +98,23 @@ jobs:
                 if value.is_null() { None } else { Some(CStr::from_ptr(value).to_string_lossy().into_owned()) }
             });
             let parameter_type_enum = if parameter_type.is_null() { 0 } else { il2cpp_type_get_type_enum(parameter_type) };
-            let parameter_type_name = if parameter_type.is_null() {
-                "unknown".to_string()
-            } else {
+            let parameter_type_name = if parameter_type.is_null() { "unknown".to_string() } else {
                 type_get_name_fn.and_then(|f| {
                     let value = f(parameter_type);
                     if value.is_null() { None } else { Some(CStr::from_ptr(value).to_string_lossy().into_owned()) }
                 }).unwrap_or_else(|| type_enum_to_name(parameter_type_enum))
             };
-            parameter_items.push(format!(
-                r#"{{"index":{},"name":{},"type":"{}","type_name":"{}","resolved":{}}}"#,
-                index,
-                parameter_name.map(|v| format!("\"{}\"", json_escape(&v))).unwrap_or_else(|| "null".to_string()),
-                type_enum_to_name(parameter_type_enum), json_escape(&parameter_type_name), !parameter_type.is_null()
-            ));
+            parameter_items.push(format!(r#"{{"index":{},"name":{},"type":"{}","type_name":"{}","resolved":{}}}"#,
+                index, parameter_name.map(|v| format!("\"{}\"", json_escape(&v))).unwrap_or_else(|| "null".to_string()),
+                type_enum_to_name(parameter_type_enum), json_escape(&parameter_type_name), !parameter_type.is_null()));
         }
-        methods.push(format!(
-            r#"{{"name":"{}","params":{},"parameters":[{}],"return_type":"{}","return_type_name":"{}","static":{},"own":{}}}"#,
+        methods.push(format!(r#"{{"name":"{}","params":{},"parameters":[{}],"return_type":"{}","return_type_name":"{}","static":{},"own":{}}}"#,
             json_escape(&method_name), param_count, parameter_items.join(","), return_type_str,
-            json_escape(&return_type_name), is_static, is_own_method
-        ));'''
+            json_escape(&return_type_name), is_static, is_own_method));'''
           body, count = push_pattern.subn(push_replacement, body, count=1)
           assert count == 1, f'method output replacement count={count}'
           s = prefix + body + suffix
 
-          # 3. Insert an ABI guard in the static invoke function only.
           invoke_start = s.index('unsafe fn il2cpp_invoke_static_method(')
           invoke_end = s.index('unsafe fn il2cpp_invoke_instance_method(', invoke_start)
           prefix, body, suffix = s[:invoke_start], s[invoke_start:invoke_end], s[invoke_end:]
@@ -138,17 +123,13 @@ jobs:
           guard = '''    // n=N selects a parameter count; it does not define the ABI or value type.
     let get_param_ptr = resolve_il2cpp_symbol("il2cpp_method_get_param");
     let type_name_ptr = resolve_il2cpp_symbol("il2cpp_type_get_name");
-    if get_param_ptr.is_null() || type_name_ptr.is_null() {
-        return r#"{"ok":false,"error":"parameter_metadata_api_unavailable"}"#.to_string();
-    }
+    if get_param_ptr.is_null() || type_name_ptr.is_null() { return r#"{"ok":false,"error":"parameter_metadata_api_unavailable"}"#.to_string(); }
     let get_param: unsafe extern "C" fn(*const c_void, u32) -> *const c_void = std::mem::transmute(get_param_ptr);
     let get_type_name: unsafe extern "C" fn(*const c_void) -> *const c_char = std::mem::transmute(type_name_ptr);
     let mut signature = Vec::new();
     for index in 0..param_count as u32 {
         let parameter_type = get_param(method_info, index);
-        if parameter_type.is_null() {
-            return format!(r#"{{"ok":false,"error":"parameter_type_unresolved","index":{}}}"#, index);
-        }
+        if parameter_type.is_null() { return format!(r#"{{"ok":false,"error":"parameter_type_unresolved","index":{}}}"#, index); }
         let raw_name = get_type_name(parameter_type);
         let type_name = if raw_name.is_null() { "unknown".to_string() } else { CStr::from_ptr(raw_name).to_string_lossy().into_owned() };
         signature.push(type_name.clone());
@@ -170,8 +151,7 @@ jobs:
           cargo.write_text(cargo.read_text().replace('version = "3.27.3"', 'version = "3.27.4"', 1))
           lock = Path('hachimi_ura_plugin/Cargo.lock')
           lock.write_text(lock.read_text().replace('version = "3.27.3"', 'version = "3.27.4"', 1))
-          for temp in Path('.').glob('tmp_*'):
-              temp.unlink()
+          for temp in Path('.').glob('tmp_*'): temp.unlink()
           print('patch_applied=true')
           PY
       - name: Commit patch or diagnostic
