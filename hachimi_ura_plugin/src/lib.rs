@@ -1027,6 +1027,53 @@ unsafe fn find_class_by_iteration(image: *const c_void, class_name: &str) -> *mu
     ptr::null_mut()
 }
 
+/// Find an exact namespace/class pair across every loaded IL2CPP assembly.
+/// System.Int32 normally lives in mscorlib.dll rather than umamusume.dll.
+unsafe fn find_class_global(namespace: &str, class_name: &str) -> *mut c_void {
+    let domain_get = resolve_il2cpp_symbol("il2cpp_domain_get");
+    let domain_get_assemblies = resolve_il2cpp_symbol("il2cpp_domain_get_assemblies");
+    let assembly_get_image = resolve_il2cpp_symbol("il2cpp_assembly_get_image");
+    if domain_get.is_null()
+        || domain_get_assemblies.is_null()
+        || assembly_get_image.is_null()
+    {
+        return ptr::null_mut();
+    }
+
+    let get_domain: FnDomainGet = std::mem::transmute(domain_get);
+    let get_assemblies: FnDomainGetAssemblies =
+        std::mem::transmute(domain_get_assemblies);
+    let get_image: FnAssemblyGetImage = std::mem::transmute(assembly_get_image);
+    let domain = get_domain();
+    if domain.is_null() {
+        return ptr::null_mut();
+    }
+
+    let mut count = 0usize;
+    let assemblies = get_assemblies(domain, &mut count);
+    if assemblies.is_null() || count == 0 || count > 4096 {
+        return ptr::null_mut();
+    }
+
+    let namespace_c = to_cstr(namespace);
+    let class_name_c = to_cstr(class_name);
+    for index in 0..count {
+        let assembly = *assemblies.add(index);
+        if assembly.is_null() {
+            continue;
+        }
+        let image = get_image(assembly);
+        if image.is_null() {
+            continue;
+        }
+        let class = find_class(image, namespace_c.as_ptr(), class_name_c.as_ptr());
+        if !class.is_null() {
+            return class;
+        }
+    }
+    ptr::null_mut()
+}
+
 /// ★ Get class name directly from an Il2CppClass pointer (no iteration needed)
 unsafe fn get_class_name_from_pointer(klass: *mut c_void) -> String {
     if klass.is_null() {
@@ -1140,6 +1187,10 @@ type FnClassGetMethods = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> 
 type FnMethodGetName = unsafe extern "C" fn(*const c_void) -> *const c_char;
 type FnImageGetClassCount = unsafe extern "C" fn(*const c_void) -> u32;
 type FnImageGetClass = unsafe extern "C" fn(*const c_void, u32) -> *mut c_void;
+type FnDomainGet = unsafe extern "C" fn() -> *mut c_void;
+type FnDomainGetAssemblies =
+    unsafe extern "C" fn(*const c_void, *mut usize) -> *mut *const c_void;
+type FnAssemblyGetImage = unsafe extern "C" fn(*const c_void) -> *const c_void;
 
 #[repr(C)]
 struct Il2CppFieldInfo {
@@ -1268,91 +1319,35 @@ unsafe fn call_getter_int_with_arg(
     if class.is_null() || instance.is_null() {
         return -1;
     }
-
-    let get_method_fn: Option<FnClassGetMethodFromName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p))
-        }
-    };
-    let invoke_fn: Option<FnRuntimeInvoke> = {
-        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p))
-        }
-    };
-    if get_method_fn.is_none() || invoke_fn.is_none() {
+    let get_method_ptr = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+    let invoke_ptr = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+    if get_method_ptr.is_null() || invoke_ptr.is_null() {
         return -1;
     }
-
-    let method_name_c = to_cstr(method_name);
-    let method_info = get_method_fn.unwrap()(class, method_name_c.as_ptr(), 1); // 1 parameter
+    let get_method: FnClassGetMethodFromName = std::mem::transmute(get_method_ptr);
+    let invoke: FnRuntimeInvoke = std::mem::transmute(invoke_ptr);
+    let method_info = get_method(class, to_cstr(method_name).as_ptr(), 1);
     if method_info.is_null() {
-        ura_log(
-            4,
-            &format!("call_int_with_arg: '{}' not found", method_name),
-        );
+        ura_log(4, &format!("call_int_with_arg: '{}' not found", method_name));
         return -1;
     }
 
-    // Find System.Int32 klass to properly box the argument
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return -1,
-    };
-    let int32_class = find_class_by_short_name(image, "Int32");
-    if int32_class.is_null() {
-        ura_log(2, "call_int_with_arg: Int32 class not found");
-        return -1;
-    }
-
-    // Use il2cpp_object_new to allocate a proper boxed Int32
-    let object_new_fn: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void> = {
-        let p = resolve_il2cpp_symbol("il2cpp_object_new");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    if object_new_fn.is_none() {
-        ura_log(2, "call_int_with_arg: il2cpp_object_new not found");
-        return -1;
-    }
-
-    let boxed_arg = object_new_fn.unwrap()(int32_class);
-    if boxed_arg.is_null() {
-        ura_log(2, "call_int_with_arg: failed to allocate boxed int");
-        return -1;
-    }
-    // Write int value at offset +16 (after Il2CppObject header)
-    std::ptr::write_unaligned::<i32>((boxed_arg as *mut u8).add(16) as *mut i32, int_arg);
-
-    let mut args: [*mut c_void; 1] = [boxed_arg];
+    // il2cpp_runtime_invoke expects argv entries to point to unboxed value data.
+    let mut arg = int_arg;
+    let mut args = [&mut arg as *mut i32 as *mut c_void];
     let mut exc: *mut c_void = ptr::null_mut();
-    let result = invoke_fn.unwrap()(
+    let result = invoke(
         method_info,
         instance as *mut c_void,
         args.as_mut_ptr(),
         &mut exc,
     );
-    if !exc.is_null() {
-        ura_log(
-            2,
-            &format!("call_int_with_arg: '{}' threw exception", method_name),
-        );
+    if !exc.is_null() || result.is_null() {
         return -1;
     }
-    if result.is_null() {
-        return -1;
-    }
-    // Result is boxed int, value at +16
     std::ptr::read_unaligned::<i32>((result as *const u8).add(16) as *const i32)
 }
+
 
 /// ★ ObscuredInt getter: The C# property returns ObscuredInt struct,
 /// but il2cpp_runtime_invoke boxes it. We need to call the implicit
@@ -16809,86 +16804,50 @@ unsafe fn il2cpp_invoke_static_method(
     if class_name.is_empty() || method_name.is_empty() {
         return r#"{"error":"missing ?class= or ?method="}"#.to_string();
     }
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
+    if !(0..=5).contains(&param_count) {
+        return r#"{"error":"param_count_out_of_range"}"#.to_string();
     }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
+    let image = get_image();
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
+    }
     let class = find_class_by_short_name(image, class_name);
     if class.is_null() {
         return format!(r#"{{"error":"class_not_found","name":"{}"}}"#, class_name);
     }
 
-    // 获取 MethodInfo via il2cpp_class_get_method_from_name
-    let get_method_fn: Option<FnClassGetMethodFromName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-    };
-    let invoke_fn: Option<FnRuntimeInvoke> = {
-        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-    };
-    if get_method_fn.is_none() || invoke_fn.is_none() {
+    let get_method_ptr = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+    let invoke_ptr = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+    if get_method_ptr.is_null() || invoke_ptr.is_null() {
         return r#"{"error":"runtime_symbols_not_found"}"#.to_string();
     }
-
-    let cname = to_cstr(method_name);
-    let method_info = get_method_fn.unwrap()(class, cname.as_ptr(), param_count);
+    let get_method: FnClassGetMethodFromName = std::mem::transmute(get_method_ptr);
+    let invoke: FnRuntimeInvoke = std::mem::transmute(invoke_ptr);
+    let method_info = get_method(class, to_cstr(method_name).as_ptr(), param_count);
     if method_info.is_null() {
-        return format!(
-            r#"{{"error":"method_not_found","class":"{}","method":"{}","params":{}}}"#,
-            class_name, method_name, param_count
-        );
+        return format!(r#"{{"error":"method_not_found","class":"{}","method":"{}","params":{}}}"#, class_name, method_name, param_count);
     }
 
-    // 尝试获取 System.Int32 class 用于装箱 int 参数
-    // Int32 可能在 mscorlib.dll 而非当前 image, 找不到时跳过装箱
-    let int32_class = find_class_by_short_name(image, "Int32");
-    let object_new_fn: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void> = {
-        let p = resolve_il2cpp_symbol("il2cpp_object_new");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    // This endpoint accepts i32-compatible value parameters only.
+    // runtime_invoke wants pointers to raw values, not boxed Int32 objects.
+    let mut raw_args = [p0 as i32, p1 as i32, p2 as i32, p3 as i32, p4 as i32];
+    let mut argv: [*mut c_void; 5] = [ptr::null_mut(); 5];
+    for index in 0..param_count as usize {
+        argv[index] = &mut raw_args[index] as *mut i32 as *mut c_void;
+    }
+    let argv_ptr = if param_count == 0 {
+        ptr::null_mut()
+    } else {
+        argv.as_mut_ptr()
     };
-
-    // 构造 argv[]: 如果有 Int32 class 就装箱, 没有就传 null 让 runtime 处理异常
-    let raw_args = [p0, p1, p2, p3, p4];
-    let n = param_count as usize;
-    let mut boxed_args: [*mut c_void; 5] = [ptr::null_mut(); 5];
-    if !int32_class.is_null() && object_new_fn.is_some() {
-        for i in 0..n.min(5) {
-            let boxed = object_new_fn.unwrap()(int32_class);
-            if !boxed.is_null() {
-                std::ptr::write_unaligned::<i32>(
-                    (boxed as *mut u8).add(16) as *mut i32,
-                    raw_args[i] as i32,
-                );
-                boxed_args[i] = boxed;
-            }
-        }
-    }
-
-    // 调用 il2cpp_runtime_invoke
     let mut exc: *mut c_void = ptr::null_mut();
-    let result = invoke_fn.unwrap()(
-        method_info,
-        ptr::null_mut(), // static: obj = null
-        boxed_args.as_mut_ptr(),
-        &mut exc,
-    );
-
+    let result = invoke(method_info, ptr::null_mut(), argv_ptr, &mut exc);
     if !exc.is_null() {
-        return format!(
-            r#"{{"ok":false,"class":"{}","method":"{}","error":"exception","exc_addr":"0x{:x}"}}"#,
-            class_name, method_name, exc as usize
-        );
+        return format!(r#"{{"ok":false,"class":"{}","method":"{}","error":"exception","exc_addr":"0x{:x}"}}"#, class_name, method_name, exc as usize);
     }
-
-    format!(
-        r#"{{"ok":true,"class":"{}","method":"{}","params":{},"result_addr":"0x{:x}"}}"#,
-        class_name, method_name, param_count, result as usize
-    )
+    format!(r#"{{"ok":true,"class":"{}","method":"{}","params":{},"result_addr":"0x{:x}"}}"#, class_name, method_name, param_count, result as usize)
 }
+
 
 /// /il2cpp/invoke_instance?class=X&method=Y&object=0x..&p0=..&n=2
 /// v3.27: 基于 il2cpp_runtime_invoke 的安全实例方法调用
@@ -16906,90 +16865,57 @@ unsafe fn il2cpp_invoke_instance_method(
     if class_name.is_empty() || method_name.is_empty() {
         return r#"{"error":"missing ?class= or ?method="}"#.to_string();
     }
+    if !(0..=5).contains(&param_count) {
+        return r#"{"error":"param_count_out_of_range"}"#.to_string();
+    }
     let obj_addr = usize::from_str_radix(object_addr.trim_start_matches("0x"), 16).unwrap_or(0);
     if obj_addr == 0 {
         return r#"{"error":"missing or invalid ?object= parameter"}"#.to_string();
     }
-    let obj_ptr = obj_addr as *mut c_void;
-    if obj_ptr.is_null() {
-        return r#"{"error":"object_null"}"#.to_string();
+    let image = get_image();
+    if image.is_null() {
+        return r#"{"error":"image_null"}"#.to_string();
     }
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
     let class = find_class_by_short_name(image, class_name);
     if class.is_null() {
         return format!(r#"{{"error":"class_not_found","name":"{}"}}"#, class_name);
     }
 
-    let get_method_fn: Option<FnClassGetMethodFromName> = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-    };
-    let invoke_fn: Option<FnRuntimeInvoke> = {
-        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
-    };
-    if get_method_fn.is_none() || invoke_fn.is_none() {
+    let get_method_ptr = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+    let invoke_ptr = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+    if get_method_ptr.is_null() || invoke_ptr.is_null() {
         return r#"{"error":"runtime_symbols_not_found"}"#.to_string();
     }
-
-    let cname = to_cstr(method_name);
-    let method_info = get_method_fn.unwrap()(class, cname.as_ptr(), param_count);
+    let get_method: FnClassGetMethodFromName = std::mem::transmute(get_method_ptr);
+    let invoke: FnRuntimeInvoke = std::mem::transmute(invoke_ptr);
+    let method_info = get_method(class, to_cstr(method_name).as_ptr(), param_count);
     if method_info.is_null() {
-        return format!(
-            r#"{{"error":"method_not_found","class":"{}","method":"{}","params":{}}}"#,
-            class_name, method_name, param_count
-        );
+        return format!(r#"{{"error":"method_not_found","class":"{}","method":"{}","params":{}}}"#, class_name, method_name, param_count);
     }
 
-    // 尝试获取 System.Int32 class 用于装箱 int 参数
-    let int32_class = find_class_by_short_name(image, "Int32");
-    let object_new_fn: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void> = {
-        let p = resolve_il2cpp_symbol("il2cpp_object_new");
-        if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+    let mut raw_args = [p0 as i32, p1 as i32, p2 as i32, p3 as i32, p4 as i32];
+    let mut argv: [*mut c_void; 5] = [ptr::null_mut(); 5];
+    for index in 0..param_count as usize {
+        argv[index] = &mut raw_args[index] as *mut i32 as *mut c_void;
+    }
+    let argv_ptr = if param_count == 0 {
+        ptr::null_mut()
+    } else {
+        argv.as_mut_ptr()
     };
-
-    let raw_args = [p0, p1, p2, p3, p4];
-    let n = param_count as usize;
-    let mut boxed_args: [*mut c_void; 5] = [ptr::null_mut(); 5];
-    if !int32_class.is_null() && object_new_fn.is_some() {
-        for i in 0..n.min(5) {
-            let boxed = object_new_fn.unwrap()(int32_class);
-            if !boxed.is_null() {
-                std::ptr::write_unaligned::<i32>(
-                    (boxed as *mut u8).add(16) as *mut i32,
-                    raw_args[i] as i32,
-                );
-                boxed_args[i] = boxed;
-            }
-        }
-    }
-
     let mut exc: *mut c_void = ptr::null_mut();
-    let result = invoke_fn.unwrap()(
+    let result = invoke(
         method_info,
-        obj_ptr, // instance: obj = this
-        boxed_args.as_mut_ptr(),
+        obj_addr as *mut c_void,
+        argv_ptr,
         &mut exc,
     );
-
     if !exc.is_null() {
-        return format!(
-            r#"{{"ok":false,"class":"{}","method":"{}","error":"exception","exc_addr":"0x{:x}"}}"#,
-            class_name, method_name, exc as usize
-        );
+        return format!(r#"{{"ok":false,"class":"{}","method":"{}","error":"exception","exc_addr":"0x{:x}"}}"#, class_name, method_name, exc as usize);
     }
-
-    format!(
-        r#"{{"ok":true,"class":"{}","method":"{}","object":"0x{:x}","params":{},"result_addr":"0x{:x}"}}"#,
-        class_name, method_name, obj_addr, param_count, result as usize
-    )
+    format!(r#"{{"ok":true,"class":"{}","method":"{}","object":"0x{:x}","params":{},"result_addr":"0x{:x}"}}"#, class_name, method_name, obj_addr, param_count, result as usize)
 }
+
 
 /// /il2cpp/call_static?class=X&method=Y&p0=..&p1=..&p2=..&p3=..&p4=..&n=5
 /// 调用static方法，无需singleton实例
