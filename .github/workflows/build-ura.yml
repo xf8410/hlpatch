@@ -33,19 +33,24 @@ jobs:
               if not raw:
                   continue
               path = Path(raw.decode())
+              if path.name == "repository-guidance-audit.txt":
+                  continue
               try:
                   data = path.read_text(errors="strict")
               except (UnicodeDecodeError, OSError):
                   continue
-              for number, line in enumerate(data.splitlines(), 1):
-                  lower = line.lower()
-                  matched = [term for term in terms if term.lower() in lower]
-                  if matched:
-                      rows.append(f"{path}:{number}:{','.join(matched)}:{line}")
+              counts = []
+              lower = data.lower()
+              for term in terms:
+                  count = lower.count(term.lower())
+                  if count:
+                      counts.append(f"{term}={count}")
+              if counts:
+                  rows.append(f"{path}\t" + ",".join(counts))
           Path("repository-guidance-audit.txt").write_text("\n".join(rows) + ("\n" if rows else ""))
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add repository-guidance-audit.txt
-          git commit -m "chore: capture repository guidance audit"
+          git commit -m "chore: bound repository guidance audit"
           git push origin HEAD:${GITHUB_REF_NAME}
