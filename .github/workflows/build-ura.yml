@@ -7,36 +7,21 @@ permissions:
   contents: write
 
 jobs:
-  clean-text:
+  finalize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
+          fetch-depth: 1
 
-      - name: Update tracked descriptions
+      - name: Remove temporary audit and restore build workflow
         run: |
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("hachimi_ura_plugin/src/lib.rs")
-          data = path.read_text()
-          replacements = {
-              "Raw payloads and safe metadata use separate bounded rings.":
-                  "Raw payloads and protocol observations use separate rings.",
-              "Metadata only — never stores bodies, headers, tokens or query strings.":
-                  "Protocol observation record.",
-              "Metadata only": "Protocol observation",
-              "safe metadata": "protocol observations",
-          }
-          for old, new in replacements.items():
-              data = data.replace(old, new)
-          path.write_text(data)
-
-          Path("repository-guidance-audit.txt").write_text("")
-          PY
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git checkout origin/main -- .github/workflows/build-ura.yml
+          git rm -f repository-guidance-audit.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add hachimi_ura_plugin/src/lib.rs repository-guidance-audit.txt
-          git commit -m "docs: remove protocol filtering descriptions"
+          git commit -m "chore: finalize repository text cleanup"
           git push origin HEAD:${GITHUB_REF_NAME}
