@@ -110,7 +110,7 @@ static mut ON_SUCCESS_ADDR: usize = 0;
 // ★ v3.23.3: API sniffing — use Hachimi Interceptor API (hook+trampoline) + WWWRequest.Post for URL (replaces _Send+SetHeader)
 static SNIFF_ENABLED: AtomicBool = AtomicBool::new(true);
 static SNIFF_MUTEX: Mutex<()> = Mutex::new(());
-// Raw payloads and safe metadata use separate bounded rings.
+// Raw payloads and protocol observations use separate rings.
 static mut SNIFF_REQUESTS: Vec<(u64, String, String, Vec<u8>)> = Vec::new();
 static mut SNIFF_RESPONSES: Vec<(u64, Vec<u8>)> = Vec::new();
 const SNIFF_RAW_MAX: usize = 50;
@@ -2918,7 +2918,7 @@ unsafe fn enumerate_class_fields(class: *mut c_void) -> String {
 
 // ============================================================
 // ★ v3.22.51: find_field_offset — read field offset via il2cpp_class_get_fields
-// Thread-safe metadata API, NO il2cpp_runtime_invoke calls
+// Thread-protocol observations API, NO il2cpp_runtime_invoke calls
 // ============================================================
 
 unsafe fn find_field_offset(class: *mut c_void, field_name: &str) -> i32 {
