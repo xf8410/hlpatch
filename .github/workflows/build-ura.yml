@@ -7,28 +7,221 @@ permissions:
   contents: write
 
 jobs:
-  extract-il2cpp-context:
+  apply-signature-patch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: workbench/add-il2cpp-signature-and-invoke-guards-20260806
-      - name: Extract exact function bodies
+          fetch-depth: 0
+      - name: Patch original Rust source and restore build workflow
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          s = Path('hachimi_ura_plugin/src/lib.rs').read_text()
-          def extract(start, next_start, out):
-              a = s.index(start)
-              b = s.index(next_start, a + len(start))
-              Path(out).write_text(s[a:b])
-          extract('unsafe fn il2cpp_list_methods(', '/// 辅助函数：IL2CPP类型枚举转可读名称', 'tmp_list_methods.rs.txt')
-          extract('unsafe fn il2cpp_invoke_static_method(', 'unsafe fn il2cpp_invoke_instance_method(', 'tmp_invoke_static.rs.txt')
-          extract('unsafe fn il2cpp_invoke_instance_method(', '// ============================================================', 'tmp_invoke_instance.rs.txt')
-          extract('unsafe fn find_class_by_short_name(', '/// Slow fallback:', 'tmp_find_class.rs.txt')
+          p = Path('hachimi_ura_plugin/src/lib.rs')
+          s = p.read_text()
+
+          old_find = '''unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
+              let name_c = to_cstr(class_name);
+              // Try known namespaces first (fast path)
+              let ns_gallop = to_cstr("Gallop");
+              let ns_empty = to_cstr("");
+              for ns in [ns_gallop.as_ptr(), ns_empty.as_ptr()] {
+                  let cls = find_class(image, ns, name_c.as_ptr());
+                  if !cls.is_null() {
+                      return cls;
+                  }
+              }
+              // Fallback: iterate all classes to find by name (slow but handles any namespace)
+              find_class_by_iteration(image, class_name)
+          }
+          '''
+          new_find = '''unsafe fn find_class_by_short_name(image: *const c_void, class_name: &str) -> *mut c_void {
+              // Nested compiler-generated classes are not unique by short name.  Accept
+              // "Outer/Nested" or "Namespace.Outer/Nested" and verify declaring_type.
+              if let Some((declaring_requested, nested_requested)) = class_name.rsplit_once('/') {
+                  let count_ptr = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
+                  let class_ptr = resolve_il2cpp_symbol("il2cpp_image_get_class");
+                  let declaring_ptr = resolve_il2cpp_symbol("il2cpp_class_get_declaring_type");
+                  if count_ptr.is_null() || class_ptr.is_null() || declaring_ptr.is_null() {
+                      return ptr::null_mut();
+                  }
+                  let get_count: FnImageGetClassCount = std::mem::transmute(count_ptr);
+                  let get_class: FnImageGetClass = std::mem::transmute(class_ptr);
+                  let get_declaring: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
+                      std::mem::transmute(declaring_ptr);
+                  let requested_short = declaring_requested.rsplit('.').next().unwrap_or(declaring_requested);
+                  for index in 0..get_count(image) {
+                      let candidate = get_class(image, index);
+                      if candidate.is_null() || get_class_name_from_pointer(candidate) != nested_requested {
+                          continue;
+                      }
+                      let declaring = get_declaring(candidate);
+                      if declaring.is_null() || get_class_name_from_pointer(declaring) != requested_short {
+                          continue;
+                      }
+                      let namespace_ptr = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
+                      if declaring_requested.contains('.') && !namespace_ptr.is_null() {
+                          let get_namespace: FnClassGetName = std::mem::transmute(namespace_ptr);
+                          let raw = get_namespace(declaring);
+                          let namespace = if raw.is_null() { String::new() } else {
+                              CStr::from_ptr(raw).to_string_lossy().into_owned()
+                          };
+                          let full = if namespace.is_empty() { requested_short.to_string() } else {
+                              format!("{}.{}", namespace, requested_short)
+                          };
+                          if full != declaring_requested {
+                              continue;
+                          }
+                      }
+                      return candidate;
+                  }
+                  return ptr::null_mut();
+              }
+              let name_c = to_cstr(class_name);
+              let ns_gallop = to_cstr("Gallop");
+              let ns_empty = to_cstr("");
+              for ns in [ns_gallop.as_ptr(), ns_empty.as_ptr()] {
+                  let cls = find_class(image, ns, name_c.as_ptr());
+                  if !cls.is_null() {
+                      return cls;
+                  }
+              }
+              find_class_by_iteration(image, class_name)
+          }
+          '''
+          if s.count(old_find) != 1:
+              raise SystemExit('find_class source mismatch')
+          s = s.replace(old_find, new_find)
+
+          count_block = '''    let method_get_param_count_fn: Option<unsafe extern "C" fn(*const c_void) -> u32> = {
+              let p = resolve_il2cpp_symbol("il2cpp_method_get_param_count");
+              if p.is_null() {
+                  None
+              } else {
+                  Some(std::mem::transmute(p))
+              }
+          };
+          '''
+          param_apis = count_block + '''
+              // Read each MethodInfo parameter directly from the live IL2CPP metadata.
+              let method_get_param_fn: Option<unsafe extern "C" fn(*const c_void, u32) -> *const c_void> = {
+                  let p = resolve_il2cpp_symbol("il2cpp_method_get_param");
+                  if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+              };
+              let method_get_param_name_fn: Option<unsafe extern "C" fn(*const c_void, u32) -> *const c_char> = {
+                  let p = resolve_il2cpp_symbol("il2cpp_method_get_param_name");
+                  if p.is_null() { None } else { Some(std::mem::transmute(p)) }
+              };
+          '''
+          list_start = s.index('unsafe fn il2cpp_list_methods(')
+          list_end = s.index('/// 辅助函数：IL2CPP类型枚举转可读名称', list_start)
+          before, body, after = s[:list_start], s[list_start:list_end], s[list_end:]
+          if body.count(count_block) != 1:
+              raise SystemExit('list_methods param-count block mismatch')
+          body = body.replace(count_block, param_apis)
+
+          push_block = '''        methods.push(format!(
+                      r#"{{"name":"{}","params":{},"return_type":"{}","return_type_name":"{}","static":{},"own":{}}}"#,
+                      json_escape(&method_name),
+                      param_count,
+                      return_type_str,
+                      json_escape(&return_type_name),
+                      is_static,
+                      is_own_method
+                  ));
+          '''
+          push_new = '''        let mut parameter_items = Vec::new();
+                  for index in 0..param_count {
+                      let parameter_type = method_get_param_fn.map(|f| f(method_info, index)).unwrap_or(ptr::null());
+                      let parameter_name = method_get_param_name_fn.and_then(|f| {
+                          let value = f(method_info, index);
+                          if value.is_null() { None } else { Some(CStr::from_ptr(value).to_string_lossy().into_owned()) }
+                      });
+                      let parameter_type_enum = if parameter_type.is_null() { 0 } else { il2cpp_type_get_type_enum(parameter_type) };
+                      let parameter_type_name = if parameter_type.is_null() {
+                          "unknown".to_string()
+                      } else {
+                          type_get_name_fn.and_then(|f| {
+                              let value = f(parameter_type);
+                              if value.is_null() { None } else { Some(CStr::from_ptr(value).to_string_lossy().into_owned()) }
+                          }).unwrap_or_else(|| type_enum_to_name(parameter_type_enum))
+                      };
+                      parameter_items.push(format!(
+                          r#"{{"index":{},"name":{},"type":"{}","type_name":"{}","resolved":{}}}"#,
+                          index,
+                          parameter_name.map(|v| format!("\\\"{}\\\"", json_escape(&v))).unwrap_or_else(|| "null".to_string()),
+                          type_enum_to_name(parameter_type_enum),
+                          json_escape(&parameter_type_name),
+                          !parameter_type.is_null()
+                      ));
+                  }
+                  methods.push(format!(
+                      r#"{{"name":"{}","params":{},"parameters":[{}],"return_type":"{}","return_type_name":"{}","static":{},"own":{}}}"#,
+                      json_escape(&method_name), param_count, parameter_items.join(","), return_type_str,
+                      json_escape(&return_type_name), is_static, is_own_method
+                  ));
+          '''
+          if body.count(push_block) != 1:
+              raise SystemExit('list_methods output block mismatch')
+          body = body.replace(push_block, push_new)
+          s = before + body + after
+
+          invoke_marker = '''    if method_info.is_null() {
+                  return format!(r#"{{"error":"method_not_found","class":"{}","method":"{}","params":{}}}"#, class_name, method_name, param_count);
+              }
+
+              // This endpoint accepts i32-compatible value parameters only.
+          '''
+          invoke_guard = '''    if method_info.is_null() {
+                  return format!(r#"{{"error":"method_not_found","class":"{}","method":"{}","params":{}}}"#, class_name, method_name, param_count);
+              }
+
+              // Never guess an ABI from n=N.  This endpoint only constructs raw Int32 argv.
+              let get_param_ptr = resolve_il2cpp_symbol("il2cpp_method_get_param");
+              let type_name_ptr = resolve_il2cpp_symbol("il2cpp_type_get_name");
+              if get_param_ptr.is_null() || type_name_ptr.is_null() {
+                  return r#"{"ok":false,"error":"parameter_metadata_api_unavailable"}"#.to_string();
+              }
+              let get_param: unsafe extern "C" fn(*const c_void, u32) -> *const c_void = std::mem::transmute(get_param_ptr);
+              let get_type_name: unsafe extern "C" fn(*const c_void) -> *const c_char = std::mem::transmute(type_name_ptr);
+              let mut signature = Vec::new();
+              for index in 0..param_count as u32 {
+                  let parameter_type = get_param(method_info, index);
+                  if parameter_type.is_null() {
+                      return format!(r#"{{"ok":false,"error":"parameter_type_unresolved","index":{}}}"#, index);
+                  }
+                  let raw_name = get_type_name(parameter_type);
+                  let type_name = if raw_name.is_null() { "unknown".to_string() } else { CStr::from_ptr(raw_name).to_string_lossy().into_owned() };
+                  signature.push(type_name.clone());
+                  if type_name != "System.Int32" {
+                      return format!(r#"{{"ok":false,"error":"unsupported_parameter_type","index":{},"type_name":"{}","supported":["System.Int32"]}}"#, index, json_escape(&type_name));
+                  }
+              }
+              if class_name == "SingleModeRamenAPI" && method_name == "SendUrafEffectApply" {
+                  return format!(r#"{{"ok":false,"error":"runtime_state_gate_required","class":"{}","method":"{}","signature":[{}]}}"#,
+                      json_escape(class_name), json_escape(method_name), signature.iter().map(|v| format!("\\\"{}\\\"", json_escape(v))).collect::<Vec<_>>().join(","));
+              }
+
+              // This endpoint accepts verified System.Int32 value parameters only.
+          '''
+          if s.count(invoke_marker) != 1:
+              raise SystemExit('invoke_static marker mismatch')
+          s = s.replace(invoke_marker, invoke_guard)
+
+          p.write_text(s)
+
+          cargo = Path('hachimi_ura_plugin/Cargo.toml')
+          cargo.write_text(cargo.read_text().replace('version = "3.27.3"', 'version = "3.27.4"', 1))
+          lock = Path('hachimi_ura_plugin/Cargo.lock')
+          lock.write_text(lock.read_text().replace('version = "3.27.3"', 'version = "3.27.4"', 1))
+
+          for temp in Path('.').glob('tmp_*'):
+              temp.unlink()
           PY
+          git show main:.github/workflows/build-ura.yml > .github/workflows/build-ura.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add tmp_*.rs.txt
-          git commit -m 'chore: capture focused IL2CPP function bodies'
+          git add -A
+          git commit -m 'feat: expose live IL2CPP parameter signatures and guard invokes'
           git push origin HEAD:workbench/add-il2cpp-signature-and-invoke-guards-20260806
