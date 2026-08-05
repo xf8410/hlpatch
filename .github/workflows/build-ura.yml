@@ -1,4 +1,4 @@
-name: Build Hachimi URA Plugin
+name: Publish Hachimi URA v3.27.4
 
 on:
   workflow_dispatch:
@@ -7,23 +7,20 @@ permissions:
   contents: write
 
 jobs:
-  build-ura:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: workbench/add-il2cpp-signature-and-invoke-guards-20260806
+          ref: 5d85f185b69626ed6f864fa6def36c69a2b9f3be
           fetch-depth: 0
 
-      - name: Apply checked-in source patch
+      - name: Validate release identity
         run: |
           set -euo pipefail
-          python3 scripts/apply_il2cpp_signature_patch.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "feat: expose live IL2CPP parameter signatures and guard invokes"
-          git push origin HEAD:workbench/add-il2cpp-signature-and-invoke-guards-20260806
+          test "$(git rev-parse HEAD)" = "5d85f185b69626ed6f864fa6def36c69a2b9f3be"
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)
+          test "$VERSION" = "3.27.4"
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
@@ -35,7 +32,7 @@ jobs:
           ndk-version: r26c
           link-to-sdk: true
 
-      - name: Build exact patched source
+      - name: Build tagged source
         working-directory: hachimi_ura_plugin
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -45,30 +42,38 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: cargo build --locked --target aarch64-linux-android --release
 
-      - name: Generate build manifest
+      - name: Publish immutable v3.27.4 release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
           test -s "$ASSET"
           SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
           SIZE=$(stat -c%s "$ASSET")
-          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)
-          SOURCE_SHA=$(git rev-parse HEAD)
           printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
           cat > BUILD-MANIFEST.txt <<EOF
-          source_commit=$SOURCE_SHA
-          cargo_version=$VERSION
+          source_commit=5d85f185b69626ed6f864fa6def36c69a2b9f3be
+          cargo_version=3.27.4
           binary_size=$SIZE
           binary_sha256=$SHA256
+          tag=v3.27.4
           workflow_run=${GITHUB_RUN_ID}
           EOF
-
-      - name: Upload immutable run artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libhachimi_ura-${{ github.sha }}
-          path: |
-            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-            SHA256SUMS
-            BUILD-MANIFEST.txt
-          if-no-files-found: error
+          if git rev-parse -q --verify refs/tags/v3.27.4 >/dev/null; then
+            test "$(git rev-list -n1 v3.27.4)" = "5d85f185b69626ed6f864fa6def36c69a2b9f3be"
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a v3.27.4 5d85f185b69626ed6f864fa6def36c69a2b9f3be -m "Release v3.27.4"
+            git push origin refs/tags/v3.27.4
+          fi
+          if gh release view v3.27.4 >/dev/null 2>&1; then
+            echo "v3.27.4 already exists" >&2
+            exit 1
+          fi
+          gh release create v3.27.4 --verify-tag --title v3.27.4 \
+            --notes "IL2CPP live parameter signatures, declaring-type nested-class lookup, and guarded static invocation. Source commit: 5d85f185b69626ed6f864fa6def36c69a2b9f3be" \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+          API_DIGEST=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.4 --jq '.assets[] | select(.name == "libhachimi_ura.so") | .digest')
+          test "$API_DIGEST" = "sha256:$SHA256"
