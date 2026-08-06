@@ -1,0 +1,168 @@
+name: Release v3.27.7 Unified A-J
+
+on:
+  push:
+    branches:
+      - workbench/unified-observation-endpoint-implementation-20260806
+    paths:
+      - ".github/workflows/release-v3277-unified.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b3896bf63ab80ea68b6fd887423fd66860bc026f
+          fetch-depth: 0
+
+      - name: Validate immutable source and apply A-J twice
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "b3896bf63ab80ea68b6fd887423fd66860bc026f"
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.7"
+          python3 scripts/fix_unified_endpoint_f_patch_anchors.py
+          for pass in 1 2; do
+            python3 scripts/apply_unified_endpoint_a_patch.py
+            python3 scripts/apply_unified_endpoint_a_compile_fix.py
+            python3 scripts/apply_unified_endpoint_b_storage_patch.py
+            python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
+            python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
+            python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
+            python3 scripts/apply_unified_endpoint_e_runtime_correction.py
+            python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
+            python3 scripts/apply_unified_endpoint_g_release_gate_fix.py
+            python3 scripts/apply_unified_endpoint_h_response_headers.py
+            python3 scripts/apply_unified_endpoint_i_parent_multisource.py
+            python3 scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
+            sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1 > source-$pass.sha
+          done
+          cmp source-1.sha source-2.sha
+
+      - name: Audit cumulative contracts and data completeness
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('hachimi_ura_plugin/src/lib.rs').read_text()
+          required=[
+            'method_index_watchdog_timeout',
+            'process_start_token TEXT NOT NULL',
+            'InvokeCompletionEvent',
+            'observe_unity_response_completion',
+            'GetResponseHeaders',
+            'take_unity_response_headers(&response_url)',
+            'persist_protocol_capture("response", rid, &response_url, headers_json.as_bytes(), &bytes)',
+            'storage_set_error("response_headers_not_correlated")',
+            'inherit_selected_parent_records_endpoint',
+            'WorkTrainedCharaData',
+            'WorkSuccessionOnlyCharaData',
+            'let id = call_getter_int(record_class, record, "get_Id")',
+            'let card_id = call_getter_int(record_class, record, "get_CardId")',
+            'let chara_id = call_getter_obscured_int(record_class, record, "get_CharaId")',
+            'read_unaligned::<u8>((boxed as *const u8).add(16))',
+            'selected_temp_lookup":"via_succession_only_get_all_contract',
+            'selected_temp_runtime_hit":"pending_device_execution',
+          ]
+          missing=[x for x in required if x not in s]
+          assert not missing, missing
+          forbidden=['let id = call_getter_obscured_int(record_class, record, "get_Id")',
+                     'selected_temp_coverage":"included_by_succession_only_all_lookup"']
+          present=[x for x in forbidden if x in s]
+          assert not present, present
+          PY
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' \
+            scripts/apply_unified_endpoint_i_parent_multisource.py \
+            scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
+
+      - name: Refuse overwrite and create immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v3.27.7 >/dev/null 2>&1; then
+            echo 'release v3.27.7 already exists; refusing overwrite' >&2
+            exit 1
+          fi
+          if git rev-parse -q --verify refs/tags/v3.27.7 >/dev/null; then
+            test "$(git rev-list -n1 v3.27.7)" = "b3896bf63ab80ea68b6fd887423fd66860bc026f"
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a v3.27.7 b3896bf63ab80ea68b6fd887423fd66860bc026f -m 'Release v3.27.7'
+            git push origin refs/tags/v3.27.7
+          fi
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --target aarch64-linux-android --release
+
+      - name: Publish immutable Release and verify asset digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=b3896bf63ab80ea68b6fd887423fd66860bc026f
+          cargo_version=3.27.7
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.27.7
+          workflow_run=${GITHUB_RUN_ID}
+          endpoint_stage=J-selected-parent-runtime-semantics
+          cumulative_patches=A,B,C,D,E,F,G,H,I,J
+          parent_lookup_order=trained_chara_data,succession_only_chara_data
+          friend_parent_context=viewer_rental_accessor_required_for_consumer_fallback
+          runtime_validation=pending_device_execution
+          EOF
+          NOTES=$(cat <<EOF
+          Unified observation endpoint release through J stage.
+
+          Includes all A-H v3.27.6 capabilities plus selected-parent multi-source record lookup and corrected Int32, ObscuredInt, and boxed Boolean runtime semantics.
+
+          Source commit: b3896bf63ab80ea68b6fd887423fd66860bc026f
+          Cargo version: 3.27.7
+          Binary size: $SIZE bytes
+          SHA-256: $SHA256
+          Workflow run: $GITHUB_RUN_ID
+          EOF
+          )
+          gh release create v3.27.7 --verify-tag --title v3.27.7 --notes "$NOTES" \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+          API_DIGEST=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.7 \
+            --jq '.assets[] | select(.name == "libhachimi_ura.so") | .digest')
+          test "$API_DIGEST" = "sha256:$SHA256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libhachimi_ura-v3.27.7
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: error
