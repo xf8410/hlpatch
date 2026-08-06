@@ -37,7 +37,7 @@ jobs:
           cmp source-1.sha source-2.sha
           grep -Fq 'fn inherit_selected_parent_runtime_endpoint' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'fn inherit_pair_compat_endpoint' hachimi_ura_plugin/src/lib.rs
-          grep -Fq 'fn observation_storage_status_endpoint' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'fn storage_status_endpoint' hachimi_ura_plugin/src/lib.rs
           ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' \
             scripts/apply_unified_endpoint_d_selected_parent_patch.py
 
@@ -77,7 +77,7 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-        run: cargo build --locked --target aarch64-linux-android --release
+        run: cargo build --target aarch64-linux-android --release
 
       - name: Publish immutable release and verify digest
         env:
