@@ -1,6 +1,11 @@
 name: Extract Focused Inheritance Context
 
 on:
+  push:
+    branches:
+      - workbench/unified-observation-endpoint-implementation-20260806
+    paths:
+      - ".github/workflows/extract-inherit-context.yml"
   workflow_dispatch:
 
 permissions:
