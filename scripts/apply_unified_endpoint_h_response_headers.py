@@ -7,21 +7,67 @@ if MARKER in s:
     print("unified_endpoint_h_response_headers=already_applied")
     raise SystemExit(0)
 
+
 def replace_once(old: str, new: str, label: str) -> None:
     global s
     count = s.count(old)
     assert count == 1, f"{label} anchor count={count}"
     s = s.replace(old, new, 1)
 
+
 replace_once(
 '''static UNITY_OBSERVATIONS: Mutex<Vec<UnityRequestObservation>> = Mutex::new(Vec::new());
 // Pending request body parking (CompressRequest → Post matching)
 ''',
 '''static UNITY_OBSERVATIONS: Mutex<Vec<UnityRequestObservation>> = Mutex::new(Vec::new());
-// UnityWebRequest objects remain owned by the live async operation until response
-// decompression. Queue only game API POSTs, in the same bounded FIFO model used
-// for request-id correlation, so DecompressResponse can call GetResponseHeaders.
-static UNITY_RESPONSE_REQUESTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+// Keep a strong IL2CPP GC handle until the matching game API response is
+// decompressed. URL matching prevents unrelated/concurrent Unity requests from
+// shifting response headers onto the wrong request id.
+static UNITY_RESPONSE_REQUESTS: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
+
+unsafe fn unity_response_retain(request: *mut c_void) -> u32 {
+    let symbol = resolve_il2cpp_symbol("il2cpp_gchandle_new");
+    if symbol.is_null() || request.is_null() { return 0; }
+    let create: unsafe extern "C" fn(*mut c_void, bool) -> u32 = std::mem::transmute(symbol);
+    create(request, false)
+}
+
+unsafe fn unity_response_target(handle: u32) -> *mut c_void {
+    let symbol = resolve_il2cpp_symbol("il2cpp_gchandle_get_target");
+    if symbol.is_null() || handle == 0 { return ptr::null_mut(); }
+    let get: unsafe extern "C" fn(u32) -> *mut c_void = std::mem::transmute(symbol);
+    get(handle)
+}
+
+unsafe fn unity_response_release(handle: u32) {
+    let symbol = resolve_il2cpp_symbol("il2cpp_gchandle_free");
+    if symbol.is_null() || handle == 0 { return; }
+    let free: unsafe extern "C" fn(u32) = std::mem::transmute(symbol);
+    free(handle);
+}
+
+unsafe fn take_unity_response_headers(url: &str) -> Vec<(String, String)> {
+    let selected = UNITY_RESPONSE_REQUESTS.lock().ok().and_then(|mut pending| {
+        let wanted = sniff_path(url);
+        let index = pending.iter().position(|(_, candidate)| sniff_path(candidate) == wanted)?;
+        Some(pending.remove(index).0)
+    });
+    let Some(handle) = selected else { return Vec::new(); };
+    let request = unity_response_target(handle);
+    let headers = if request.is_null() {
+        Vec::new()
+    } else {
+        let class = get_class_from_object(request);
+        if class.is_null() {
+            Vec::new()
+        } else {
+            let dictionary = call_getter_on_instance(class, request, "GetResponseHeaders");
+            if dictionary.is_null() { Vec::new() } else { read_string_dict(dictionary) }
+        }
+    };
+    unity_response_release(handle);
+    headers
+}
 // Pending request body parking (CompressRequest → Post matching)
 ''', "unity_response_queue")
 
@@ -30,10 +76,16 @@ replace_once(
         id: UNITY_OBSERVATION_ID.fetch_add(1, Ordering::Relaxed),
 ''',
 '''    if method.eq_ignore_ascii_case("POST") && url.contains("/umamusume/") {
-        if let Ok(mut pending) = UNITY_RESPONSE_REQUESTS.lock() {
-            pending.push(request as usize);
-            if pending.len() > SNIFF_RAW_MAX {
-                pending.remove(0);
+        let handle = unity_response_retain(request);
+        if handle != 0 {
+            if let Ok(mut pending) = UNITY_RESPONSE_REQUESTS.lock() {
+                pending.push((handle, url.clone()));
+                if pending.len() > SNIFF_RAW_MAX {
+                    let (expired, _) = pending.remove(0);
+                    unity_response_release(expired);
+                }
+            } else {
+                unity_response_release(handle);
             }
         }
     }
@@ -43,19 +95,13 @@ replace_once(
 
 replace_once(
 '''                push_sniff_metadata(rid, "response", &response_url, bytes.len(), &bytes, Vec::new());
+                if let Err(error) = persist_protocol_capture("response", rid, &response_url, &[], &bytes) { storage_set_error(&error); }
 ''',
-'''                let response_headers = UNITY_RESPONSE_REQUESTS.lock().ok()
-                    .and_then(|mut pending| if pending.is_empty() { None } else { Some(pending.remove(0)) })
-                    .map(|request| {
-                        let request = request as *mut c_void;
-                        if request.is_null() { return Vec::new(); }
-                        let class = get_class_from_object(request);
-                        if class.is_null() { return Vec::new(); }
-                        let dictionary = call_getter_on_instance(class, request, "GetResponseHeaders");
-                        if dictionary.is_null() { Vec::new() } else { read_string_dict(dictionary) }
-                    }).unwrap_or_default();
+'''                let response_headers = take_unity_response_headers(&response_url);
+                let response_headers_json = format_headers_json(&response_headers);
                 push_sniff_metadata(rid, "response", &response_url, bytes.len(), &bytes, response_headers);
-''', "response_headers_capture")
+                if let Err(error) = persist_protocol_capture("response", rid, &response_url, response_headers_json.as_bytes(), &bytes) { storage_set_error(&error); }
+''', "response_headers_capture_and_persist")
 
 replace_once(
 '''            if let Ok(mut entries) = UNITY_OBSERVATIONS.lock() {
@@ -67,7 +113,7 @@ replace_once(
                 entries.clear();
             }
             if let Ok(mut pending) = UNITY_RESPONSE_REQUESTS.lock() {
-                pending.clear();
+                for (handle, _) in pending.drain(..) { unity_response_release(handle); }
             }
             SNIFF_METADATA.clear();
 ''', "clear_response_queue")
