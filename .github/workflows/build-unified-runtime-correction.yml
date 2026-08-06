@@ -45,11 +45,11 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add docs/PRE_RELEASE_ENDPOINT_SOURCE_AUDIT_CONTEXT.md
+          git add docs/PRE_RELEASE_ENDPOINT_SOURCE_AUDIT_CONTEXT.md docs/pre_release_endpoint_source
           if git diff --cached --quiet; then
             echo no_change
           else
-            git commit -m "chore: capture focused pre-release endpoint source context"
+            git commit -m "chore: capture bounded pre-release endpoint source context"
             git push origin HEAD:workbench/unified-observation-endpoint-implementation-20260806
           fi
 
