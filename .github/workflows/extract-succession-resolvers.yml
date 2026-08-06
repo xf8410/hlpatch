@@ -1,0 +1,65 @@
+name: Extract Exact Succession Resolver Classes
+
+on:
+  push:
+    branches:
+      - workbench/unified-observation-endpoint-implementation-20260806
+    paths:
+      - ".github/workflows/extract-succession-resolvers.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract exact resolver class records
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          source = Path('data/il2cpp_dump/dump_all_methods_ALL.json')
+          data = json.loads(source.read_text())
+          wanted_classes = {
+            'WorkTrainedCharaData', 'ObscuredGenerateSuccessionStartChara',
+            'GenerateSuccessionStartChara', 'SingleModeStartData',
+            'WorkSingleModeStartData', 'SuccessionCharaInfo',
+          }
+          wanted_method_terms = (
+            'TrainedCharaId', 'SuccessionChara', 'GenerateSuccessionStart',
+            'CurrentSuccessionRankPoint', 'RentalSuccession',
+          )
+          records=[]
+          def walk(v):
+            if isinstance(v,dict):
+              cls=v.get('class') or v.get('class_name')
+              methods=v.get('methods',[])
+              names=[m.get('name','') for m in methods if isinstance(m,dict)] if isinstance(methods,list) else []
+              if cls in wanted_classes or (names and any(any(t in n for t in wanted_method_terms) for n in names)):
+                focus=[m for m in methods if isinstance(m,dict) and any(t in m.get('name','') for t in wanted_method_terms)]
+                if cls in wanted_classes:
+                  focus=methods
+                records.append({'class':cls,'ns':v.get('ns',''),'method_count':v.get('method_count'), 'methods':focus})
+              for child in v.values(): walk(child)
+            elif isinstance(v,list):
+              for child in v: walk(child)
+          walk(data)
+          seen=set(); out=['# Exact succession resolver classes','']
+          for r in records:
+            encoded=json.dumps(r,sort_keys=True)
+            if encoded in seen: continue
+            seen.add(encoded)
+            out += [f"## {r['ns']}.{r['class']}",'','```json',json.dumps(r,ensure_ascii=False,indent=2),'```','']
+          rendered='\n'.join(out)
+          assert len(rendered.encode()) < 500000
+          Path('docs/SUCCESSION_RESOLVER_CLASSES.md').write_text(rendered)
+          PY
+      - name: Commit records
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/SUCCESSION_RESOLVER_CLASSES.md
+          git commit -m 'chore: capture exact succession resolver classes'
+          git push origin HEAD:${GITHUB_REF_NAME}
