@@ -5,6 +5,7 @@ on:
     paths:
       - scripts/apply_generated_succession_runtime_l.py
       - scripts/apply_generated_succession_runtime_l_support_fix.py
+      - scripts/run_generated_succession_l_cumulative.py
       - .github/workflows/build-generated-succession-runtime-l.yml
   workflow_dispatch:
 permissions:
@@ -18,34 +19,10 @@ jobs:
         id: apply
         run: |
           set -o pipefail
-          {
-            set -euo pipefail
-            python3 scripts/fix_unified_endpoint_k_complete_anchors.py
-            for pass in 1 2; do
-              python3 scripts/fix_unified_endpoint_f_patch_anchors.py
-              python3 scripts/apply_unified_endpoint_a_patch.py
-              python3 scripts/apply_unified_endpoint_a_compile_fix.py
-              python3 scripts/apply_unified_endpoint_b_storage_patch.py
-              python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
-              python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
-              python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
-              python3 scripts/apply_unified_endpoint_e_runtime_correction.py
-              python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
-              python3 scripts/apply_unified_endpoint_g_release_gate_fix.py
-              python3 scripts/apply_unified_endpoint_h_response_headers.py
-              python3 scripts/apply_unified_endpoint_i_parent_multisource.py
-              python3 scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
-              python3 scripts/apply_unified_endpoint_k_complete.py
-              python3 scripts/fix_unified_endpoint_k_rust_types.py
-              python3 scripts/apply_generated_succession_runtime_l.py
-              python3 scripts/apply_generated_succession_runtime_l_support_fix.py
-              sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1 > source-$pass.sha
-            done
-            cmp source-1.sha source-2.sha
-            test "$(grep -c 'path == \"/generate_succession/runtime_full\"' hachimi_ura_plugin/src/lib.rs)" = 1
-            ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_generated_succession_runtime_l.py scripts/apply_generated_succession_runtime_l_support_fix.py
-            grep -n -C 3 -E '65536|65_536|64 \* 1024|64\*1024' hachimi_ura_plugin/src/lib.rs > PROTOCOL_65536_AUDIT.txt || true
-          } 2>&1 | tee l_apply.log
+          python3 scripts/run_generated_succession_l_cumulative.py 2>&1 | tee l_apply.log
+          test "$(grep -c 'path == \"/generate_succession/runtime_full\"' hachimi_ura_plugin/src/lib.rs)" = 1
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_generated_succession_runtime_l.py scripts/apply_generated_succession_runtime_l_support_fix.py
+          grep -n -C 3 -E '65536|65_536|64 \* 1024|64\*1024' hachimi_ura_plugin/src/lib.rs > PROTOCOL_65536_AUDIT.txt || true
       - name: Persist apply diagnostics
         if: failure() && steps.apply.outcome == 'failure'
         run: |
