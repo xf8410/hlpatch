@@ -9,6 +9,7 @@ on:
       - "scripts/apply_unified_endpoint_a_patch.py"
       - "scripts/apply_unified_endpoint_a_compile_fix.py"
       - "scripts/apply_unified_endpoint_b_storage_patch.py"
+      - "scripts/apply_unified_endpoint_b_storage_compile_fix.py"
       - ".github/workflows/build-unified-storage.yml"
   workflow_dispatch:
 
@@ -27,10 +28,12 @@ jobs:
           python3 scripts/apply_unified_endpoint_a_patch.py
           python3 scripts/apply_unified_endpoint_a_compile_fix.py
           python3 scripts/apply_unified_endpoint_b_storage_patch.py
+          python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
           FIRST_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           python3 scripts/apply_unified_endpoint_a_patch.py
           python3 scripts/apply_unified_endpoint_a_compile_fix.py
           python3 scripts/apply_unified_endpoint_b_storage_patch.py
+          python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
           SECOND_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           test "$FIRST_SHA" = "$SECOND_SHA"
           grep -Fq 'fn storage_status_endpoint' hachimi_ura_plugin/src/lib.rs
@@ -40,6 +43,7 @@ jobs:
           grep -Fq 'fn storage_recover_endpoint' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'CREATE TABLE IF NOT EXISTS observation_sessions' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'PRAGMA synchronous=FULL' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'current_session.as_ref().map' hachimi_ura_plugin/src/lib.rs
 
       - name: Audit changed patch scripts
         run: |
@@ -47,7 +51,8 @@ jobs:
           ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist' \
             scripts/apply_unified_endpoint_a_patch.py \
             scripts/apply_unified_endpoint_a_compile_fix.py \
-            scripts/apply_unified_endpoint_b_storage_patch.py
+            scripts/apply_unified_endpoint_b_storage_patch.py \
+            scripts/apply_unified_endpoint_b_storage_compile_fix.py
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
@@ -83,6 +88,10 @@ jobs:
             cat hachimi_ura_plugin/unified_storage_cargo_build.log
             echo '```'
           } > docs/UNIFIED_STORAGE_BUILD_DIAGNOSTICS.md
+          if git diff --quiet -- docs/UNIFIED_STORAGE_BUILD_DIAGNOSTICS.md; then
+            echo diagnostics_unchanged=true
+            exit 0
+          fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add docs/UNIFIED_STORAGE_BUILD_DIAGNOSTICS.md
