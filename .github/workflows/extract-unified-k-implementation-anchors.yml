@@ -1,0 +1,70 @@
+name: Extract Unified K Implementation Anchors
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract-k-anchors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply cumulative A-J
+        run: |
+          set -euo pipefail
+          python3 scripts/fix_unified_endpoint_f_patch_anchors.py
+          python3 scripts/apply_unified_endpoint_a_patch.py
+          python3 scripts/apply_unified_endpoint_a_compile_fix.py
+          python3 scripts/apply_unified_endpoint_b_storage_patch.py
+          python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
+          python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
+          python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
+          python3 scripts/apply_unified_endpoint_e_runtime_correction.py
+          python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
+          python3 scripts/apply_unified_endpoint_g_release_gate_fix.py
+          python3 scripts/apply_unified_endpoint_h_response_headers.py
+          python3 scripts/apply_unified_endpoint_i_parent_multisource.py
+          python3 scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
+
+      - name: Extract bounded implementation anchors
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('hachimi_ura_plugin/src/lib.rs').read_text()
+          targets = {
+              'storage_schema_and_endpoints': ['CREATE TABLE IF NOT EXISTS observation_files', 'fn storage_session_endpoint', 'fn storage_flush_endpoint'],
+              'method_index_and_detail': ['struct MethodIndexEntry', 'unsafe fn build_method_index', 'fn il2cpp_method_detail'],
+              'http_route_and_response': ['let response = if path ==', 'TcpListener', 'Content-Length'],
+              'inherit_runtime': ['fn inherit_pair_compat_endpoint', 'fn inherit_selected_parent_runtime_endpoint', 'fn inherit_selected_parent_records_endpoint'],
+              'protocol_persistence': ['fn persist_protocol_capture', 'push_sniff_metadata'],
+          }
+          out = ['# Unified K bounded implementation anchors', '']
+          for group, needles in targets.items():
+              out += [f'## {group}', '']
+              for needle in needles:
+                  positions=[]; start=0
+                  while True:
+                      p=s.find(needle,start)
+                      if p<0: break
+                      positions.append(p); start=p+1
+                  out += [f'### `{needle}`', '', f'matches={len(positions)}', '']
+                  for i,p in enumerate(positions[:4]):
+                      a=max(0,p-2500); b=min(len(s),p+6500)
+                      out += [f'#### match {i+1} bytes {a}..{b}', '', '```rust', s[a:b], '```', '']
+          text='\n'.join(out)
+          assert len(text.encode()) < 450_000, len(text.encode())
+          Path('docs/UNIFIED_K_IMPLEMENTATION_ANCHORS.md').write_text(text)
+          PY
+
+      - name: Commit anchors
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/UNIFIED_K_IMPLEMENTATION_ANCHORS.md
+          git commit -m 'chore: extract bounded K implementation anchors'
+          git push origin HEAD:${GITHUB_REF_NAME}
