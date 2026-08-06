@@ -1,0 +1,36 @@
+name: Audit response header hook chain
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract bounded source contexts
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('hachimi_ura_plugin/src/lib.rs').read_text()
+          needles=['unity_send_hook_handler','decompress_response_hook_handler','install_api_sniff_hooks','UNITY_SEND_ADDR','push_sniff_metadata(','SNIFF_RESPONSE_QUEUE']
+          out=['# Response header hook source contexts\n']
+          for needle in needles:
+              positions=[]; start=0
+              while True:
+                  i=s.find(needle,start)
+                  if i<0: break
+                  positions.append(i); start=i+len(needle)
+              out.append(f'## `{needle}` ({len(positions)} matches)\n')
+              for n,i in enumerate(positions,1):
+                  a=max(0,i-2500); b=min(len(s),i+5000)
+                  out.append(f'### match {n}\n```rust\n{s[a:b]}\n```\n')
+          Path('docs/RESPONSE_HEADER_HOOK_SOURCE_CONTEXT.md').write_text('\n'.join(out))
+          PY
+      - name: Commit audit context
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/RESPONSE_HEADER_HOOK_SOURCE_CONTEXT.md
+          git commit -m 'chore: capture response header hook source context' || true
+          git push origin HEAD:workbench/unified-observation-endpoint-implementation-20260806
