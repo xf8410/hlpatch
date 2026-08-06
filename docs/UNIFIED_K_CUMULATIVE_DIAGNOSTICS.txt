@@ -1,0 +1,11 @@
++ python3 scripts/fix_unified_endpoint_k_complete_anchors.py
+k_complete_anchor_fix=applied
++ python3 scripts/fix_unified_endpoint_k_rust_types.py
+Traceback (most recent call last):
+  File "/home/runner/work/hlpatch/hlpatch/scripts/fix_unified_endpoint_k_rust_types.py", line 10, in <module>
+    assert count==43, f'k_domain_call_count={count}'
+           ^^^^^^^^^
+AssertionError: k_domain_call_count=1
+
+apply_outcome=failure
+source_commit=705f3ee672680e2d27b227ddc94b8e337097a442
