@@ -1,6 +1,12 @@
 name: Build Unified K Complete Endpoint Set
 
 on:
+  push:
+    branches:
+      - workbench/unified-observation-k-factor-il2cpp-storage-20260807
+    paths:
+      - "scripts/apply_unified_endpoint_k_complete.py"
+      - ".github/workflows/build-unified-k-complete.yml"
   workflow_dispatch:
 
 permissions:
@@ -99,12 +105,7 @@ jobs:
           '''.split()
           missing=[endpoint for endpoint in required if s.count(f'path == "{endpoint}"') != 1]
           assert not missing, f'missing_or_duplicate_routes={missing}'
-          forbidden=[
-            'fixed_placeholder_success',
-            '"status":"not_implemented"',
-            '"probability":0',
-            'metadata_only',
-          ]
+          forbidden=['fixed_placeholder_success','"status":"not_implemented"','"probability":0','metadata_only']
           hits=[token for token in forbidden if token in s]
           assert not hits, f'forbidden_placeholder_or_data_loss={hits}'
           for token in ['storage_files_endpoint','storage_download','il2cpp_call_targets','il2cpp_callers','il2cpp_type_detail','il2cpp_object_dump','factor_history_endpoint','inherit_tree_endpoint']:
