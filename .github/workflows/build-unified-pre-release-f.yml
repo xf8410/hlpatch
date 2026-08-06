@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-pre-release-f:
@@ -20,19 +20,34 @@ jobs:
 
       - name: Apply cumulative A-F patches twice
         run: |
-          set -euo pipefail
+          set -o pipefail
+          : > f-build-diagnostics.log
           for pass in 1 2; do
-            python3 scripts/apply_unified_endpoint_a_patch.py
-            python3 scripts/apply_unified_endpoint_a_compile_fix.py
-            python3 scripts/apply_unified_endpoint_b_storage_patch.py
-            python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
-            python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
-            python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
-            python3 scripts/apply_unified_endpoint_e_runtime_correction.py
-            python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
-            sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1 > source-$pass.sha
+            {
+              python3 scripts/apply_unified_endpoint_a_patch.py
+              python3 scripts/apply_unified_endpoint_a_compile_fix.py
+              python3 scripts/apply_unified_endpoint_b_storage_patch.py
+              python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
+              python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
+              python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
+              python3 scripts/apply_unified_endpoint_e_runtime_correction.py
+              python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
+              sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1 > source-$pass.sha
+            } 2>&1 | tee -a f-build-diagnostics.log || exit 1
           done
-          cmp source-1.sha source-2.sha
+          cmp source-1.sha source-2.sha 2>&1 | tee -a f-build-diagnostics.log
+
+      - name: Persist failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          mkdir -p docs
+          cp f-build-diagnostics.log docs/UNIFIED_ENDPOINT_F_BUILD_DIAGNOSTICS.md
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/UNIFIED_ENDPOINT_F_BUILD_DIAGNOSTICS.md
+          git commit -m "chore: capture unified endpoint F diagnostics" || exit 0
+          git push origin HEAD:workbench/unified-observation-endpoint-implementation-20260806
 
       - name: Static endpoint contract audit
         run: |
@@ -57,23 +72,11 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import json, re
+          import json
           s = Path('hachimi_ura_plugin/src/lib.rs').read_text()
-          required = [
-              '"card_id":{},"chara_id":{}',
-              '"ok":false,"status":"deprecated"',
-              '"ok":false,"status":"unavailable"',
-              '"ok":true,"status":"{}","generation":{}',
-          ]
-          for fragment in required:
+          for fragment in ['"card_id":{},"chara_id":{}','"ok":false,"status":"deprecated"','"ok":false,"status":"unavailable"','"ok":true,"status":"{}","generation":{}']:
               assert fragment in s, fragment
-          # Validate literal endpoint responses after undoing Rust raw-string escaping.
-          samples = [
-              '{"ok":false,"status":"deprecated","error":"legacy_inherit_contract_unreliable","replacement":"/inherit/pair_compat and /inherit/selected_parent_runtime"}',
-              '{"ok":false,"status":"unavailable","error":"legacy_saddle_runtime_chain_unverified"}',
-              '{"ok":false,"error":"missing_type"}',
-          ]
-          for sample in samples:
+          for sample in ['{"ok":false,"status":"deprecated","error":"legacy_inherit_contract_unreliable","replacement":"/inherit/pair_compat and /inherit/selected_parent_runtime"}','{"ok":false,"status":"unavailable","error":"legacy_saddle_runtime_chain_unverified"}','{"ok":false,"error":"missing_type"}']:
               json.loads(sample)
           print('json_contract_audit=ok')
           PY
@@ -81,8 +84,7 @@ jobs:
       - name: Audit data-loss logic in F changes
         run: |
           set -euo pipefail
-          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' \
-            scripts/apply_unified_endpoint_f_pre_release_fix.py
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_unified_endpoint_f_pre_release_fix.py
           grep -Fq 'headers.raw' scripts/apply_unified_endpoint_f_pre_release_fix.py
           grep -Fq 'payload.bin' scripts/apply_unified_endpoint_f_pre_release_fix.py
 
