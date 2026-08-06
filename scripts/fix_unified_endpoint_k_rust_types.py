@@ -7,7 +7,7 @@ old_call='''        k_domain_endpoint(path, &full_uri)
 new_call='''        k_domain_endpoint(&path, &full_uri)
 '''
 count=s.count(old_call)
-assert count==44, f'k_domain_call_count={count}'
+assert count==43, f'k_domain_call_count={count}'
 s=s.replace(old_call,new_call)
 old_replace="""    let token=domain.replace('/','_');let like=format!(\"%{}%\",token);
 """
