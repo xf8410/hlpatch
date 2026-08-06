@@ -1,6 +1,6 @@
 # Pre-release endpoint focused source index
 
-source_commit: `ffc3748df2d3c8c57b34aa3fdd64f75d09ed0866`
+source_commit: `a340a147acf13672b2fbc64925bfa321d08091fd`
 
 | function | source line | file |
 |---|---:|---|
