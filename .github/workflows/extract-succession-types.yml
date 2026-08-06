@@ -17,78 +17,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract exact type records and bounded references
+      - name: Extract bounded exact-name windows
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import json
 
-          exact_names = {
+          terms = [
               'SuccessionCharaInfo',
-              'TrainedCharaData',
-              'WorkSingleModeCharaData',
-              'SingleModeSuccessionFactor',
-              'SuccessionFactor',
-          }
-          terms = sorted(exact_names | {
               'SuccessionTrainedCharaInfoFirst',
               'SuccessionTrainedCharaInfoSecond',
               'TrainedCharaId',
               'WinSaddleArray',
               'SuccessionFactor',
-          })
-          output = ['# Exact succession type metadata', '']
-
-          for path in sorted(Path('data/il2cpp_dump').glob('dump_all_methods_*.json')):
-              text = path.read_text(errors='replace')
-              if not any(term in text for term in exact_names):
-                  continue
-              output += [f'## {path}', '']
-              try:
-                  data = json.loads(text)
-                  records = []
-                  def walk(value):
-                      if isinstance(value, dict):
-                          name = str(value.get('class_name', value.get('class', value.get('name', ''))))
-                          serialized = json.dumps(value, ensure_ascii=False)
-                          if any(('"' + term + '"') in serialized or name == term for term in exact_names):
-                              records.append(value)
-                          for child in value.values(): walk(child)
-                      elif isinstance(value, list):
-                          for child in value: walk(child)
-                  walk(data)
-                  seen = set()
-                  for record in records:
-                      encoded = json.dumps(record, ensure_ascii=False, sort_keys=True)
-                      if encoded in seen: continue
-                      seen.add(encoded)
-                      output += ['```json', json.dumps(record, ensure_ascii=False, indent=2), '```', '']
-              except Exception as error:
-                  output += [f'json_parse_error={error}', '']
-
-          source_paths = [
-              Path('hachimi_ura_plugin/src/lib.rs'),
+          ]
+          paths = sorted(Path('data/il2cpp_dump').glob('dump_all_methods_*.json')) + [
               Path('reverse/il2cpp_key_classes_methods.txt'),
               Path('reverse/all_classes_dump.md'),
+              Path('hachimi_ura_plugin/src/lib.rs'),
           ]
-          for path in source_paths:
-              if not path.exists(): continue
-              lines = path.read_text(errors='replace').splitlines()
-              hits = [i for i, line in enumerate(lines) if any(term in line for term in terms)]
-              if not hits: continue
-              output += [f'## bounded references: {path}', '']
-              ranges = []
-              for index in hits:
-                  start, end = max(0, index - 12), min(len(lines), index + 13)
-                  if ranges and start <= ranges[-1][1]: ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
-                  else: ranges.append((start, end))
-              for start, end in ranges:
-                  output += ['```text']
-                  output += [f'{i + 1:08d}: {lines[i]}' for i in range(start, end)]
-                  output += ['```', '']
-
-          Path('docs/SUCCESSION_TYPE_METADATA_CONTEXT.md').write_text('\n'.join(output))
+          output = ['# Bounded exact succession metadata', '']
+          total_windows = 0
+          max_windows = 160
+          for path in paths:
+              if not path.exists() or total_windows >= max_windows: break
+              text = path.read_text(errors='replace')
+              positions = []
+              for term in terms:
+                  start = 0
+                  while total_windows + len(positions) < max_windows:
+                      index = text.find(term, start)
+                      if index < 0: break
+                      positions.append((index, term))
+                      start = index + len(term)
+              if not positions: continue
+              positions.sort()
+              output += [f'## {path}', '']
+              previous_end = -1
+              for index, term in positions:
+                  start = max(0, index - 700)
+                  end = min(len(text), index + len(term) + 1700)
+                  if start <= previous_end: continue
+                  previous_end = end
+                  total_windows += 1
+                  output += [f'### hit {total_windows}: {term} at byte {index}', '', '```text', text[start:end], '```', '']
+                  if total_windows >= max_windows: break
+          output.insert(2, f'window_count={total_windows}')
+          rendered = '\n'.join(output)
+          assert len(rendered.encode()) < 800_000, len(rendered.encode())
+          Path('docs/SUCCESSION_TYPE_METADATA_CONTEXT.md').write_text(rendered)
           PY
 
       - name: Commit metadata context
@@ -98,5 +75,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add docs/SUCCESSION_TYPE_METADATA_CONTEXT.md
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'chore: capture exact succession type metadata'
+          git commit -m 'chore: bound exact succession type metadata'
           git push origin HEAD:${GITHUB_REF_NAME}
