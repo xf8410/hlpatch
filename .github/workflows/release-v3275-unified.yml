@@ -1,0 +1,125 @@
+name: Release v3.27.5 Unified Endpoints
+
+on:
+  push:
+    branches:
+      - workbench/unified-observation-endpoint-implementation-20260806
+    paths:
+      - ".github/workflows/release-v3275-unified.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6596406b53196b902d5e5585d647ac0e537f4362
+          fetch-depth: 0
+
+      - name: Validate release source and apply cumulative patches
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "6596406b53196b902d5e5585d647ac0e537f4362"
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.5"
+          for pass in 1 2; do
+            python3 scripts/apply_unified_endpoint_a_patch.py
+            python3 scripts/apply_unified_endpoint_a_compile_fix.py
+            python3 scripts/apply_unified_endpoint_b_storage_patch.py
+            python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
+            python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
+            python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
+            sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1 > source-$pass.sha
+          done
+          cmp source-1.sha source-2.sha
+          grep -Fq 'fn inherit_selected_parent_runtime_endpoint' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'fn inherit_pair_compat_endpoint' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'fn observation_storage_status_endpoint' hachimi_ura_plugin/src/lib.rs
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' \
+            scripts/apply_unified_endpoint_d_selected_parent_patch.py
+
+      - name: Create immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify refs/tags/v3.27.5 >/dev/null; then
+            test "$(git rev-list -n1 v3.27.5)" = "6596406b53196b902d5e5585d647ac0e537f4362"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a v3.27.5 6596406b53196b902d5e5585d647ac0e537f4362 -m "Release v3.27.5"
+            git push origin refs/tags/v3.27.5
+          fi
+          if gh release view v3.27.5 >/dev/null 2>&1; then
+            echo "release v3.27.5 already exists; refusing to overwrite" >&2
+            exit 1
+          fi
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build cumulative unified source
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --locked --target aarch64-linux-android --release
+
+      - name: Publish immutable release and verify digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=6596406b53196b902d5e5585d647ac0e537f4362
+          cargo_version=3.27.5
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.27.5
+          workflow_run=${GITHUB_RUN_ID}
+          endpoint_stage=D-selected-parent-runtime
+          cumulative_patches=A,B,C,D
+          EOF
+          NOTES=$(cat <<EOF
+          Unified observation endpoint release through D stage.
+
+          Source commit: 6596406b53196b902d5e5585d647ac0e537f4362
+          Cargo version: 3.27.5
+          Binary size: $SIZE bytes
+          SHA-256: $SHA256
+          Workflow run: $GITHUB_RUN_ID
+          EOF
+          )
+          gh release create v3.27.5 --verify-tag --title v3.27.5 --notes "$NOTES" \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+          API_DIGEST=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.5 \
+            --jq '.assets[] | select(.name == "libhachimi_ura.so") | .digest')
+          test "$API_DIGEST" = "sha256:$SHA256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libhachimi_ura-v3.27.5
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: error
