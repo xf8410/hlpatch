@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-ura:
@@ -49,6 +49,7 @@ jobs:
           link-to-sdk: true
 
       - name: Build exact checked-out source
+        id: cargo_build
         working-directory: hachimi_ura_plugin
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -56,7 +57,26 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-        run: cargo build --locked --target aarch64-linux-android --release
+        run: |
+          set -o pipefail
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee ../a_stage_cargo_build.log
+
+      - name: Persist bounded compiler diagnostics
+        if: failure() && steps.cargo_build.outcome == 'failure' && github.ref == 'refs/heads/workbench/unified-observation-endpoint-implementation-20260806'
+        run: |
+          set -euo pipefail
+          {
+            echo '# A-stage compiler diagnostics'
+            echo
+            echo '```text'
+            tail -n 240 hachimi_ura_plugin/a_stage_cargo_build.log
+            echo '```'
+          } > docs/UNIFIED_ENDPOINT_A_BUILD_DIAGNOSTICS.md
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/UNIFIED_ENDPOINT_A_BUILD_DIAGNOSTICS.md
+          git commit -m 'chore: capture A-stage compiler diagnostics'
+          git push origin HEAD:${GITHUB_REF_NAME}
 
       - name: Generate build manifest
         run: |
