@@ -8,6 +8,7 @@ on:
     paths:
       - "hachimi_ura_plugin/**"
       - "scripts/apply_unified_endpoint_a_patch.py"
+      - "scripts/apply_unified_endpoint_a_compile_fix.py"
       - ".github/workflows/build-ura.yml"
   workflow_dispatch:
 
@@ -24,19 +25,25 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/apply_unified_endpoint_a_patch.py
+          python3 scripts/apply_unified_endpoint_a_compile_fix.py
           FIRST_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           python3 scripts/apply_unified_endpoint_a_patch.py
+          python3 scripts/apply_unified_endpoint_a_compile_fix.py
           SECOND_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           test "$FIRST_SHA" = "$SECOND_SHA"
           grep -Fq 'fn il2cpp_method_by_addr' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'fn il2cpp_method_detail' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'fn il2cpp_nested_types' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'value_status":"unresolved' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'let mut found: *mut c_void = ptr::null_mut();' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'unwrap_or_else(|_| full_uri.to_string())' hachimi_ura_plugin/src/lib.rs
 
       - name: Audit patch data-preservation paths
         run: |
           set -euo pipefail
-          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist' scripts/apply_unified_endpoint_a_patch.py
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist' \
+            scripts/apply_unified_endpoint_a_patch.py \
+            scripts/apply_unified_endpoint_a_compile_fix.py
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
