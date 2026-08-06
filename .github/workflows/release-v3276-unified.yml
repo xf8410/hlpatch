@@ -1,6 +1,11 @@
 name: Release v3.27.6 Unified A-H
 
 on:
+  push:
+    branches:
+      - workbench/unified-observation-endpoint-implementation-20260806
+    paths:
+      - ".github/workflows/release-v3276-unified.yml"
   workflow_dispatch:
 
 permissions:
