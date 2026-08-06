@@ -4,18 +4,19 @@ on:
 permissions:
   contents: write
 jobs:
-  audit-response-headers:
+  restore-workflows:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: workbench/unified-observation-endpoint-implementation-20260806
-      - name: Extract bounded response-header contexts
-        run: python3 scripts/extract_response_header_hook_context.py
-      - name: Commit context
+          fetch-depth: 0
+      - name: Restore pre-H workflows from G head
         run: |
+          git show f66be5e859fa97b84441ad1171b16ee39f62ca66:.github/workflows/build-ura.yml > .github/workflows/build-ura.yml
+          git show f66be5e859fa97b84441ad1171b16ee39f62ca66:.github/workflows/audit-pre-release-endpoint-source.yml > .github/workflows/audit-pre-release-endpoint-source.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add docs/RESPONSE_HEADER_HOOK_SOURCE_CONTEXT.md
-          git commit -m 'chore: capture response header hook source context' || true
+          git add .github/workflows/build-ura.yml .github/workflows/audit-pre-release-endpoint-source.yml
+          git commit -m 'ci: restore cumulative build and audit workflows'
           git push origin HEAD:workbench/unified-observation-endpoint-implementation-20260806
