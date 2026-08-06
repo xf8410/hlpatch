@@ -1,0 +1,56 @@
+name: Extract Focused Inheritance Context
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract bounded source context
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('hachimi_ura_plugin/src/lib.rs').read_text().splitlines()
+          terms = [
+              '/inherit/compat',
+              'inherit_compat',
+              'succession_relation',
+              'succession_relation_member',
+              'GenerateSuccession',
+              'SuccessionChara',
+          ]
+          hits = []
+          for index, line in enumerate(source):
+              if any(term in line for term in terms):
+                  hits.append(index)
+          ranges = []
+          for index in hits:
+              start, end = max(0, index - 100), min(len(source), index + 101)
+              if ranges and start <= ranges[-1][1]:
+                  ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
+              else:
+                  ranges.append((start, end))
+          output = ['# Focused inheritance source context', '', f'hit_count={len(hits)}', '']
+          for start, end in ranges:
+              output += [f'## lines {start + 1}..{end}', '', '```rust']
+              output += [f'{i + 1:08d}: {source[i]}' for i in range(start, end)]
+              output += ['```', '']
+          Path('docs/INHERIT_ENDPOINT_SOURCE_CONTEXT.md').write_text('\n'.join(output))
+          PY
+
+      - name: Commit context
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/INHERIT_ENDPOINT_SOURCE_CONTEXT.md
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'chore: capture focused inheritance source context'
+          git push origin HEAD:${GITHUB_REF_NAME}
