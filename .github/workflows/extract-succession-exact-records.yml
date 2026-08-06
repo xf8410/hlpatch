@@ -1,11 +1,6 @@
 name: Extract Exact Succession Class Records
 
 on:
-  push:
-    branches:
-      - workbench/unified-observation-endpoint-implementation-20260806
-    paths:
-      - ".github/workflows/extract-succession-exact-records.yml"
   workflow_dispatch:
 
 permissions:
@@ -17,81 +12,59 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse exact class and method owners
+      - name: Apply cumulative A-J
+        run: |
+          set -euo pipefail
+          python3 scripts/fix_unified_endpoint_f_patch_anchors.py
+          python3 scripts/apply_unified_endpoint_a_patch.py
+          python3 scripts/apply_unified_endpoint_a_compile_fix.py
+          python3 scripts/apply_unified_endpoint_b_storage_patch.py
+          python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
+          python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
+          python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
+          python3 scripts/apply_unified_endpoint_e_runtime_correction.py
+          python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
+          python3 scripts/apply_unified_endpoint_g_release_gate_fix.py
+          python3 scripts/apply_unified_endpoint_h_response_headers.py
+          python3 scripts/apply_unified_endpoint_i_parent_multisource.py
+          python3 scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
+
+      - name: Extract K implementation anchors
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import json
-
-          exact_classes = {
-              'SuccessionCharaInfo',
-              'ObscuredSuccessionDeck',
-              'ObscuredSuccessionDeckChara',
-              'TrainedCharaData',
-              'WorkSingleModeCharaData',
+          s=Path('hachimi_ura_plugin/src/lib.rs').read_text()
+          groups={
+            'storage':['CREATE TABLE IF NOT EXISTS observation_files','fn storage_session_endpoint','fn storage_flush_endpoint'],
+            'method_index':['struct MethodIndexEntry','unsafe fn build_method_index','fn il2cpp_method_detail'],
+            'routing':['let response = if path ==','Content-Length'],
+            'inherit':['fn inherit_pair_compat_endpoint','fn inherit_selected_parent_runtime_endpoint','fn inherit_selected_parent_records_endpoint'],
+            'protocol':['fn persist_protocol_capture','push_sniff_metadata'],
           }
-          exact_methods = {
-              'get_SuccessionTrainedCharaId1',
-              'get_SuccessionTrainedCharaId2',
-              'get_CurrentSuccessionRankPoint',
-              'get_SuccessionTrainedCharaInfoFirst',
-              'get_SuccessionTrainedCharaInfoSecond',
-              'get_ParentTrainedChara',
-              'get_ParentTrainedCharaId',
-              'get_CharaId',
-              'get_CardId',
-              'get_TrainedCharaId',
-              'get_FactorArray',
-              'get_SuccessionFactor',
-              'get_WinSaddleArray',
-          }
-          records = []
-          def walk(value, path):
-              if isinstance(value, dict):
-                  class_name = value.get('class') or value.get('class_name')
-                  methods = value.get('methods')
-                  method_names = {m.get('name') for m in methods if isinstance(m, dict)} if isinstance(methods, list) else set()
-                  if class_name in exact_classes or (method_names & exact_methods and any(x in method_names for x in {'get_SuccessionTrainedCharaId1','get_SuccessionTrainedCharaId2','get_CurrentSuccessionRankPoint','get_SuccessionTrainedCharaInfoFirst','get_SuccessionTrainedCharaInfoSecond','get_ParentTrainedChara','get_ParentTrainedCharaId','get_SuccessionFactor','get_WinSaddleArray'})):
-                      records.append((path, value))
-                  for key, child in value.items(): walk(child, path + [str(key)])
-              elif isinstance(value, list):
-                  for index, child in enumerate(value): walk(child, path + [str(index)])
-
-          for source in sorted(Path('data/il2cpp_dump').glob('dump_all_methods_*.json')):
-              try:
-                  data = json.loads(source.read_text(errors='strict'))
-              except Exception:
-                  continue
-              walk(data, [str(source)])
-
-          output = ['# Exact succession class records', '', f'record_count={len(records)}', '']
-          seen = set()
-          for path, record in records:
-              encoded = json.dumps(record, ensure_ascii=False, sort_keys=True)
-              if encoded in seen: continue
-              seen.add(encoded)
-              methods = record.get('methods', [])
-              focused = []
-              for method in methods:
-                  if not isinstance(method, dict): continue
-                  name = method.get('name', '')
-                  if name in exact_methods or any(term in name for term in ('Succession', 'Parent', 'Factor', 'Saddle', 'CharaId', 'CardId', 'ViewerId', 'RankPoint')):
-                      focused.append(method)
-              summary = {key: value for key, value in record.items() if key != 'methods'}
-              summary['focused_methods'] = focused
-              output += [f"## {record.get('ns','')}.{record.get('class',record.get('class_name','unknown'))}", '', f"source_path={'/'.join(path)}", '', '```json', json.dumps(summary, ensure_ascii=False, indent=2), '```', '']
-          rendered = '\n'.join(output)
-          assert len(rendered.encode()) < 500_000, len(rendered.encode())
-          Path('docs/SUCCESSION_EXACT_CLASS_RECORDS.md').write_text(rendered)
+          out=['# Unified K implementation anchors','']
+          for group,needles in groups.items():
+            out += [f'## {group}','']
+            for needle in needles:
+              pos=[]; start=0
+              while True:
+                p=s.find(needle,start)
+                if p<0: break
+                pos.append(p); start=p+1
+              out += [f'### `{needle}`',f'matches={len(pos)}','']
+              for p in pos[:3]:
+                a=max(0,p-2500); b=min(len(s),p+7000)
+                out += ['```rust',s[a:b],'```','']
+          text='\n'.join(out)
+          assert len(text.encode())<450000
+          Path('docs/UNIFIED_K_IMPLEMENTATION_ANCHORS.md').write_text(text)
           PY
 
-      - name: Commit exact records
+      - name: Commit anchors
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add docs/SUCCESSION_EXACT_CLASS_RECORDS.md
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'chore: capture exact succession class records'
+          git add docs/UNIFIED_K_IMPLEMENTATION_ANCHORS.md
+          git commit -m 'chore: extract K implementation anchors'
           git push origin HEAD:${GITHUB_REF_NAME}
