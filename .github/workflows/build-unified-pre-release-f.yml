@@ -6,6 +6,7 @@ on:
       - workbench/unified-observation-endpoint-implementation-20260806
     paths:
       - "scripts/apply_unified_endpoint_f_pre_release_fix.py"
+      - "scripts/fix_unified_endpoint_f_patch_anchors.py"
       - ".github/workflows/build-unified-pre-release-f.yml"
   workflow_dispatch:
 
@@ -17,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Correct F patch anchors
+        run: python3 scripts/fix_unified_endpoint_f_patch_anchors.py
 
       - name: Apply cumulative A-F patches twice
         run: |
