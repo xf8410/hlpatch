@@ -1,0 +1,103 @@
+name: Build Unified Parent Runtime J
+
+on:
+  push:
+    branches:
+      - workbench/unified-observation-endpoint-implementation-20260806
+    paths:
+      - "scripts/apply_unified_endpoint_j_parent_runtime_semantics.py"
+      - ".github/workflows/build-unified-parent-runtime-j.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-parent-runtime-j:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply cumulative A-J twice
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            python3 scripts/fix_unified_endpoint_f_patch_anchors.py
+            python3 scripts/apply_unified_endpoint_a_patch.py
+            python3 scripts/apply_unified_endpoint_a_compile_fix.py
+            python3 scripts/apply_unified_endpoint_b_storage_patch.py
+            python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
+            python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
+            python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
+            python3 scripts/apply_unified_endpoint_e_runtime_correction.py
+            python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
+            python3 scripts/apply_unified_endpoint_g_release_gate_fix.py
+            python3 scripts/apply_unified_endpoint_h_response_headers.py
+            python3 scripts/apply_unified_endpoint_i_parent_multisource.py
+            python3 scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
+            sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1 > source-$pass.sha
+          done
+          cmp source-1.sha source-2.sha
+      - name: Static runtime semantics audit
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('hachimi_ura_plugin/src/lib.rs').read_text()
+          assert 'let id = call_getter_int(record_class, record, "get_Id")' in s
+          assert 'let chara_id = call_getter_obscured_int(record_class, record, "get_CharaId")' in s
+          assert 'read_unaligned::<u8>((boxed as *const u8).add(16))' in s
+          assert 'selected_temp_runtime_hit":"pending_device_execution' in s
+          assert 'let id = call_getter_obscured_int(record_class, record, "get_Id")' not in s
+          print('parent_runtime_semantics=ok')
+          PY
+      - name: Audit changed patches for data-loss paths
+        run: |
+          set -euo pipefail
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' \
+            scripts/apply_unified_endpoint_i_parent_multisource.py \
+            scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --target aarch64-linux-android --release
+      - name: Generate manifest
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=$(git rev-parse HEAD)
+          cargo_version=$VERSION
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          workflow_run=${GITHUB_RUN_ID}
+          build_kind=artifact_only
+          endpoint_stage=J-selected-parent-runtime-semantics
+          cumulative_patches=A,B,C,D,E,F,G,H,I,J
+          runtime_validation=pending_device_execution
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libhachimi_ura-parent-runtime-j-${{ github.sha }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: error
