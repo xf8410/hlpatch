@@ -59,7 +59,7 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: |
           set -o pipefail
-          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee ../a_stage_cargo_build.log
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee a_stage_cargo_build.log
 
       - name: Persist bounded compiler diagnostics
         if: failure() && steps.cargo_build.outcome == 'failure' && github.ref == 'refs/heads/workbench/unified-observation-endpoint-implementation-20260806'
