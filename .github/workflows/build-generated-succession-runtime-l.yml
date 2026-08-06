@@ -20,6 +20,7 @@ jobs:
           set -o pipefail
           {
             set -euo pipefail
+            python3 scripts/fix_unified_endpoint_k_complete_anchors.py
             for pass in 1 2; do
               python3 scripts/fix_unified_endpoint_f_patch_anchors.py
               python3 scripts/apply_unified_endpoint_a_patch.py
@@ -35,6 +36,7 @@ jobs:
               python3 scripts/apply_unified_endpoint_i_parent_multisource.py
               python3 scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
               python3 scripts/apply_unified_endpoint_k_complete.py
+              python3 scripts/fix_unified_endpoint_k_rust_types.py
               python3 scripts/apply_generated_succession_runtime_l.py
               python3 scripts/apply_generated_succession_runtime_l_support_fix.py
               sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1 > source-$pass.sha
