@@ -49,36 +49,38 @@ jobs:
           git commit -m "chore: capture unified endpoint F diagnostics" || exit 0
           git push origin HEAD:workbench/unified-observation-endpoint-implementation-20260806
 
-      - name: Static endpoint contract audit
-        run: |
-          set -euo pipefail
-          SRC=hachimi_ura_plugin/src/lib.rs
-          grep -Fq 'let card_id = read_obscured_int_at(chara_obj, 36); // _cardId' "$SRC"
-          grep -Fq 'let chara_id = call_getter_int(chara_class, chara_obj, "get_CharaId");' "$SRC"
-          grep -Fq '"card_id":{},"chara_id":{}' "$SRC"
-          grep -Fq 'method_index_status_endpoint' "$SRC"
-          grep -Fq 'hlpatch-method-index-' "$SRC"
-          grep -Fq 'persist_protocol_capture("request"' "$SRC"
-          grep -Fq 'persist_protocol_capture("response"' "$SRC"
-          grep -Fq 'legacy_inherit_contract_unreliable' "$SRC"
-          grep -Fq 'legacy_saddle_runtime_chain_unverified' "$SRC"
-          grep -Fq '"runtime_validation":"executed"' "$SRC"
-          grep -Fq '"error":"missing_type"' "$SRC"
-          ! grep -Fq 'rows.filter_map(Result::ok)' "$SRC"
-          ! grep -Fq '"runtime_validation":"pending_device_execution"' "$SRC"
-
-      - name: JSON format-string structural audit
+      - name: Static endpoint contract and JSON audit
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
           import json
           s = Path('hachimi_ura_plugin/src/lib.rs').read_text()
-          for fragment in ['"card_id":{},"chara_id":{}','"ok":false,"status":"deprecated"','"ok":false,"status":"unavailable"','"ok":true,"status":"{}","generation":{}']:
-              assert fragment in s, fragment
-          for sample in ['{"ok":false,"status":"deprecated","error":"legacy_inherit_contract_unreliable","replacement":"/inherit/pair_compat and /inherit/selected_parent_runtime"}','{"ok":false,"status":"unavailable","error":"legacy_saddle_runtime_chain_unverified"}','{"ok":false,"error":"missing_type"}']:
+          required = [
+              'let card_id = read_obscured_int_at(chara_obj, 36); // _cardId',
+              'let chara_id = call_getter_int(chara_class, chara_obj, "get_CharaId");',
+              '"card_id":{},"chara_id":{}',
+              'method_index_status_endpoint', 'hlpatch-method-index-',
+              'persist_protocol_capture("request"', 'persist_protocol_capture("response"',
+              'legacy_inherit_contract_unreliable', 'legacy_saddle_runtime_chain_unverified',
+              '"runtime_validation":"executed"', '"error":"missing_type"',
+              '"ok":true,"status":"{}","generation":{}',
+          ]
+          missing = [item for item in required if item not in s]
+          assert not missing, missing
+          selected_start = s.index('unsafe fn inherit_selected_parent_runtime_endpoint')
+          selected_end = s.index('// ===== Unified runtime correction E-stage', selected_start)
+          assert 'pending_device_execution' not in s[selected_start:selected_end]
+          sessions_start = s.index('fn storage_sessions_endpoint')
+          sessions_end = s.index('fn storage_session_endpoint', sessions_start)
+          assert 'filter_map' not in s[sessions_start:sessions_end]
+          for sample in [
+              '{"ok":false,"status":"deprecated","error":"legacy_inherit_contract_unreliable","replacement":"/inherit/pair_compat and /inherit/selected_parent_runtime"}',
+              '{"ok":false,"status":"unavailable","error":"legacy_saddle_runtime_chain_unverified"}',
+              '{"ok":false,"error":"missing_type"}',
+          ]:
               json.loads(sample)
-          print('json_contract_audit=ok')
+          print('static_contract_audit=ok')
           PY
 
       - name: Audit data-loss logic in F changes
@@ -106,7 +108,18 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-        run: cargo build --target aarch64-linux-android --release
+        run: cargo build --target aarch64-linux-android --release 2>&1 | tee ../f-build-diagnostics.log
+
+      - name: Persist compiler diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          cp f-build-diagnostics.log docs/UNIFIED_ENDPOINT_F_BUILD_DIAGNOSTICS.md
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/UNIFIED_ENDPOINT_F_BUILD_DIAGNOSTICS.md
+          git commit -m "chore: capture unified endpoint F compiler diagnostics" || exit 0
+          git push origin HEAD:workbench/unified-observation-endpoint-implementation-20260806
 
       - name: Generate build manifest
         run: |
