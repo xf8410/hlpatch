@@ -4,67 +4,79 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  extract:
+  build-k-complete:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Apply cumulative A-J
+      - name: Apply cumulative A-K twice
         run: |
           set -euo pipefail
-          python3 scripts/fix_unified_endpoint_f_patch_anchors.py
-          python3 scripts/apply_unified_endpoint_a_patch.py
-          python3 scripts/apply_unified_endpoint_a_compile_fix.py
-          python3 scripts/apply_unified_endpoint_b_storage_patch.py
-          python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
-          python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
-          python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
-          python3 scripts/apply_unified_endpoint_e_runtime_correction.py
-          python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
-          python3 scripts/apply_unified_endpoint_g_release_gate_fix.py
-          python3 scripts/apply_unified_endpoint_h_response_headers.py
-          python3 scripts/apply_unified_endpoint_i_parent_multisource.py
-          python3 scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
-
-      - name: Extract K implementation anchors
+          for pass in 1 2; do
+            python3 scripts/fix_unified_endpoint_f_patch_anchors.py
+            python3 scripts/apply_unified_endpoint_a_patch.py
+            python3 scripts/apply_unified_endpoint_a_compile_fix.py
+            python3 scripts/apply_unified_endpoint_b_storage_patch.py
+            python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
+            python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
+            python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
+            python3 scripts/apply_unified_endpoint_e_runtime_correction.py
+            python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
+            python3 scripts/apply_unified_endpoint_g_release_gate_fix.py
+            python3 scripts/apply_unified_endpoint_h_response_headers.py
+            python3 scripts/apply_unified_endpoint_i_parent_multisource.py
+            python3 scripts/apply_unified_endpoint_j_parent_runtime_semantics.py
+            python3 scripts/apply_unified_endpoint_k_complete.py
+            sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1 > source-$pass.sha
+          done
+          cmp source-1.sha source-2.sha
+      - name: Static K contract
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
           s=Path('hachimi_ura_plugin/src/lib.rs').read_text()
-          groups={
-            'storage':['CREATE TABLE IF NOT EXISTS observation_files','fn storage_session_endpoint','fn storage_flush_endpoint'],
-            'method_index':['struct MethodIndexEntry','unsafe fn build_method_index','fn il2cpp_method_detail'],
-            'routing':['let response = if path ==','Content-Length'],
-            'inherit':['fn inherit_pair_compat_endpoint','fn inherit_selected_parent_runtime_endpoint','fn inherit_selected_parent_records_endpoint'],
-            'protocol':['fn persist_protocol_capture','push_sniff_metadata'],
-          }
-          out=['# Unified K implementation anchors','']
-          for group,needles in groups.items():
-            out += [f'## {group}','']
-            for needle in needles:
-              pos=[]; start=0
-              while True:
-                p=s.find(needle,start)
-                if p<0: break
-                pos.append(p); start=p+1
-              out += [f'### `{needle}`',f'matches={len(pos)}','']
-              for p in pos[:3]:
-                a=max(0,p-2500); b=min(len(s),p+7000)
-                out += ['```rust',s[a:b],'```','']
-          text='\n'.join(out)
-          assert len(text.encode())<450000
-          Path('docs/UNIFIED_K_IMPLEMENTATION_ANCHORS.md').write_text(text)
+          required='''/inherit/tree /inherit/parent_records /inherit/race_history /inherit/pair_compat /inherit/race_compat /inherit/full_compat /inherit/compat_trace /inherit/factor_tree /inherit/bonus_params /inherit/event_trace /inherit/deck_runtime /inherit/deck_validate /inherit/friend_rental_context /inherit/auto_select_trace /inherit/selected_parent_runtime /inherit/selected_parent_records /autoplay/runtime /autoplay/plan /autoplay/action_trace /autoplay/factor_select_trace /offline_auto/runtime /offline_auto/start_request /offline_auto/race_reserve /offline_auto/result /generate_succession/status /generate_succession/limits /generate_succession/request /generate_succession/result /generate_succession/candidates /generate_succession/race_reserve /generate_succession/race_validation /generate_succession/factor_priority /generate_succession/factor_order /generate_succession/probability_trace /generate_succession/cost_trace /factor/finish_trace /factor/candidates /factor/roll_trace /factor/probability_model /factor/history /factor/stats /factor/breeding_advice /il2cpp/call_targets /il2cpp/callers /il2cpp/type_detail /il2cpp/object_dump /api/sniff/exchanges /api/sniff/exchange /api/hook/install /api/hook/remove /api/hook/list /api/hook/events /storage/files /storage/download'''.split()
+          missing=[e for e in required if s.count(f'path == "{e}"')!=1]
+          assert not missing,missing
+          for token in ['storage_files_endpoint','storage_download','il2cpp_call_targets','il2cpp_callers','il2cpp_type_detail','il2cpp_object_dump','factor_history_endpoint','inherit_tree_endpoint']:
+            assert token in s,token
+          print('k_contract=ok routes=',len(required))
           PY
-
-      - name: Commit anchors
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_unified_endpoint_k_complete.py
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --target aarch64-linux-android --release
+      - name: Generate manifest
         run: |
           set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add docs/UNIFIED_K_IMPLEMENTATION_ANCHORS.md
-          git commit -m 'chore: extract K implementation anchors'
-          git push origin HEAD:${GITHUB_REF_NAME}
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          SHA256=$(sha256sum "$ASSET"|cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml|head -1)
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          printf 'source_commit=%s\ncargo_version=%s\nbinary_size=%s\nbinary_sha256=%s\nworkflow_run=%s\nbuild_kind=artifact_only\nendpoint_stage=K-complete\ncumulative_patches=A-J,K\n' "$(git rev-parse HEAD)" "$VERSION" "$SIZE" "$SHA256" "$GITHUB_RUN_ID" > BUILD-MANIFEST.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libhachimi_ura-unified-k-${{ github.sha }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: error
