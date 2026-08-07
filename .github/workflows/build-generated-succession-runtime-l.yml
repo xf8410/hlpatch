@@ -8,6 +8,7 @@ on:
       - scripts/apply_generated_succession_runtime_l.py
       - scripts/apply_generated_succession_runtime_l_support_fix.py
       - scripts/apply_ramen_global_durable_observation.py
+      - scripts/apply_hachimi_textcommon_observer.py
       - scripts/run_generated_succession_l_cumulative.py
       - .github/workflows/build-generated-succession-runtime-l.yml
   workflow_dispatch:
@@ -18,16 +19,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply cumulative patches and durable observation twice
+      - name: Apply cumulative patches and text observation twice
         id: apply
         run: |
           set -o pipefail
           python3 scripts/run_generated_succession_l_cumulative.py 2>&1 | tee l_apply.log
           test "$(grep -c 'path == \"/generate_succession/runtime_full\"' hachimi_ura_plugin/src/lib.rs)" = 1
           test "$(grep -c 'Ramen/Hachimi global durable observation M-stage' hachimi_ura_plugin/src/lib.rs)" = 1
+          test "$(grep -c 'Hachimi TextCommon final display observer N-stage' hachimi_ura_plugin/src/lib.rs)" = 1
           test "$(grep -c 'fn append_global_observation' hachimi_ura_plugin/src/lib.rs)" = 1
-          test "$(grep -c 'persist_protocol_observation_boundary' hachimi_ura_plugin/src/lib.rs)" = 2
-          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_generated_succession_runtime_l.py scripts/apply_generated_succession_runtime_l_support_fix.py scripts/apply_ramen_global_durable_observation.py
+          test "$(grep -c 'text_common_set_text_hook_handler' hachimi_ura_plugin/src/lib.rs)" = 3
+          test "$(grep -c 'install_text_common_observer_hook();' hachimi_ura_plugin/src/lib.rs)" = 1
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_generated_succession_runtime_l.py scripts/apply_generated_succession_runtime_l_support_fix.py scripts/apply_ramen_global_durable_observation.py scripts/apply_hachimi_textcommon_observer.py
           grep -n -C 3 -E '65536|65_536|64 \* 1024|64\*1024' hachimi_ura_plugin/src/lib.rs > PROTOCOL_65536_AUDIT.txt || true
       - name: Persist apply diagnostics
         if: failure() && steps.apply.outcome == 'failure'
@@ -69,11 +72,11 @@ jobs:
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
           test -s "$ASSET"
           sha256sum "$ASSET" > SHA256SUMS
-          printf 'source_commit=%s\nbuild_kind=artifact_only\nfeature=ramen_hachimi_global_durable_observation_stage_1\n' "$(git rev-parse HEAD)" > BUILD-MANIFEST.txt
+          printf 'source_commit=%s\nbuild_kind=artifact_only\nfeature=ramen_hachimi_textcommon_final_display_observer\n' "$(git rev-parse HEAD)" > BUILD-MANIFEST.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: libhachimi_ura-ramen-durable-observation-${{ github.sha }}
+          name: libhachimi_ura-ramen-text-observer-${{ github.sha }}
           path: |
             hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
             SHA256SUMS
