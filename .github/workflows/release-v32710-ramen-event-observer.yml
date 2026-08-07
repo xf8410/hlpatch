@@ -43,6 +43,7 @@ jobs:
           ndk-version: r26c
           link-to-sdk: true
       - name: Build Android arm64 release
+        id: cargo
         working-directory: hachimi_ura_plugin
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -50,8 +51,9 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-        run: cargo build --locked --target aarch64-linux-android --release
+        run: set -o pipefail; cargo build --locked --target aarch64-linux-android --release 2>&1 | tee release-v32710-cargo.log
       - name: Publish immutable Release and verify digest
+        if: steps.cargo.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -80,10 +82,12 @@ jobs:
           API_DIGEST=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.10 --jq '.assets[] | select(.name == "libhachimi_ura.so") | .digest')
           test "$API_DIGEST" = "sha256:$SHA256"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: libhachimi_ura-v3.27.10
+          name: libhachimi_ura-v3.27.10-run-${{ github.run_id }}
           path: |
             hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/release-v32710-cargo.log
             SHA256SUMS
             BUILD-MANIFEST.txt
-          if-no-files-found: error
+          if-no-files-found: warn
