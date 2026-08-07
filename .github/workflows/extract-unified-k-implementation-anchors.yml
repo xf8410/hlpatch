@@ -23,9 +23,11 @@ jobs:
           python3 scripts/run_generated_succession_l_cumulative.py
 
       - name: Extract exact TextCommon metadata and hook anchors
+        id: extract
+        shell: bash
         run: |
-          set -euo pipefail
-          python3 - <<'PY'
+          set -o pipefail
+          python3 - <<'PY' 2>&1 | tee ramen_text_hook_extract.log
           from pathlib import Path
           import json
 
@@ -79,7 +81,19 @@ jobs:
           print(f'metadata_hits={len(metadata_hits)} output_bytes={len(text.encode())}')
           PY
 
+      - name: Persist extraction diagnostics
+        if: failure() && steps.extract.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          cp ramen_text_hook_extract.log docs/RAMEN_TEXTCOMMON_HOOK_EXTRACT_DIAGNOSTICS.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/RAMEN_TEXTCOMMON_HOOK_EXTRACT_DIAGNOSTICS.txt
+          git commit -m 'chore: capture TextCommon extraction diagnostics'
+          git push origin HEAD:${GITHUB_REF_NAME}
+
       - name: Commit bounded context
+        if: success()
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
