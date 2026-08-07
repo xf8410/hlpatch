@@ -51,7 +51,7 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-        run: set -o pipefail; cargo build --locked --target aarch64-linux-android --release 2>&1 | tee release-v32710-cargo.log
+        run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32710-cargo.log
       - name: Publish immutable Release and verify digest
         if: steps.cargo.outcome == 'success'
         env:
