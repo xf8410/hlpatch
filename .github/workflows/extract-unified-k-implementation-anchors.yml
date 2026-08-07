@@ -54,6 +54,18 @@ jobs:
 
           exact_names = {'TextCommon', 'TextMeshProUGUI', 'TMP_Text'}
           method_terms = ('SetTextFromController', 'set_text', 'get_text', 'm_Text')
+
+          def scalar_projection(record):
+              projected={}
+              for key,value in record.items():
+                  if isinstance(value,(str,int,float,bool)) or value is None:
+                      projected[key]=value
+                  elif isinstance(value,list) and len(value) <= 32 and all(
+                      isinstance(item,(str,int,float,bool)) or item is None for item in value
+                  ):
+                      projected[key]=value
+              return projected
+
           metadata_hits=[]
           for path in sorted(Path('data/il2cpp_dump').glob('dump_all_methods_*.json')):
               try:
@@ -64,15 +76,15 @@ jobs:
               while stack:
                   value=stack.pop()
                   if isinstance(value,dict):
-                      blob=json.dumps(value,ensure_ascii=False)
+                      projected=scalar_projection(value)
+                      blob=json.dumps(projected,ensure_ascii=False)
                       if any(name in blob for name in exact_names) and any(term in blob for term in method_terms):
-                          metadata_hits.append((str(path), value))
-                      else:
-                          stack.extend(value.values())
+                          metadata_hits.append((str(path), projected))
+                      stack.extend(value.values())
                   elif isinstance(value,list):
                       stack.extend(value)
-          out += ['## Exact IL2CPP metadata records', '', f'hit_count={len(metadata_hits)}', '']
-          for index,(path,record) in enumerate(metadata_hits[:200]):
+          out += ['## Exact IL2CPP metadata scalar records', '', f'hit_count={len(metadata_hits)}', '']
+          for index,(path,record) in enumerate(metadata_hits[:300]):
               out += [f'### hit {index+1} `{path}`', '', '```json', json.dumps(record,ensure_ascii=False,indent=2), '```', '']
 
           text='\n'.join(out)
