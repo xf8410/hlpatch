@@ -56,10 +56,7 @@ jobs:
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32711-cargo.log
-      - name: Publish or verify immutable Release
-        if: steps.cargo.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Prepare immutable release assets
         run: |
           set -euo pipefail
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
@@ -78,15 +75,37 @@ jobs:
           ci_qualification_run=31245472605
           runtime_validation=pending_device_execution
           EOF
+      - name: Create or verify immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          if ! git rev-parse -q --verify refs/tags/v3.27.11 >/dev/null; then
+          git fetch --tags --force
+          if git rev-parse -q --verify refs/tags/v3.27.11 >/dev/null; then
+            test "$(git rev-list -n 1 v3.27.11)" = "07adec9d24d721b1341191f8ffa8e15bc88ab931"
+          else
             git tag -a v3.27.11 07adec9d24d721b1341191f8ffa8e15bc88ab931 -m 'Release v3.27.11'
             git push origin refs/tags/v3.27.11
           fi
+      - name: Create Release when absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
           if ! gh release view v3.27.11 >/dev/null 2>&1; then
             gh release create v3.27.11 --verify-tag --title v3.27.11 --notes "Adds boot-safe persistent session access, precise request/response exchange export, protocol archive auditing, full payload capture, multi-section MessagePack detection, pending choice correlation, and final TextCommon observation. CI qualification: run 31245472605. Runtime validation remains pending." "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
           fi
+      - name: Verify published Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
           RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.11)
           ASSET_COUNT=$(printf '%s' "$RELEASE_JSON" | jq '[.assets[] | select(.name == "libhachimi_ura.so")] | length')
           test "$ASSET_COUNT" = 1
