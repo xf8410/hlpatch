@@ -13,12 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 07adec9d24d721b1341191f8ffa8e15bc88ab931
+          ref: 73748b84dbecec19636c6af6e12d95bcf5f13b03
           fetch-depth: 0
-      - name: Validate immutable source and cumulative implementation
+      - name: Validate merged main source and cumulative implementation
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "07adec9d24d721b1341191f8ffa8e15bc88ab931"
+          test "$(git rev-parse HEAD)" = "73748b84dbecec19636c6af6e12d95bcf5f13b03"
           python3 scripts/run_generated_succession_l_cumulative.py
           test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.11"
           grep -Fq 'Protocol archive reliability P-stage' hachimi_ura_plugin/src/lib.rs
@@ -30,6 +30,13 @@ jobs:
           grep -Fq 'protocol_archive_audit_endpoint' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'std::slice::from_raw_parts(data_ptr, len).to_vec()' hachimi_ura_plugin/src/lib.rs
           ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_ramen_global_durable_observation.py scripts/apply_hachimi_textcommon_observer.py scripts/apply_protocol_multisection_event_timeline.py scripts/apply_protocol_archive_reliability_p.py
+      - name: Refuse overwrite
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ! gh release view v3.27.11 >/dev/null 2>&1
+          ! git ls-remote --exit-code --tags origin refs/tags/v3.27.11 >/dev/null 2>&1
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
       - uses: nttld/setup-ndk@v1
@@ -47,7 +54,9 @@ jobs:
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32711-cargo.log
-      - name: Prepare immutable release assets
+      - name: Publish immutable Release and verify digest
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
@@ -56,52 +65,23 @@ jobs:
           SIZE=$(stat -c%s "$ASSET")
           printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
           cat > BUILD-MANIFEST.txt <<EOF
-          source_commit=07adec9d24d721b1341191f8ffa8e15bc88ab931
+          source_commit=73748b84dbecec19636c6af6e12d95bcf5f13b03
+          implementation_commit=07adec9d24d721b1341191f8ffa8e15bc88ab931
           cargo_version=3.27.11
           binary_size=$SIZE
           binary_sha256=$SHA256
           tag=v3.27.11
           workflow_run=${GITHUB_RUN_ID}
           features=durable_timeline,textcommon_final_display,protocol_multisection,pending_choice,full_payload,boot_safe_archive,precise_exchange_export,archive_audit
-          ci_qualification_run=31245472605
+          prior_ci_qualification_run=31245472605
           runtime_validation=pending_device_execution
           EOF
-      - name: Create Release and capture exact failure
-        id: publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-          gh release create v3.27.11 --target 07adec9d24d721b1341191f8ffa8e15bc88ab931 --title v3.27.11 --notes "Adds boot-safe persistent session access, precise request/response exchange export, protocol archive auditing, full payload capture, multi-section MessagePack detection, pending choice correlation, and final TextCommon observation. CI qualification: run 31245472605. Runtime validation remains pending." "$ASSET" SHA256SUMS BUILD-MANIFEST.txt > /tmp/v32711-release.log 2>&1
-          STATUS=$?
-          cat /tmp/v32711-release.log
-          if [ "$STATUS" -ne 0 ]; then
-            git reset --hard
-            git clean -fdx
-            git fetch origin workbench/ramen-hachimi-text-observer-20260807
-            git checkout -B workbench/ramen-hachimi-text-observer-20260807 origin/workbench/ramen-hachimi-text-observer-20260807
-            mkdir -p docs
-            cp /tmp/v32711-release.log docs/V32711_RELEASE_DIAGNOSTICS.txt
-            printf '\nexit_status=%s\nworkflow_run=%s\nsource_commit=07adec9d24d721b1341191f8ffa8e15bc88ab931\n' "$STATUS" "$GITHUB_RUN_ID" >> docs/V32711_RELEASE_DIAGNOSTICS.txt
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add docs/V32711_RELEASE_DIAGNOSTICS.txt
-            git commit -m 'chore: capture v3.27.11 release diagnostics'
-            git push origin HEAD:workbench/ramen-hachimi-text-observer-20260807
-            exit "$STATUS"
-          fi
-      - name: Verify published Release identity and assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euxo pipefail
-          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
-          SIZE=$(stat -c%s "$ASSET")
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a v3.27.11 73748b84dbecec19636c6af6e12d95bcf5f13b03 -m 'Release v3.27.11'
+          git push origin refs/tags/v3.27.11
+          gh release create v3.27.11 --verify-tag --title v3.27.11 --notes "Adds boot-safe persistent session access, precise request/response exchange export, protocol archive auditing, full payload capture, multi-section MessagePack detection, pending choice correlation, and final TextCommon observation. Implementation commit: 07adec9d24d721b1341191f8ffa8e15bc88ab931. Runtime validation remains pending." "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
           RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.11)
-          ASSET_COUNT=$(printf '%s' "$RELEASE_JSON" | jq '[.assets[] | select(.name == "libhachimi_ura.so")] | length')
-          test "$ASSET_COUNT" = 1
           API_SIZE=$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .size')
           API_DIGEST=$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .digest')
           test "$API_SIZE" = "$SIZE"
