@@ -158,12 +158,11 @@ jobs:
           grep -Fq 'fn foundation_validate_address' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'commit_allowed":false' hachimi_ura_plugin/src/lib.rs
 
-      - name: Audit changed implementation paths
+      - name: Audit changed implementation path
         run: |
           set -euo pipefail
           ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist' \
-            scripts/run_generated_succession_l_cumulative.py \
-            .github/workflows/build-ura.yml
+            scripts/run_generated_succession_l_cumulative.py
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
