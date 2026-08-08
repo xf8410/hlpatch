@@ -32,15 +32,138 @@ jobs:
           grep -Fq 'Protocol multi-section event timeline O-stage' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'Hachimi TextCommon final display observer N-stage' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'Ramen/Hachimi global durable observation M-stage' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'Next-generation passive init and HookRegistry foundation' hachimi_ura_plugin/src/lib.rs
 
-      - name: Audit changed implementation scripts for forbidden data-loss paths
+      - name: Add non-mutating HookRegistry address validation
+        run: |
+          set -euo pipefail
+          apply_validation() {
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path('hachimi_ura_plugin/src/lib.rs')
+          text = source.read_text(encoding='utf-8')
+          marker = '// ===== Next-generation HookRegistry address validation ====='
+          if marker in text:
+              print('hook_registry_address_validation=already_applied')
+              raise SystemExit(0)
+
+          boot = re.search(r'((?:static|const)\s+BOOT_SAFE_EXACT\b[^=]*=\s*&\[)', text, re.M)
+          if boot is None:
+              raise RuntimeError('BOOT_SAFE_EXACT declaration missing')
+          end = text.find('];', boot.end())
+          if end < 0:
+              raise RuntimeError('BOOT_SAFE_EXACT terminator missing')
+          if '"/hooks/validation"' not in text[boot.start():end]:
+              text = text[:boot.end()] + '\n    "/hooks/validation",' + text[boot.end():]
+
+          anchor = 'fn foundation_parameter_types_json(values: &[&str]) -> String {\n'
+          if text.count(anchor) != 1:
+              raise RuntimeError(f'validation code anchor count={text.count(anchor)}')
+          rust = r'''// ===== Next-generation HookRegistry address validation =====
+          struct FoundationAddressValidation {
+              map_start: usize,
+              map_end: usize,
+              permissions: String,
+              module_path: String,
+              current_prologue: Vec<u8>,
+          }
+
+          fn foundation_validate_address(address: usize) -> Result<FoundationAddressValidation, String> {
+              if address == 0 {
+                  return Err("target_address_not_observed".to_string());
+              }
+              if address % 4 != 0 {
+                  return Err("target_address_not_arm64_aligned".to_string());
+              }
+              let maps = std::fs::read_to_string("/proc/self/maps")
+                  .map_err(|error| format!("read_proc_maps:{}", error))?;
+              for line in maps.lines() {
+                  let mut columns = line.split_whitespace();
+                  let range = match columns.next() { Some(value) => value, None => continue };
+                  let permissions = match columns.next() { Some(value) => value, None => continue };
+                  let mut bounds = range.split('-');
+                  let start = match bounds.next().and_then(|value| usize::from_str_radix(value, 16).ok()) {
+                      Some(value) => value, None => continue,
+                  };
+                  let end = match bounds.next().and_then(|value| usize::from_str_radix(value, 16).ok()) {
+                      Some(value) => value, None => continue,
+                  };
+                  if address < start || address >= end { continue; }
+                  if !permissions.contains('r') { return Err("target_mapping_not_readable".to_string()); }
+                  if !permissions.contains('x') { return Err("target_mapping_not_executable".to_string()); }
+                  if end.saturating_sub(address) < 16 || !is_readable_range(address, 16) {
+                      return Err("target_prologue_not_readable".to_string());
+                  }
+                  let module_path = line.split_whitespace().nth(5).unwrap_or("").to_string();
+                  let current_prologue = unsafe {
+                      std::slice::from_raw_parts(address as *const u8, 16).to_vec()
+                  };
+                  return Ok(FoundationAddressValidation {
+                      map_start: start, map_end: end, permissions: permissions.to_string(),
+                      module_path, current_prologue,
+                  });
+              }
+              Err("target_address_not_mapped".to_string())
+          }
+
+          unsafe fn foundation_hook_validation_endpoint() -> String {
+              let records = foundation_hook_records();
+              let mut valid_count = 0usize;
+              let items = records.iter().map(|record| {
+                  match foundation_validate_address(record.target_address) {
+                      Ok(validation) => {
+                          valid_count += 1;
+                          format!(
+                              r#"{{"hook_id":"{}","address_validation":"valid","signature_validation":"pending_method_info","target_address":"0x{:x}","map_start":"0x{:x}","map_end":"0x{:x}","mapping_permissions":"{}","module_path":"{}","current_prologue_bytes":"{}","external_hook_present":null,"ownership_decision":"not_evaluated","commit_allowed":false,"raw_error":null}}"#,
+                              json_escape(record.hook_id), record.target_address, validation.map_start,
+                              validation.map_end, json_escape(&validation.permissions),
+                              json_escape(&validation.module_path), hex_encode(&validation.current_prologue)
+                          )
+                      }
+                      Err(error) => format!(
+                          r#"{{"hook_id":"{}","address_validation":"failed","signature_validation":"pending_method_info","target_address":{},"map_start":null,"map_end":null,"mapping_permissions":null,"module_path":null,"current_prologue_bytes":null,"external_hook_present":null,"ownership_decision":"not_evaluated","commit_allowed":false,"raw_error":"{}"}}"#,
+                          json_escape(record.hook_id),
+                          if record.target_address == 0 { "null".to_string() } else { format!("\"0x{:x}\"", record.target_address) },
+                          json_escape(&error)
+                      ),
+                  }
+              }).collect::<Vec<_>>().join(",");
+              format!(
+                  r#"{{"ok":true,"schema_version":1,"mode":"non_mutating_validation","resolve_validate_commit_active":false,"valid_address_count":{},"total_count":{},"hooks":[{}]}}"#,
+                  valid_count, records.len(), items
+              )
+          }
+
+          '''
+          text = text.replace(anchor, rust + anchor, 1)
+
+          route = '    } else if path == "/hooks/diagnostics" {\n'
+          if text.count(route) != 1:
+              raise RuntimeError(f'validation route anchor count={text.count(route)}')
+          text = text.replace(route, '''    } else if path == "/hooks/validation" {
+              unsafe { foundation_hook_validation_endpoint() }
+          ''' + route, 1)
+          source.write_text(text, encoding='utf-8')
+          print('hook_registry_address_validation=applied')
+          PY
+          }
+          apply_validation
+          FIRST_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          apply_validation
+          SECOND_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST_SHA" = "$SECOND_SHA"
+          grep -Fq 'Next-generation HookRegistry address validation' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'fn foundation_validate_address' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'commit_allowed":false' hachimi_ura_plugin/src/lib.rs
+
+      - name: Audit changed implementation paths
         run: |
           set -euo pipefail
           ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist' \
-            scripts/apply_ramen_global_durable_observation.py \
-            scripts/apply_hachimi_textcommon_observer.py \
-            scripts/apply_protocol_multisection_event_timeline.py \
-            scripts/apply_protocol_archive_reliability_p.py
+            scripts/run_generated_succession_l_cumulative.py \
+            .github/workflows/build-ura.yml
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
@@ -61,6 +184,7 @@ jobs:
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -o pipefail
           cargo build --target aarch64-linux-android --release 2>&1 | tee next-generation-foundation-cargo.log
@@ -100,7 +224,7 @@ jobs:
           binary_sha256=$SHA256
           workflow_run=${GITHUB_RUN_ID}
           build_kind=artifact_only
-          endpoint_stage=next_generation_foundation_baseline
+          endpoint_stage=next_generation_registry_address_validation
           dependency_lock=refreshed_then_verified_locked
           runtime_validation=pending_device_execution
           EOF
