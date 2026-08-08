@@ -1,0 +1,57 @@
+name: Extract Friend Parent Resolver Focused
+
+on:
+  push:
+    branches:
+      - workbench/unified-observation-endpoint-implementation-20260806
+    paths:
+      - ".github/workflows/extract-friend-parent-resolver-focused.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract focused class and method records
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('data/il2cpp_dump/dump_all_methods_ALL.json').read_text())
+          classes=data.get('classes', data if isinstance(data,list) else [])
+          class_terms=[
+            'SingleModeStartSuccessionDeckUtils','SingleModeSuccessionDeckSetEntity',
+            'SingleModeSuccessionDeckLastUsedEntity','ISinglemodeStartSuccessionInfoAccessor',
+            'SuccessionCharaSelectorModel','SingleModeStartSuccessionDeckConnect',
+            'DialogSingleModeStartSuccessionDeckListModel','PartsSingleModeStartSuccessionSelect',
+            'EntryInfo','GenerateInfo'
+          ]
+          method_terms=[
+            'TryGetTrainedCharaData','FindRentalSuccessionTrainedCharaByCondition',
+            'GetUserInfoForRentalSuccessionTrainedChara','GetDeck','LastUsed',
+            'Accessor','Initialize','Setup','Create','GetInstance','get_Instance'
+          ]
+          out=['# Focused friend parent resolver records','']
+          for c in classes:
+              cn=c.get('class',c.get('name','')); ns=c.get('ns','')
+              methods=c.get('methods',[])
+              chosen=[m for m in methods if any(t in m.get('name','') for t in method_terms)]
+              if any(t in cn for t in class_terms) or chosen:
+                  if not (any(t in cn for t in class_terms) or any('TryGetTrainedCharaData' in m.get('name','') for m in chosen)): continue
+                  record={'class':cn,'ns':ns,'is_enum':c.get('is_enum'), 'method_count':c.get('method_count'), 'focused_methods':chosen}
+                  out += [f'## {ns}.{cn}','','```json',json.dumps(record,ensure_ascii=False,indent=2),'```','']
+          Path('docs/FRIEND_PARENT_RESOLVER_FOCUSED.md').write_text('\n'.join(out)+'\n')
+          PY
+      - name: Commit extraction
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/FRIEND_PARENT_RESOLVER_FOCUSED.md
+          git commit -m "docs: capture focused friend parent resolver records" || exit 0
+          git push origin HEAD:workbench/unified-observation-endpoint-implementation-20260806

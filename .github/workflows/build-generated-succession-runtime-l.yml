@@ -1,0 +1,87 @@
+name: Build Generated Succession Runtime L
+on:
+  push:
+    branches:
+      - workbench/generated-succession-runtime-l-20260807
+      - workbench/ramen-hachimi-text-observer-20260807
+    paths:
+      - scripts/apply_generated_succession_runtime_l.py
+      - scripts/apply_generated_succession_runtime_l_support_fix.py
+      - scripts/apply_ramen_global_durable_observation.py
+      - scripts/apply_hachimi_textcommon_observer.py
+      - scripts/run_generated_succession_l_cumulative.py
+      - .github/workflows/build-generated-succession-runtime-l.yml
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply cumulative patches and text observation twice
+        id: apply
+        run: |
+          set -o pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py 2>&1 | tee l_apply.log
+          test "$(grep -c 'path == \"/generate_succession/runtime_full\"' hachimi_ura_plugin/src/lib.rs)" = 1
+          test "$(grep -c 'Ramen/Hachimi global durable observation M-stage' hachimi_ura_plugin/src/lib.rs)" = 1
+          test "$(grep -c 'Hachimi TextCommon final display observer N-stage' hachimi_ura_plugin/src/lib.rs)" = 1
+          test "$(grep -c 'fn append_global_observation' hachimi_ura_plugin/src/lib.rs)" = 1
+          test "$(grep -c 'text_common_set_text_hook_handler' hachimi_ura_plugin/src/lib.rs)" = 3
+          test "$(grep -c 'install_text_common_observer_hook();' hachimi_ura_plugin/src/lib.rs)" = 1
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_generated_succession_runtime_l.py scripts/apply_generated_succession_runtime_l_support_fix.py scripts/apply_ramen_global_durable_observation.py scripts/apply_hachimi_textcommon_observer.py
+          grep -n -C 3 -E '65536|65_536|64 \* 1024|64\*1024' hachimi_ura_plugin/src/lib.rs > PROTOCOL_65536_AUDIT.txt || true
+      - name: Persist apply diagnostics
+        if: failure() && steps.apply.outcome == 'failure'
+        run: |
+          cp l_apply.log docs/GENERATED_SUCCESSION_L_APPLY_DIAGNOSTICS.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/GENERATED_SUCCESSION_L_APPLY_DIAGNOSTICS.txt
+          git commit -m 'chore: capture generated succession L apply diagnostics'
+          git push origin HEAD:${GITHUB_REF_NAME}
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+      - name: Build Android arm64 release
+        id: cargo
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee l_cargo.log
+      - name: Persist cargo diagnostics
+        if: failure() && steps.cargo.outcome == 'failure'
+        run: |
+          cp hachimi_ura_plugin/l_cargo.log docs/GENERATED_SUCCESSION_L_CARGO_DIAGNOSTICS.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/GENERATED_SUCCESSION_L_CARGO_DIAGNOSTICS.txt
+          git commit -m 'chore: capture generated succession L cargo diagnostics'
+          git push origin HEAD:${GITHUB_REF_NAME}
+      - name: Manifest
+        run: |
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          sha256sum "$ASSET" > SHA256SUMS
+          printf 'source_commit=%s\nbuild_kind=artifact_only\nfeature=ramen_hachimi_textcommon_final_display_observer\n' "$(git rev-parse HEAD)" > BUILD-MANIFEST.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhachimi_ura-ramen-text-observer-${{ github.sha }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+            PROTOCOL_65536_AUDIT.txt
+            l_apply.log
+            hachimi_ura_plugin/l_cargo.log
+          if-no-files-found: warn

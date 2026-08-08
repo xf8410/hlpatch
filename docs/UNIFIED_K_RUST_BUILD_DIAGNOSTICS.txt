@@ -1,0 +1,1163 @@
+    Updating crates.io index
+     Locking 7 packages to latest compatible versions
+      Adding block-buffer v0.10.4
+      Adding cpufeatures v0.2.17
+      Adding crypto-common v0.1.7
+      Adding digest v0.10.7
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding sha2 v0.10.9 (available: v0.11.0)
+      Adding typenum v1.20.1
+ Downloading crates ...
+  Downloaded generic-array v0.14.7
+  Downloaded cfg-if v1.0.4
+  Downloaded block-buffer v0.10.4
+  Downloaded adler2 v2.0.1
+  Downloaded idna_adapter v1.2.2
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded yoke-derive v0.8.2
+  Downloaded displaydoc v0.2.7
+  Downloaded sha2 v0.10.9
+  Downloaded ahash v0.8.12
+  Downloaded base64 v0.22.1
+  Downloaded bitflags v2.13.1
+  Downloaded icu_locale_core v2.2.0
+  Downloaded icu_normalizer v2.2.0
+  Downloaded icu_properties v2.2.0
+  Downloaded icu_provider v2.2.0
+  Downloaded url v2.5.8
+  Downloaded icu_properties_data v2.2.0
+  Downloaded version_check v0.9.5
+  Downloaded unicode-ident v1.0.24
+  Downloaded cc v1.4.0
+  Downloaded simd-adler32 v0.3.10
+  Downloaded subtle v2.6.1
+  Downloaded icu_normalizer_data v2.2.0
+  Downloaded log v0.4.33
+  Downloaded quote v1.0.47
+  Downloaded rustls v0.23.43
+  Downloaded crc32fast v1.5.0
+  Downloaded zerovec v0.11.6
+  Downloaded tinystr v0.8.3
+  Downloaded syn v2.0.119
+  Downloaded pkg-config v0.3.33
+  Downloaded synstructure v0.13.2
+  Downloaded litemap v0.8.2
+  Downloaded utf8_iter v1.0.4
+  Downloaded libc v0.2.189
+  Downloaded percent-encoding v2.3.2
+  Downloaded writeable v0.6.3
+  Downloaded miniz_oxide v0.8.9
+  Downloaded rustls-webpki v0.103.13
+  Downloaded zerofrom v0.1.8
+  Downloaded getrandom v0.2.17
+  Downloaded zeroize v1.9.0
+  Downloaded digest v0.10.7
+  Downloaded form_urlencoded v1.2.2
+  Downloaded cpufeatures v0.2.17
+  Downloaded crypto-common v0.1.7
+  Downloaded fallible-streaming-iterator v0.1.9
+  Downloaded potential_utf v0.1.5
+  Downloaded smallvec v1.15.2
+  Downloaded webpki-roots v0.26.11
+  Downloaded shlex v2.0.1
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded hashlink v0.9.1
+  Downloaded rustls-pki-types v1.15.1
+  Downloaded untrusted v0.9.0
+  Downloaded zerofrom-derive v0.1.7
+  Downloaded fallible-iterator v0.3.0
+  Downloaded zerovec-derive v0.11.3
+  Downloaded once_cell v1.21.4
+  Downloaded serde_core v1.0.229
+  Downloaded yoke v0.8.3
+  Downloaded serde v1.0.229
+  Downloaded proc-macro2 v1.0.107
+  Downloaded zerotrie v0.2.4
+  Downloaded icu_collections v2.2.0
+  Downloaded typenum v1.20.1
+  Downloaded flate2 v1.1.9
+  Downloaded ureq v2.12.1
+  Downloaded rusqlite v0.31.0
+  Downloaded idna v1.1.0
+  Downloaded zerocopy v0.8.55
+  Downloaded vcpkg v0.2.15
+  Downloaded webpki-roots v1.0.9
+  Downloaded syn v3.0.3
+  Downloaded ring v0.17.14
+  Downloaded hashbrown v0.14.5
+  Downloaded libsqlite3-sys v0.28.0
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling stable_deref_trait v1.2.1
+   Compiling version_check v0.9.5
+   Compiling shlex v2.0.1
+   Compiling cfg-if v1.0.4
+   Compiling find-msvc-tools v0.1.9
+   Compiling libc v0.2.189
+   Compiling cc v1.4.0
+   Compiling writeable v0.6.3
+   Compiling litemap v0.8.2
+   Compiling icu_normalizer_data v2.2.0
+   Compiling utf8_iter v1.0.4
+   Compiling icu_properties_data v2.2.0
+   Compiling ring v0.17.14
+   Compiling generic-array v0.14.7
+   Compiling once_cell v1.21.4
+   Compiling zeroize v1.9.0
+   Compiling zerocopy v0.8.55
+   Compiling smallvec v1.15.2
+   Compiling rustls-pki-types v1.15.1
+   Compiling ahash v0.8.12
+   Compiling typenum v1.20.1
+   Compiling syn v2.0.119
+   Compiling syn v3.0.3
+   Compiling getrandom v0.2.17
+   Compiling synstructure v0.13.2
+   Compiling displaydoc v0.2.7
+   Compiling vcpkg v0.2.15
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.3
+   Compiling zerofrom v0.1.8
+   Compiling crc32fast v1.5.0
+   Compiling pkg-config v0.3.33
+   Compiling yoke v0.8.3
+   Compiling zerotrie v0.2.4
+   Compiling untrusted v0.9.0
+   Compiling zerovec v0.11.6
+   Compiling libsqlite3-sys v0.28.0
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling icu_locale_core v2.2.0
+   Compiling icu_collections v2.2.0
+   Compiling percent-encoding v2.3.2
+   Compiling rustls v0.23.43
+   Compiling simd-adler32 v0.3.10
+   Compiling adler2 v2.0.1
+   Compiling miniz_oxide v0.8.9
+   Compiling rustls-webpki v0.103.13
+   Compiling icu_provider v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling form_urlencoded v1.2.2
+   Compiling hashbrown v0.14.5
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling webpki-roots v1.0.9
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling subtle v2.6.1
+   Compiling log v0.4.33
+   Compiling hashlink v0.9.1
+   Compiling url v2.5.8
+   Compiling webpki-roots v0.26.11
+   Compiling digest v0.10.7
+   Compiling flate2 v1.1.9
+   Compiling cpufeatures v0.2.17
+   Compiling base64 v0.22.1
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling bitflags v2.13.1
+   Compiling sha2 v0.10.9
+   Compiling ureq v2.12.1
+   Compiling rusqlite v0.31.0
+   Compiling hachimi_ura v3.27.7 (/home/runner/work/hlpatch/hlpatch/hachimi_ura_plugin)
+warning: unused doc comment
+    --> src/lib.rs:5507:5
+     |
+5507 |       /// ★ v3.24.14: position → bond_threshold from MasterDB unique_effect
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+5508 | /     let mut bond_threshold_by_position: std::collections::HashMap<i32, i32> =
+5509 | |         std::collections::HashMap::new();
+     | |_________________________________________- rustdoc does not generate documentation for statements
+     |
+     = help: use `//` for a plain comment
+     = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused doc comment
+    --> src/lib.rs:5510:5
+     |
+5510 |       /// ★ v3.24.15: position → support_card_type (1=普通, 2=友人, 3=团体)
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+5511 | /     let mut support_card_type_by_position: std::collections::HashMap<i32, i32> =
+5512 | |         std::collections::HashMap::new();
+     | |_________________________________________- rustdoc does not generate documentation for statements
+     |
+     = help: use `//` for a plain comment
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8960:27
+      |
+ 8960 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8960 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8962:27
+      |
+ 8962 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8962 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8964:27
+      |
+ 8964 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8964 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8966:27
+      |
+ 8966 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8966 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8968:27
+      |
+ 8968 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8968 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8970:27
+      |
+ 8970 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8970 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8972:27
+      |
+ 8972 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8972 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8974:27
+      |
+ 8974 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8974 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8976:27
+      |
+ 8976 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8976 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8978:27
+      |
+ 8978 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8978 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8980:27
+      |
+ 8980 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8980 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8982:27
+      |
+ 8982 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8982 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8984:27
+      |
+ 8984 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8984 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8986:27
+      |
+ 8986 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8986 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8988:27
+      |
+ 8988 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8988 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8990:27
+      |
+ 8990 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8990 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8992:27
+      |
+ 8992 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8992 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8994:27
+      |
+ 8994 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8994 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8996:27
+      |
+ 8996 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8996 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:8998:27
+      |
+ 8998 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 8998 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9000:27
+      |
+ 9000 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9000 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9002:27
+      |
+ 9002 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9002 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9004:27
+      |
+ 9004 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9004 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9006:27
+      |
+ 9006 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9006 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9008:27
+      |
+ 9008 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9008 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9010:27
+      |
+ 9010 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9010 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9012:27
+      |
+ 9012 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9012 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9014:27
+      |
+ 9014 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9014 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9016:27
+      |
+ 9016 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9016 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9018:27
+      |
+ 9018 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9018 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9020:27
+      |
+ 9020 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9020 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9022:27
+      |
+ 9022 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9022 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9024:27
+      |
+ 9024 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9024 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9026:27
+      |
+ 9026 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9026 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9028:27
+      |
+ 9028 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9028 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9030:27
+      |
+ 9030 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9030 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9032:27
+      |
+ 9032 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9032 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9034:27
+      |
+ 9034 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9034 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9036:27
+      |
+ 9036 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9036 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9038:27
+      |
+ 9038 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9038 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9040:27
+      |
+ 9040 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9040 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9042:27
+      |
+ 9042 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9042 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:9044:27
+      |
+ 9044 |         k_domain_endpoint(path, &full_uri)
+      |         ----------------- ^^^^ expected `&str`, found `String`
+      |         |
+      |         arguments to this function are incorrect
+      |
+note: function defined here
+     --> src/lib.rs:23744:4
+      |
+23744 | fn k_domain_endpoint(path:&str,uri:&str)->String{
+      |    ^^^^^^^^^^^^^^^^^ ---------
+help: consider borrowing here
+      |
+ 9044 |         k_domain_endpoint(&path, &full_uri)
+      |                           +
+
+error[E0308]: mismatched types
+     --> src/lib.rs:23734:34
+      |
+23734 |     let token=domain.replace('/','_');let like=format!("%{}%",token);
+      |                      -------     ^^^ expected `&str`, found `char`
+      |                      |
+      |                      arguments to this method are incorrect
+      |
+note: method defined here
+     --> /rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/alloc/src/str.rs:308:11
+help: if you meant to write a string literal, use double quotes
+      |
+23734 -     let token=domain.replace('/','_');let like=format!("%{}%",token);
+23734 +     let token=domain.replace('/',"_");let like=format!("%{}%",token);
+      |
+
+warning: unused variable: `chara_id`
+    --> src/lib.rs:2744:9
+     |
+2744 |     let chara_id = call_getter_int(chara_data_class, chara_obj, "get_CardId");
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_chara_id`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ramen_gauge_gains`
+    --> src/lib.rs:3911:5
+     |
+3911 |     ramen_gauge_gains: &std::collections::HashMap<i32, i32>, // 各训练素材进度增益
+     |     ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ramen_gauge_gains`
+
+warning: unused variable: `next_turn_race`
+    --> src/lib.rs:3913:5
+     |
+3913 |     next_turn_race: bool, // 下回合是否比赛回合 [MDB single_mode_turn]
+     |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_next_turn_race`
+
+warning: variable does not need to be mutable
+    --> src/lib.rs:4873:9
+     |
+4873 |     let mut ramen_selectable_region_ids_derived_json = String::new();
+     |         ----^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> src/lib.rs:4875:9
+     |
+4875 |     let mut ramen_region_pool_phase_derived_json = String::new();
+     |         ----^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: unused variable: `limit_break`
+    --> src/lib.rs:4779:9
+     |
+4779 |     let limit_break = read_obscured_int_at(chara_obj, 108); // LimitBreakCount
+     |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_limit_break`
+
+warning: variable does not need to be mutable
+    --> src/lib.rs:7193:37
+     |
+7193 |         let run_query = |sql: &str, mut on_row: &mut dyn FnMut(&[*const u8])| -> i32 {
+     |                                     ----^^^^^^
+     |                                     |
+     |                                     help: remove this `mut`
+
+warning: unused variable: `api`
+     --> src/lib.rs:11761:9
+      |
+11761 |     let api = &*API;
+      |         ^^^ help: if this is intentional, prefix it with an underscore: `_api`
+
+warning: unused variable: `api`
+     --> src/lib.rs:11785:9
+      |
+11785 |     let api = &*API;
+      |         ^^^ help: if this is intentional, prefix it with an underscore: `_api`
+
+warning: unnecessary `unsafe` block
+     --> src/lib.rs:12057:25
+      |
+12023 |     unsafe {
+      |     ------ because it's nested under this `unsafe` block
+...
+12057 |                         unsafe { get_config() }.http_port
+      |                         ^^^^^^ unnecessary `unsafe` block
+      |
+      = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+     --> src/lib.rs:12203:23
+      |
+12023 |     unsafe {
+      |     ------ because it's nested under this `unsafe` block
+...
+12203 |             let cfg = unsafe { get_config() };
+      |                       ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+     --> src/lib.rs:12206:13
+      |
+12023 |     unsafe {
+      |     ------ because it's nested under this `unsafe` block
+...
+12206 |             unsafe {
+      |             ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+     --> src/lib.rs:12229:37
+      |
+12023 |     unsafe {
+      |     ------ because it's nested under this `unsafe` block
+...
+12229 |                 let changed = f(ui, unsafe { GUI_HOST_BUF.as_mut_ptr() as *mut c_char }, 64);
+      |                                     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+     --> src/lib.rs:12231:21
+      |
+12023 |     unsafe {
+      |     ------ because it's nested under this `unsafe` block
+...
+12231 |                     unsafe {
+      |                     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+     --> src/lib.rs:12256:37
+      |
+12023 |     unsafe {
+      |     ------ because it's nested under this `unsafe` block
+...
+12256 |                 let changed = f(ui, unsafe { GUI_PORT_BUF.as_mut_ptr() as *mut c_char }, 8);
+      |                                     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+     --> src/lib.rs:12258:21
+      |
+12023 |     unsafe {
+      |     ------ because it's nested under this `unsafe` block
+...
+12258 |                     unsafe {
+      |                     ^^^^^^ unnecessary `unsafe` block
+
+warning: variable does not need to be mutable
+     --> src/lib.rs:12919:9
+      |
+12919 |     let mut dream_overflow = false;
+      |         ----^^^^^^^^^^^^^^
+      |         |
+      |         help: remove this `mut`
+
+warning: value assigned to `min_level` is never read
+     --> src/lib.rs:13095:9
+      |
+13095 |         min_level = 0;
+      |         ^^^^^^^^^^^^^
+      |
+      = help: maybe it is overwritten before being read?
+      = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+     --> src/lib.rs:15619:20
+      |
+15619 |                 Ok(mut stmt) => stmt.column_names().iter().map(|s| s.to_string()).collect(),
+      |                    ----^^^^
+      |                    |
+      |                    help: remove this `mut`
+
+warning: value assigned to `all_events_count` is never read
+     --> src/lib.rs:20573:37
+      |
+20573 |       let mut all_events_count: i32 = 0;
+      |                                       ^ this value is reassigned later and never used
+...
+20612 | /             all_events_count = conn
+20613 | |                 .query_row("SELECT COUNT(*) FROM single_mode_story_data", [], |r| {
+20614 | |                     r.get(0)
+20615 | |                 })
+20616 | |                 .unwrap_or(0);
+      | |_____________________________- `all_events_count` is overwritten here before the previous value is read
+
+warning: unused variable: `ds_class`
+     --> src/lib.rs:21102:9
+      |
+21102 |     let ds_class = get_class_from_object(ds_obj);
+      |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ds_class`
+
+warning: unused variable: `is_literal`
+     --> src/lib.rs:22122:13
+      |
+22122 |         let is_literal = match field_get_flags {
+      |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_literal`
+
+For more information about this error, try `rustc --explain E0308`.
+warning: `hachimi_ura` (lib) generated 24 warnings
+error: could not compile `hachimi_ura` (lib) due to 44 previous errors; 24 warnings emitted
+
+build_outcome=failure
+source_commit=f840c48894425c96b2005b78ce2fab265488eaa6

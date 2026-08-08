@@ -1,0 +1,45 @@
+name: Audit Pre-release Endpoint Source
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  audit-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/unified-observation-endpoint-implementation-20260806
+
+      - name: Apply cumulative A-G patches
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_unified_endpoint_a_patch.py
+          python3 scripts/apply_unified_endpoint_a_compile_fix.py
+          python3 scripts/apply_unified_endpoint_b_storage_patch.py
+          python3 scripts/apply_unified_endpoint_b_storage_compile_fix.py
+          python3 scripts/apply_unified_endpoint_c_inherit_pair_patch.py
+          python3 scripts/apply_unified_endpoint_d_selected_parent_patch.py
+          python3 scripts/apply_unified_endpoint_e_runtime_correction.py
+          python3 scripts/apply_unified_endpoint_f_pre_release_fix.py
+          python3 scripts/fix_unified_endpoint_f_patch_anchors.py
+          python3 scripts/apply_unified_endpoint_g_release_gate_fix.py
+
+      - name: Extract response-header hook source context
+        run: python3 scripts/extract_response_header_hook_context.py
+
+      - name: Commit audit context
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/RESPONSE_HEADER_HOOK_SOURCE_CONTEXT.md
+          if git diff --cached --quiet; then
+            echo no_change
+          else
+            git commit -m "chore: capture response header hook source context"
+            git push origin HEAD:workbench/unified-observation-endpoint-implementation-20260806
+          fi

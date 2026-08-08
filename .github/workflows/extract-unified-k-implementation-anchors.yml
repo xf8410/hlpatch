@@ -1,0 +1,115 @@
+name: Extract Ramen Text Hook Context
+
+on:
+  push:
+    branches:
+      - workbench/ramen-hachimi-text-observer-20260807
+    paths:
+      - .github/workflows/extract-unified-k-implementation-anchors.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract-text-hook-context:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply cumulative implementation
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+
+      - name: Extract exact TextCommon metadata and hook anchors
+        id: extract
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 - <<'PY' 2>&1 | tee ramen_text_hook_extract.log
+          from pathlib import Path
+          import json
+
+          source = Path('hachimi_ura_plugin/src/lib.rs').read_text(encoding='utf-8')
+          out = ['# Ramen/Hachimi TextCommon exact hook context', '']
+
+          source_needles = [
+              'fn read_il2cpp_string', 'fn il2cpp_string', 'String::from_utf16',
+              'fn get_method_addr', 'fn interceptor_hook', 'fn interceptor_get_trampoline',
+              'fn install_api_sniff_hooks', 'install_api_sniff_hooks();',
+              'fn append_global_observation', 'fn set_hook_status',
+          ]
+          out += ['## Generated Rust source anchors', '']
+          for needle in source_needles:
+              positions=[]; start=0
+              while True:
+                  pos=source.find(needle,start)
+                  if pos < 0: break
+                  positions.append(pos); start=pos+1
+              out += [f'### `{needle}`', '', f'matches={len(positions)}', '']
+              for index,pos in enumerate(positions[:6]):
+                  a=max(0,pos-1800); b=min(len(source),pos+4200)
+                  out += [f'#### match {index+1} bytes {a}..{b}', '', '```rust', source[a:b], '```', '']
+
+          exact_names = {'TextCommon', 'TextMeshProUGUI', 'TMP_Text'}
+          method_terms = ('SetTextFromController', 'set_text', 'get_text', 'm_Text')
+
+          def scalar_projection(record):
+              projected={}
+              for key,value in record.items():
+                  if isinstance(value,(str,int,float,bool)) or value is None:
+                      projected[key]=value
+                  elif isinstance(value,list) and len(value) <= 32 and all(
+                      isinstance(item,(str,int,float,bool)) or item is None for item in value
+                  ):
+                      projected[key]=value
+              return projected
+
+          metadata_hits=[]
+          for path in sorted(Path('data/il2cpp_dump').glob('dump_all_methods_*.json')):
+              try:
+                  data=json.loads(path.read_text(encoding='utf-8'))
+              except Exception:
+                  continue
+              stack=[data]
+              while stack:
+                  value=stack.pop()
+                  if isinstance(value,dict):
+                      projected=scalar_projection(value)
+                      blob=json.dumps(projected,ensure_ascii=False)
+                      if any(name in blob for name in exact_names) and any(term in blob for term in method_terms):
+                          metadata_hits.append((str(path), projected))
+                      stack.extend(value.values())
+                  elif isinstance(value,list):
+                      stack.extend(value)
+          out += ['## Exact IL2CPP metadata scalar records', '', f'hit_count={len(metadata_hits)}', '']
+          for index,(path,record) in enumerate(metadata_hits[:300]):
+              out += [f'### hit {index+1} `{path}`', '', '```json', json.dumps(record,ensure_ascii=False,indent=2), '```', '']
+
+          text='\n'.join(out)
+          assert len(text.encode('utf-8')) < 600_000, len(text.encode('utf-8'))
+          Path('docs/RAMEN_TEXTCOMMON_HOOK_CONTEXT.md').write_text(text,encoding='utf-8')
+          print(f'metadata_hits={len(metadata_hits)} output_bytes={len(text.encode())}')
+          PY
+
+      - name: Persist extraction diagnostics
+        if: failure() && steps.extract.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          cp ramen_text_hook_extract.log docs/RAMEN_TEXTCOMMON_HOOK_EXTRACT_DIAGNOSTICS.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/RAMEN_TEXTCOMMON_HOOK_EXTRACT_DIAGNOSTICS.txt
+          git commit -m 'chore: capture TextCommon extraction diagnostics'
+          git push origin HEAD:${GITHUB_REF_NAME}
+
+      - name: Commit bounded context
+        if: success()
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/RAMEN_TEXTCOMMON_HOOK_CONTEXT.md
+          git commit -m 'chore: capture TextCommon exact hook context'
+          git push origin HEAD:${GITHUB_REF_NAME}
