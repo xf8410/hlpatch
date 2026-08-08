@@ -30,13 +30,15 @@ jobs:
           grep -Fq 'protocol_archive_audit_endpoint' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'std::slice::from_raw_parts(data_ptr, len).to_vec()' hachimi_ura_plugin/src/lib.rs
           ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist|truncate|preview' scripts/apply_ramen_global_durable_observation.py scripts/apply_hachimi_textcommon_observer.py scripts/apply_protocol_multisection_event_timeline.py scripts/apply_protocol_archive_reliability_p.py
-      - name: Refuse overwrite
+      - name: Inspect existing immutable release state
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ! gh release view v3.27.11 >/dev/null 2>&1
-          ! git ls-remote --exit-code --tags origin refs/tags/v3.27.11 >/dev/null 2>&1
+          git fetch --tags --force
+          if git rev-parse -q --verify refs/tags/v3.27.11 >/dev/null; then
+            test "$(git rev-list -n 1 v3.27.11)" = "07adec9d24d721b1341191f8ffa8e15bc88ab931"
+          fi
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
       - uses: nttld/setup-ndk@v1
@@ -54,7 +56,7 @@ jobs:
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32711-cargo.log
-      - name: Publish immutable Release and verify digest
+      - name: Publish or verify immutable Release
         if: steps.cargo.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,10 +80,19 @@ jobs:
           EOF
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git tag -a v3.27.11 07adec9d24d721b1341191f8ffa8e15bc88ab931 -m 'Release v3.27.11'
-          git push origin refs/tags/v3.27.11
-          gh release create v3.27.11 --verify-tag --title v3.27.11 --notes "Adds boot-safe persistent session access, precise request/response exchange export, protocol archive auditing, full payload capture, multi-section MessagePack detection, pending choice correlation, and final TextCommon observation. CI qualification: run 31245472605. Runtime validation remains pending." "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
-          API_DIGEST=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.11 --jq '.assets[] | select(.name == "libhachimi_ura.so") | .digest')
+          if ! git rev-parse -q --verify refs/tags/v3.27.11 >/dev/null; then
+            git tag -a v3.27.11 07adec9d24d721b1341191f8ffa8e15bc88ab931 -m 'Release v3.27.11'
+            git push origin refs/tags/v3.27.11
+          fi
+          if ! gh release view v3.27.11 >/dev/null 2>&1; then
+            gh release create v3.27.11 --verify-tag --title v3.27.11 --notes "Adds boot-safe persistent session access, precise request/response exchange export, protocol archive auditing, full payload capture, multi-section MessagePack detection, pending choice correlation, and final TextCommon observation. CI qualification: run 31245472605. Runtime validation remains pending." "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+          fi
+          RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.11)
+          ASSET_COUNT=$(printf '%s' "$RELEASE_JSON" | jq '[.assets[] | select(.name == "libhachimi_ura.so")] | length')
+          test "$ASSET_COUNT" = 1
+          API_SIZE=$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .size')
+          API_DIGEST=$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .digest')
+          test "$API_SIZE" = "$SIZE"
           test "$API_DIGEST" = "sha256:$SHA256"
       - uses: actions/upload-artifact@v4
         if: always()
