@@ -296,6 +296,7 @@ for pass_no in (1,2):
     subprocess.run(['python3','scripts/apply_protocol_multisection_event_timeline.py'],check=True)
     subprocess.run(['python3','scripts/apply_protocol_archive_reliability_p.py'],check=True)
     apply_next_generation_foundation()
+    subprocess.run(['python3','scripts/apply_storage_read_range_a1.py'],check=True)
     source=Path('hachimi_ura_plugin/src/lib.rs').read_bytes()
     Path(f'source-{pass_no}.sha').write_text(hashlib.sha256(source).hexdigest()+'\n')
 assert Path('source-1.sha').read_text()==Path('source-2.sha').read_text()
