@@ -64,7 +64,8 @@ jobs:
           HLPATCH_SOURCE_COMMIT: 1f674c6afdce86823a9786c114a526480fbef630
         run: |
           set -o pipefail
-          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee release-v32712-cargo.log
+          cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32712-cargo.log
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee -a release-v32712-cargo.log
 
       - name: Prepare immutable release assets
         run: |
