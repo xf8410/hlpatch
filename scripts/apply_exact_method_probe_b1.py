@@ -1,6 +1,11 @@
 from pathlib import Path
 import re
 
+exec(
+    Path("tooling/apply_turn_event_json_export.py").read_text(encoding="utf-8"),
+    {"__name__": "__main__"},
+)
+
 SOURCE = Path("hachimi_ura_plugin/src/lib.rs")
 s = SOURCE.read_text(encoding="utf-8")
 MARKER = "// ===== Exact single-method IL2CPP probe B1 ====="
