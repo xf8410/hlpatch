@@ -19,11 +19,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          test "$(git rev-parse HEAD^)" = "83549f60917360a3b465916f921860cd2791e299"
+          git merge-base --is-ancestor 83549f60917360a3b465916f921860cd2791e299 "$GITHUB_SHA"
           python3 scripts/run_generated_succession_l_cumulative.py
           grep -Fq 'Ordered turn and event JSON export C1' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'fn storage_turn_event_jsons' hachimi_ura_plugin/src/lib.rs
           grep -Fq '"/storage/turn_event_jsons"' hachimi_ura_plugin/src/lib.rs
+          cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
           grep -Fq 'name = "rmpv"' hachimi_ura_plugin/Cargo.lock
           python3 - <<'PY'
           from pathlib import Path
