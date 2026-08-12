@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 SOURCE = Path("hachimi_ura_plugin/src/lib.rs")
 s = SOURCE.read_text(encoding="utf-8")
@@ -142,9 +143,12 @@ unsafe fn exact_method_probe(uri: &str) -> String {
 '''
 s = s.replace(anchor, rust + anchor, 1)
 
-boot_anchor = '    "/il2cpp/method_detail",\n'
-assert s.count(boot_anchor) == 1, f"exact method boot anchor count={s.count(boot_anchor)}"
-s = s.replace(boot_anchor, boot_anchor + '    "/il2cpp/exact_method",\n', 1)
+boot = re.search(r'((?:static|const)\s+BOOT_SAFE_EXACT\b[^=]*=\s*&\[)', s, re.M)
+assert boot is not None, "BOOT_SAFE_EXACT declaration missing"
+boot_end = s.find('];', boot.end())
+assert boot_end >= 0, "BOOT_SAFE_EXACT terminator missing"
+if '"/il2cpp/exact_method"' not in s[boot.start():boot_end]:
+    s = s[:boot.end()] + '\n    "/il2cpp/exact_method",' + s[boot.end():]
 
 route_anchor = '    } else if path == "/il2cpp/method_detail" {\n'
 assert s.count(route_anchor) == 1, f"exact method route anchor count={s.count(route_anchor)}"
