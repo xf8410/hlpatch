@@ -1,6 +1,11 @@
 name: Release v3.27.13 Ordered Turn Event JSON
 
 on:
+  push:
+    branches:
+      - workbench/next-generation-so-foundation-20260808
+    paths:
+      - .github/workflows/release-v32713-turn-event-json.yml
   workflow_dispatch:
 
 permissions:
