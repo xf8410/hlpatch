@@ -1,0 +1,57 @@
+name: Integrate storage read_range A1
+
+on:
+  push:
+    branches:
+      - workbench/next-generation-so-foundation-20260808
+    paths:
+      - ".github/workflows/integrate-storage-read-range-a1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add A1 invocation to cumulative generator
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/run_generated_succession_l_cumulative.py')
+          text = path.read_text(encoding='utf-8')
+          invocation = "    subprocess.run(['python3','scripts/apply_storage_read_range_a1.py'],check=True)\n"
+          anchor = "    apply_next_generation_foundation()\n"
+          if invocation not in text:
+              if text.count(anchor) != 1:
+                  raise RuntimeError(f'cumulative anchor count={text.count(anchor)}')
+              text = text.replace(anchor, anchor + invocation, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+          grep -Fq "scripts/apply_storage_read_range_a1.py" scripts/run_generated_succession_l_cumulative.py
+
+      - name: Verify generated endpoint and two-pass idempotence
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          python3 scripts/run_generated_succession_l_cumulative.py
+          SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST" = "$SECOND"
+          grep -Fq 'Observation storage raw range export A1' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'fn storage_read_range' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'X-HLPATCH-Range-End-Exclusive' hachimi_ura_plugin/src/lib.rs
+
+      - name: Commit cumulative integration
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/run_generated_succession_l_cumulative.py
+          git diff --cached --quiet && exit 1
+          git commit -m "feat: integrate storage read_range into cumulative source"
+          git push origin HEAD:${GITHUB_REF_NAME}
