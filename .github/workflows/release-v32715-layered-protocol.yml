@@ -1,0 +1,145 @@
+name: Release v3.27.15 Layered Protocol Analysis
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/release-v32715-layered-protocol
+          fetch-depth: 0
+
+      - name: Validate and generate exact release source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor 99965596830092bfa1492a3983fd1dee2b156565 "$GITHUB_SHA"
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 tooling/apply_turn_event_json_export.py
+          python3 scripts/apply_signup_plaintext_observer.py
+          python3 scripts/apply_protocol_send_discovery.py
+          cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
+          python3 - <<'PY'
+          from pathlib import Path
+          cargo = Path('hachimi_ura_plugin/Cargo.toml')
+          text = cargo.read_text(encoding='utf-8')
+          text = text.replace('version = "3.27.11"', 'version = "3.27.15"', 1)
+          cargo.write_text(text, encoding='utf-8')
+          lock = Path('hachimi_ura_plugin/Cargo.lock')
+          text = lock.read_text(encoding='utf-8')
+          text = text.replace('name = "hachimi_ura"\nversion = "3.27.11"', 'name = "hachimi_ura"\nversion = "3.27.15"', 1)
+          lock.write_text(text, encoding='utf-8')
+          PY
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.15"
+          grep -Fq 'name = "hachimi_ura"' hachimi_ura_plugin/Cargo.lock
+          grep -Fq 'version = "3.27.15"' hachimi_ura_plugin/Cargo.lock
+          grep -Fq 'stage_is_metadata_not_prohibition' hachimi_ura_plugin/src/signup_plaintext.rs
+          grep -Fq 'wire_analysis_allowed' hachimi_ura_plugin/src/signup_plaintext.rs
+          grep -Fq 'nested_candidate' hachimi_ura_plugin/src/signup_plaintext.rs
+          grep -Fq 'route_candidates' hachimi_ura_plugin/src/signup_plaintext.rs
+          grep -Fq 'class_name_candidates' hachimi_ura_plugin/src/signup_plaintext.rs
+          grep -Fq 'mod protocol_send_discovery;' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/protocol/send/discovery"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/protocol/send/candidates"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/protocol/send/evidence"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'default_deny' hachimi_ura_plugin/src/protocol_send_discovery.rs
+          grep -Fq 'automatic_commit_enabled' hachimi_ura_plugin/src/protocol_send_discovery.rs
+          FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          python3 scripts/apply_signup_plaintext_observer.py
+          python3 scripts/apply_protocol_send_discovery.py
+          SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST" = "$SECOND"
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee release-v32715-cargo.log
+
+      - name: Prepare immutable release assets
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          feature_commit=99965596830092bfa1492a3983fd1dee2b156565
+          cargo_version=3.27.15
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.27.15
+          workflow_run=${GITHUB_RUN_ID}
+          features=layered_protocol_decode,nested_messagepack,wire_analysis,anti_opaque_plaintext,route_class_string_candidates,passive_in_game_send_discovery,signup_plaintext,ordered_turn_event_json
+          active_send_enabled=false
+          runtime_validation=pending_device_execution
+          EOF
+
+      - name: Create immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          if gh release view v3.27.15 >/dev/null 2>&1; then
+            echo 'v3.27.15 already exists; refusing to overwrite' >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v3.27.15 "$GITHUB_SHA" -m "Release v3.27.15"
+          git push origin refs/tags/v3.27.15
+          gh release create v3.27.15 \
+            --verify-tag \
+            --title v3.27.15 \
+            --notes "Adds provenance-aware layered protocol analysis, nested MessagePack/UTF-8 probing, bounded opaque-payload diagnostics, route/class/string candidate extraction, and passive in-game native send-chain discovery. Wire is treated as source metadata rather than a parsing prohibition. Active replay remains disabled and default-deny while prepare/commit entry points are validated in game. Runtime validation remains pending." \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+
+      - name: Verify published identity and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.15)
+          test "$(git rev-list -n1 v3.27.15)" = "$GITHUB_SHA"
+          test "$(printf '%s' "$RELEASE_JSON" | jq '[.assets[] | select(.name == "libhachimi_ura.so")] | length')" = "1"
+          test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .size')" = "$SIZE"
+          test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .digest')" = "sha256:$SHA256"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhachimi_ura-v3.27.15-run-${{ github.run_id }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/release-v32715-cargo.log
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: warn
