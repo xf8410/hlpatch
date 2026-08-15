@@ -1,0 +1,127 @@
+name: Release v3.27.14 Signup Plaintext Observer
+
+on:
+  push:
+    branches:
+      - workbench/release-v32714-signup-plaintext
+    paths:
+      - .github/workflows/release-v32714-signup-plaintext.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/release-v32714-signup-plaintext
+          fetch-depth: 0
+
+      - name: Generate and validate release source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor 9fb136a51159290e62827d13e32458ebbbccf77f "$GITHUB_SHA"
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 tooling/apply_turn_event_json_export.py
+          python3 scripts/apply_signup_plaintext_observer.py
+          python3 - <<'PY'
+          from pathlib import Path
+          cargo = Path('hachimi_ura_plugin/Cargo.toml')
+          text = cargo.read_text(encoding='utf-8')
+          text = text.replace('version = "3.27.11"', 'version = "3.27.14"', 1)
+          cargo.write_text(text, encoding='utf-8')
+          PY
+          cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
+          grep -Fq 'version = "3.27.14"' hachimi_ura_plugin/Cargo.toml
+          grep -Fq 'name = "rmpv"' hachimi_ura_plugin/Cargo.lock
+          grep -Fq 'mod signup_plaintext;' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/sniff/signup_plaintext"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'HttpHelper.CompressRequest:input' hachimi_ura_plugin/src/signup_plaintext.rs
+          grep -Fq 'HttpHelper.DecompressResponse:output' hachimi_ura_plugin/src/signup_plaintext.rs
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee release-v32714-cargo.log
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          cargo_version=3.27.14
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.27.14
+          workflow_run=${GITHUB_RUN_ID}
+          features=signup_plaintext_compact,messagepack_decode,raw_capture_preserved
+          endpoint=/api/sniff/signup_plaintext
+          merged_feature_commit=9fb136a51159290e62827d13e32458ebbbccf77f
+          runtime_validation=pending_device_execution
+          EOF
+
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          test -z "$(git tag -l v3.27.14)"
+          git tag -a v3.27.14 "$GITHUB_SHA" -m "Release v3.27.14"
+          git push origin refs/tags/v3.27.14
+          gh release create v3.27.14 \
+            --verify-tag \
+            --title v3.27.14 \
+            --notes "Adds the compact /api/sniff/signup_plaintext endpoint. It filters pre_signup/signup traffic captured at the existing CompressRequest input and DecompressResponse output plaintext boundaries, correlates requests through WWWRequest.Post, and automatically renders MessagePack, JSON, or UTF-8 without embedding large raw hex payloads. Full raw capture remains available through existing sniff/archive endpoints." \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+
+      - name: Verify release asset identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.14)
+          test "$(git rev-list -n1 v3.27.14)" = "$GITHUB_SHA"
+          test "$(printf '%s' "$RELEASE_JSON" | jq '[.assets[] | select(.name == "libhachimi_ura.so")] | length')" = "1"
+          test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .digest')" = "sha256:$SHA256"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhachimi_ura-v3.27.14-run-${{ github.run_id }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/release-v32714-cargo.log
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: warn
