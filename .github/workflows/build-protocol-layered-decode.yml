@@ -21,15 +21,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate cumulative source and apply layered decoder
+      - name: Generate cumulative source and apply protocol features
         run: |
           set -euo pipefail
           python3 scripts/run_generated_succession_l_cumulative.py
           python3 tooling/apply_turn_event_json_export.py
           python3 scripts/apply_signup_plaintext_observer.py
+          python3 scripts/apply_protocol_send_discovery.py
           cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
           FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           python3 scripts/apply_signup_plaintext_observer.py
+          python3 scripts/apply_protocol_send_discovery.py
           SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           test "$FIRST" = "$SECOND"
           grep -Fq 'stage_is_metadata_not_prohibition' hachimi_ura_plugin/src/signup_plaintext.rs
@@ -39,6 +41,12 @@ jobs:
           grep -Fq 'class_name_candidates' hachimi_ura_plugin/src/signup_plaintext.rs
           grep -Fq 'verified_plaintext_boundary' hachimi_ura_plugin/src/signup_plaintext.rs
           grep -Fq 'heuristic_candidate' hachimi_ura_plugin/src/signup_plaintext.rs
+          grep -Fq 'mod protocol_send_discovery;' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/protocol/send/discovery"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/protocol/send/candidates"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/protocol/send/evidence"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'default_deny' hachimi_ura_plugin/src/protocol_send_discovery.rs
+          grep -Fq 'mutates_game_or_network' hachimi_ura_plugin/src/protocol_send_discovery.rs
           grep -Fq 'name = "rmpv"' hachimi_ura_plugin/Cargo.lock
 
       - name: Setup Rust
@@ -76,11 +84,12 @@ jobs:
           binary_size=$SIZE
           binary_sha256=$SHA256
           workflow_run=${GITHUB_RUN_ID}
-          feature=protocol_layered_decode
-          endpoint=/api/sniff/signup_plaintext
+          features=protocol_layered_decode,passive_in_game_send_discovery
+          endpoints=/api/sniff/signup_plaintext,/api/protocol/send/discovery,/api/protocol/send/candidates,/api/protocol/send/evidence
           stage_is_metadata_not_prohibition=true
           wire_analysis_allowed=true
           nested_payload_analysis=true
+          active_send_enabled=false
           runtime_validation=pending_device_execution
           EOF
 
