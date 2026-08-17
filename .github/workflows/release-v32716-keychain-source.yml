@@ -12,7 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: workbench/release-v32716-keychain-source
           fetch-depth: 0
 
       - name: Generate and validate release source
