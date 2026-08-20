@@ -94,7 +94,7 @@ jobs:
                           let file = std::fs::File::open("/proc/self/mem")
                               .map_err(|e| format!("mem_open_error: {}", e))?;
                           use std::os::unix::fs::FileExt;
-                          let _ = file.read_at(&mut buf, address);
+                          let _ = file.read_at(&mut buf, address as u64);
                           buf.to_vec()
                       } else { Vec::new() };
                       return Ok(FoundationAddressValidation {
