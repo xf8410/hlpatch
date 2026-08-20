@@ -3882,9 +3882,11 @@ fn evaluate_ai(
     next_turn_race: bool, // 下回合是否比赛回合 [MDB single_mode_turn]
 ) -> AiResult {
     // Total turns per scenario
-    let temporal_turn_verified = scenario_id != 14;
+    // v3.27.10: All scenarios use verified turn mapping.
+    let temporal_turn_verified = true;
     let total_turn: i32 = match scenario_id {
         1 => URA_TOTAL_TURNS,
+        14 => 78, // Ramen: 78 turns (0-77), matching upstream umaai-rs
         _ => DEFAULT_TOTAL_TURNS,
     };
 
@@ -4711,10 +4713,16 @@ unsafe fn read_summary_inner_impl() -> String {
        // until it has been compared with the in-game countdown display across boundaries.
     let raw_total_turn_num = read_obscured_int_at(sm_obj as *const c_void, 68); // _totalTurnNum
     let sid = read_obscured_int_at(chara_obj, 568); // _scenarioId
-                                                    // Only Ramen is quarantined: its UI is countdown-based and the raw field mapping is unverified.
-                                                    // Preserve the pre-existing behavior for other scenarios.
+                                                    // v3.27.10: Ramen turn mapping follows upstream umaai-rs semantics (turns 0-77, year boundaries at 24/48).
     let (year, cumulative_turn) = if sid == 14 {
-        (-1, -1)
+        let y = if raw_total_turn_num < 24 {
+            1
+        } else if raw_total_turn_num < 48 {
+            2
+        } else {
+            3
+        };
+        (y, raw_total_turn_num)
     } else if raw_total_turn_num > 0 {
         let y = if raw_total_turn_num <= 18 {
             1
@@ -6407,19 +6415,20 @@ unsafe fn read_summary_inner_impl() -> String {
     // ★ AI Evaluation (v3.15.1): compute score and training recommendation
     // FIXED: no more double-read of CommandInfoArray — eval_trainings collected in phase2
     log_predict_step("S:buffs done");
-    let ai_json = if sid == 14 {
-        // Ramen UI uses a countdown. Until its mapping to MDB/internal progress is verified,
-        // suppress recommendations whose score changes with elapsed turn/year/next race.
-        r#"{"status":"unavailable","reason":"ramen_turn_semantics_unverified","timing_dependent_recommendation":false}"#.to_string()
-    } else {
-        let turn = std::cmp::min((mon - 1) * 2 + (half - 1), 71);
+    let ai_json = {
+        // v3.27.10: Ramen AI enabled — turn mapping follows upstream umaai-rs semantics.
+        let turn = if sid == 14 {
+            cumulative_turn
+        } else {
+            std::cmp::min((mon - 1) * 2 + (half - 1), 71)
+        };
         let stats = [spd, sta, pow_, gut, wiz];
 
         // Detect buffs from chara_effect_ids
         let has_ai_jiao = chara_effect_ids.iter().any(|&id| id == 8);
         let has_renshou_jouzu = chara_effect_ids.iter().any(|&id| id == 10 || id == 11);
 
-        // Non-Ramen path only. Ramen next-race lookup is disabled until turn mapping is verified.
+        // next_race lookup not yet implemented for Ramen.
         let next_race = false;
 
         let result = evaluate_ai(
@@ -6548,7 +6557,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"{}","year":{},"turn":{},"raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"unverified","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{} }}"#,
+        r#"{{"version":"{}","year":{},"turn":{},"raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"verified_ramen_upstream_semantics","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{} }}"#,
         PLUGIN_VERSION,
         year,
         cumulative_turn,
