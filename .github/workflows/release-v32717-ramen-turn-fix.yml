@@ -181,7 +181,8 @@ jobs:
           HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -o pipefail
-          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee release-v32717-cargo.log
+          cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32717-cargo.log
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee -a release-v32717-cargo.log
 
       - name: Prepare release assets
         run: |
