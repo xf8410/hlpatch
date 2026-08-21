@@ -86,7 +86,7 @@ jobs:
                   if range.len() != 2 { continue; }
                   let start = usize::from_str_radix(range[0], 16).unwrap_or(0);
                   let end = usize::from_str_radix(range[1], 16).unwrap_or(0);
-                  if address >= start and address < end {
+                  if address >= start && address < end {
                       let perms = parts[1].to_string();
                       let path = if parts.len() >= 6 { parts[5].to_string() } else { String::new() };
                       let prologue = if perms.contains('r') {
