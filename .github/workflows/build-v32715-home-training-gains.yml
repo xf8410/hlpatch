@@ -1,0 +1,73 @@
+name: Build v3.27.15 Home Training Gains
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [workbench/v32715-home-training-gains]
+    paths:
+      - scripts/apply_v32715_home_training_gains.py
+      - .github/workflows/build-v32715-home-training-gains.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate v3.27.15 source and apply final training gain endpoint
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 tooling/apply_turn_event_json_export.py
+          python3 scripts/apply_signup_plaintext_observer.py
+          python3 scripts/apply_protocol_send_discovery.py
+          python3 scripts/apply_v32715_home_training_gains.py
+          python3 scripts/apply_v32715_home_training_gains.py
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ['hachimi_ura_plugin/Cargo.toml','hachimi_ura_plugin/Cargo.lock']:
+              p=Path(name);s=p.read_text();
+              import re
+              if name.endswith('Cargo.toml'):
+                  s=re.sub(r'(?m)^version = "[^"]+"', 'version = "3.27.15"', s, count=1)
+              else:
+                  s=re.sub(r'(name = "hachimi_ura"\nversion = ")[^"]+', r'\g<1>3.27.15', s, count=1)
+              p.write_text(s)
+          PY
+          cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
+          grep -Fq '"/debug/home_training_gains"' hachimi_ura_plugin/src/lib.rs
+          test "$(grep -Fc 'v3.27.15 home training gains endpoint' hachimi_ura_plugin/src/lib.rs)" = 2
+      - run: rustup target add aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+      - name: Build Android arm64 SO
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --target aarch64-linux-android --release 2>&1 | tee build-v32715-home-training-gains.log
+      - name: Manifest
+        run: |
+          set -euo pipefail
+          SO=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$SO"
+          sha256sum "$SO" > SHA256SUMS
+          printf 'version=3.27.15\nsource_commit=%s\nfeature=home_final_training_gains\nendpoint=/debug/home_training_gains\n' "$GITHUB_SHA" > BUILD-MANIFEST.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libhachimi_ura-v3.27.15-home-training-gains-${{ github.run_id }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/build-v32715-home-training-gains.log
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: error
