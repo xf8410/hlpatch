@@ -7,7 +7,9 @@
 //! Primary target : Gallop.SingleModeTrainingCutInHelper.Init -> .SkipRuntime
 //! Secondary      : Gallop.CampaignTrainingCutInHelper.Init  -> .SkipRuntime (best effort)
 //!
-//! Safety: disabled by default. Flip with GET /api/training/anim_skip?enabled=1
+//! Safety: disabled by default. Flip with:
+//!   GET /api/training/anim_skip/on   (enable)
+//!   GET /api/training/anim_skip/off  (disable)
 //! Status: GET /api/training/anim_skip
 
 use std::ffi::c_void;
@@ -19,7 +21,6 @@ static SKIP_ADDR: AtomicUsize = AtomicUsize::new(0);
 static CAMPAIGN_INIT_ADDR: AtomicUsize = AtomicUsize::new(0);
 static CAMPAIGN_SKIP_ADDR: AtomicUsize = AtomicUsize::new(0);
 static SKIP_CALLS: AtomicU64 = AtomicU64::new(0);
-static LAST_ERROR_TS: AtomicU64 = AtomicU64::new(0);
 
 pub fn is_enabled() -> bool {
     ENABLED.load(Ordering::Acquire)
@@ -41,7 +42,7 @@ extern "C" fn init_hook(this: *mut c_void) -> *const c_void {
         // Auto-skip right after the cut-in helper initializes. SkipRuntime is
         // the same routine the in-game skip button triggers; calling it here
         // finishes the cut-in instantly without touching result state.
-        if is_enabled() && this != std::ptr::null_mut() {
+        if is_enabled() && !this.is_null() {
             let skip = SKIP_ADDR.load(Ordering::Acquire);
             if skip != 0 {
                 type SkipFn = unsafe extern "C" fn(*mut c_void);
@@ -63,7 +64,7 @@ extern "C" fn campaign_init_hook(this: *mut c_void) -> *const c_void {
         type FnType = unsafe extern "C" fn(*mut c_void) -> *const c_void;
         let original: FnType = std::mem::transmute(trampoline);
         let result = original(this);
-        if is_enabled() && this != std::ptr::null_mut() {
+        if is_enabled() && !this.is_null() {
             let skip = CAMPAIGN_SKIP_ADDR.load(Ordering::Acquire);
             if skip != 0 {
                 type SkipFn = unsafe extern "C" fn(*mut c_void);
@@ -90,11 +91,6 @@ unsafe fn resolve_method(class: *mut c_void, name: &str, parameter_counts: &[i32
         }
         None => 0,
     }
-}
-
-fn note_error(reason: &str) {
-    let _ = reason;
-    LAST_ERROR_TS.store(super::sniff_timestamp_ms(), Ordering::Release);
 }
 
 fn install_pair(
@@ -152,7 +148,6 @@ fn install_pair(
         let init = resolve_method(class, "Init", &[0, 1]);
         if init == 0 || !super::interceptor_hook(init, init_hook as usize) {
             super::set_hook_status(label, "failed: init_resolve_or_hook");
-            note_error("init");
             return false;
         }
         init_out.store(init, Ordering::Release);
@@ -162,7 +157,8 @@ fn install_pair(
 }
 
 pub unsafe fn install() {
-    let primary_ok = install_pair(
+    // Primary: regular scenario training cut-ins.
+    let _primary_ok = install_pair(
         "training.anim_skip",
         "Gallop",
         "SingleModeTrainingCutInHelper",
@@ -178,37 +174,26 @@ pub unsafe fn install() {
         &CAMPAIGN_INIT_ADDR,
         &CAMPAIGN_SKIP_ADDR,
     );
-    if !primary_ok && INIT_ADDR.load(Ordering::Acquire) == 0 {
-        note_error("primary_install");
-    }
 }
 
-pub fn endpoint(uri: &str) -> String {
-    let pairs = match super::parse_query_pairs(uri) {
-        Ok(value) => value,
-        Err(error) => return super::k_json_error(&error),
-    };
-    let enabled_text = super::query_pair(&pairs, "enabled");
-    if !enabled_text.is_empty() {
-        match enabled_text.as_str() {
-            "1" | "true" | "on" => set_enabled(true),
-            "0" | "false" | "off" => set_enabled(false),
-            other => {
-                return format!(
-                    r#"{{"ok":false,"error":"invalid_enabled_value","value":"{}"}}"#,
-                    super::json_escape(other)
-                )
-            }
-        }
-    }
+pub fn endpoint() -> String {
     let installed = INIT_ADDR.load(Ordering::Acquire) != 0;
     let campaign_installed = CAMPAIGN_INIT_ADDR.load(Ordering::Acquire) != 0;
     format!(
-        r#"{{"ok":true,"feature":"training_anim_skip","enabled":{},"installed":{},"campaign_installed":{},"skip_calls":{},"last_error_ts_ms":{},"usage":"GET ?enabled=1|0 to toggle; skips run only while enabled"}}"#,
+        r#"{{"ok":true,"feature":"training_anim_skip","enabled":{},"installed":{},"campaign_installed":{},"skip_calls":{},"usage":"GET /api/training/anim_skip/on|off to toggle; skips run only while enabled"}}"#,
         is_enabled(),
         installed,
         campaign_installed,
         SKIP_CALLS.load(Ordering::Acquire),
-        LAST_ERROR_TS.load(Ordering::Acquire),
     )
+}
+
+pub fn enable_endpoint() -> String {
+    set_enabled(true);
+    endpoint()
+}
+
+pub fn disable_endpoint() -> String {
+    set_enabled(false);
+    endpoint()
 }
