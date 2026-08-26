@@ -12,37 +12,35 @@ module_anchor = "#![allow(dead_code)]\n"
 assert s.count(module_anchor) == 1, f"module anchor count={s.count(module_anchor)}"
 s = s.replace(module_anchor, module_anchor + "mod training_anim_skip;\n", 1)
 
-# 2. boot-safe exact route (status/toggle read stays available pre-game-init)
+# 2. boot-safe exact routes (status/toggle stay available pre-game-init)
 boot_anchor = '"/api/sniff/signup_plaintext",'
-assert s.count(boot_anchor) >= 1, "signup boot-safe anchor missing"
-if '"/api/training/anim_skip"' not in s:
-    s = s.replace(
-        boot_anchor,
-        boot_anchor + '\n    "/api/training/anim_skip",',
-        1,
-    )
+assert boot_anchor in s, "signup boot-safe anchor missing"
+for route in ('"/api/training/anim_skip"', '"/api/training/anim_skip/on"', '"/api/training/anim_skip/off"'):
+    if route not in s:
+        s = s.replace(
+            boot_anchor,
+            boot_anchor + "\n    " + route + ",",
+            1,
+        )
 
-# 3. route dispatch
+# 3. route dispatch (exact-path style, mirrors sibling observers)
 route_anchor = '    } else if path == "/api/sniff/signup_plaintext" {\n'
-assert s.count(route_anchor) == 1, f"route anchor count={s.count(route_anchor)}"
-s = s.replace(
-    route_anchor,
-    '''    } else if path.starts_with("/api/training/anim_skip") {
-        unsafe { training_anim_skip::endpoint(&uri) }
-''' + route_anchor,
-    1,
+assert route_anchor in s, f"route anchor missing"
+dispatch_block = (
+    '    } else if path == "/api/training/anim_skip" {\n'
+    "        training_anim_skip::endpoint()\n"
+    '    } else if path == "/api/training/anim_skip/on" {\n'
+    "        training_anim_skip::enable_endpoint()\n"
+    '    } else if path == "/api/training/anim_skip/off" {\n'
+    "        training_anim_skip::disable_endpoint()\n"
 )
+s = s.replace(route_anchor, dispatch_block + route_anchor, 1)
 
 # 4. installer invocation near other observers' install sites
 install_anchor = "keychain_source_observer::install();"
 if install_anchor in s:
-    s = s.replace(
-        install_anchor,
-        install_anchor + "\n    training_anim_skip::install();",
-        1,
-    )
+    s = s.replace(install_anchor, install_anchor + "\n    training_anim_skip::install();", 1)
 else:
-    # Fallback: register alongside any single observer install call.
     import re
     m = re.search(r"^(\s*)(\w+_observer::install\(\);)", s, re.M)
     assert m, "no observer install anchor found"
