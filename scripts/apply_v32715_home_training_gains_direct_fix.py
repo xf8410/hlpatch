@@ -7,32 +7,17 @@ if marker in s:
     print('home_training_gains_direct_fix=already_applied')
     raise SystemExit(0)
 
-# Replace the naive command-array discovery from apply_v32715_home_training_gains.py
-# with runtime-validated discovery. Anchors below mirror the base script verbatim.
-old = '''    let home_class = get_class_from_object(home);
-    let mut commands: *mut c_void = ptr::null_mut();
-    let mut commands_getter = "";
-    for getter in ["get_CommandInfoArray", "get_CommandArray", "get_Commands"] {
-        let candidate = call_getter_on_instance(home_class, home, getter);
-        if !candidate.is_null() {
-            commands = candidate;
-            commands_getter = getter;
-            break;
-        }
-    }
-    if commands.is_null() {
-        for field in ["CommandInfoArray", "<CommandInfoArray>k__BackingField"] {
-            let candidate = read_field_value(home_class, home, field);
-            if !candidate.is_null() {
-                commands = candidate;
-                commands_getter = field;
-                break;
-            }
-        }
-    }
-    if commands.is_null() { return r#"{\\"error\\":\\"home_command_array_null\\"}"#.to_string(); }
-'''
-new = '''    // ===== v3.27.15 verified direct home gain path =====
+# Splice by index between two quote-free anchors so the patch never depends on
+# backslash-escape byte sequences inside generated Rust raw strings.
+start_marker = '    let home_class = get_class_from_object(home);'
+end_marker = '    let base = commands as *const u8;'
+i = s.index(start_marker)
+j = s.index(end_marker, i)
+block = s[i:j]
+assert 'get_CommandInfoArray' in block, 'discovery block missing getters'
+assert 'home_command_array_null' in block, 'discovery block missing error return'
+
+new_block = r'''    // ===== v3.27.15 verified direct home gain path =====
     // Validate every candidate array at runtime; do not trust a single fixed
     // field offset (a wrong offset yielded a bogus List length on-device).
     let home_class = get_class_from_object(home);
@@ -66,10 +51,11 @@ new = '''    // ===== v3.27.15 verified direct home gain path =====
             }
         }
     }
-    if commands.is_null() { return r#"{\\"error\\":\\"home_command_array_null\\",\\"reason\\":\\"no_valid_runtime_array\\"}"#.to_string(); }
+    if commands.is_null() {
+        return r#"{"error":"home_command_array_null","reason":"no_valid_runtime_array"}"#.to_string();
+    }
 '''
-assert s.count(old) == 1, f'command discovery anchor count={s.count(old)}'
-s = s.replace(old, new, 1)
+s = s[:i] + new_block + s[j:]
 
 old2 = '''        let cls = get_class_from_object(command);
         let command_id = call_getter_obscured_int(cls, command, "get_CommandId");
