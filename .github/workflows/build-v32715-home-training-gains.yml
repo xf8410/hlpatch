@@ -8,7 +8,6 @@ on:
       - scripts/apply_v32715_home_training_gains.py
       - scripts/apply_v32715_home_training_gains_direct_fix.py
       - scripts/apply_v32715_ramen_checkpoint_snapshot.py
-      - scripts/apply_v32715_home_training_gains_runtime_fix.py
       - .github/workflows/build-v32715-home-training-gains.yml
 
 permissions:
@@ -29,12 +28,10 @@ jobs:
           python3 scripts/apply_v32715_home_training_gains.py
           python3 scripts/apply_v32715_home_training_gains_direct_fix.py
           python3 scripts/apply_v32715_ramen_checkpoint_snapshot.py
-          python3 scripts/apply_v32715_home_training_gains_runtime_fix.py
           FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           python3 scripts/apply_v32715_home_training_gains.py
           python3 scripts/apply_v32715_home_training_gains_direct_fix.py
           python3 scripts/apply_v32715_ramen_checkpoint_snapshot.py
-          python3 scripts/apply_v32715_home_training_gains_runtime_fix.py
           SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           test "$FIRST" = "$SECOND"
           python3 - <<'PY'
@@ -46,7 +43,7 @@ jobs:
           PY
           cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
           for route in /debug/home_training_gains /debug/ramen_checkpoint /debug/ramen_runtime /debug/ramen_transitions_v2 /training/result; do grep -Fq "\"$route\"" hachimi_ura_plugin/src/lib.rs; done
-          grep -Fq 'HomeInfo runtime command-array resolution' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'verified direct home gain path' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'no_valid_runtime_array' hachimi_ura_plugin/src/lib.rs
           grep -Fq '"semantic_verified":false' hachimi_ura_plugin/src/lib.rs
           test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.15"
