@@ -24,21 +24,22 @@ jobs:
           python3 scripts/apply_signup_plaintext_observer.py
           python3 scripts/apply_protocol_send_discovery.py
           python3 scripts/apply_v32715_home_training_gains.py
+          FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           python3 scripts/apply_v32715_home_training_gains.py
+          SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST" = "$SECOND"
           python3 - <<'PY'
           from pathlib import Path
-          for name in ['hachimi_ura_plugin/Cargo.toml','hachimi_ura_plugin/Cargo.lock']:
-              p=Path(name);s=p.read_text();
-              import re
-              if name.endswith('Cargo.toml'):
-                  s=re.sub(r'(?m)^version = "[^"]+"', 'version = "3.27.15"', s, count=1)
-              else:
-                  s=re.sub(r'(name = "hachimi_ura"\nversion = ")[^"]+', r'\g<1>3.27.15', s, count=1)
-              p.write_text(s)
+          import re
+          p=Path('hachimi_ura_plugin/Cargo.toml');s=p.read_text()
+          s=re.sub(r'(?m)^version = "[^"]+"', 'version = "3.27.15"', s, count=1)
+          p.write_text(s)
           PY
           cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
           grep -Fq '"/debug/home_training_gains"' hachimi_ura_plugin/src/lib.rs
-          test "$(grep -Fc 'v3.27.15 home training gains endpoint' hachimi_ura_plugin/src/lib.rs)" = 2
+          test "$(grep -Fc '// ===== v3.27.15 home training gains endpoint =====' hachimi_ura_plugin/src/lib.rs)" = 1
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.15"
+          grep -A1 -F 'name = "hachimi_ura"' hachimi_ura_plugin/Cargo.lock | grep -Fq 'version = "3.27.15"'
       - run: rustup target add aarch64-linux-android
       - uses: nttld/setup-ndk@v1
         id: ndk
