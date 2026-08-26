@@ -6,136 +6,88 @@
   "mdb_path": "/data/data/jp.co.cygames.umamusume/files/master/master.mdb",
   "source": ["il2cpp_metadata", "master_mdb_sql"],
   "web_sources_used": false,
-
-  "il2cpp": {
-    "classes": {
-      "MasterSuccessionFactorEffect": {
-        "TABLE_NAME_value": "succession_factor_effect",
-        "instance_dictionaries": [
-          "_lazyPrimaryKeyDictionary",
-          "_dictionaryWithFactorGroupId",
-          "_dictionaryWithFactorGroupIdAndEffectId",
-          "_dictionaryWithTargetType"
-        ],
-        "lazy_state_in_ramen_scenario": "all_null_unloaded"
-      },
-      "SuccessionFactorEffect": {
-        "fields": [
-          {"name": "Id", "offset_hex": "0x10", "type": "i4"},
-          {"name": "FactorGroupId", "offset_hex": "0x14", "type": "i4"},
-          {"name": "EffectId", "offset_hex": "0x18", "type": "i4"},
-          {"name": "TargetType", "offset_hex": "0x1C", "type": "i4"},
-          {"name": "Value1", "offset_hex": "0x20", "type": "i4"},
-          {"name": "Value2", "offset_hex": "0x24", "type": "i4"}
-        ]
-      },
-      "SuccessionBonusParams": {
-        "valueDictionary_type": "System.Collections.Generic.Dictionary<Gallop.MasterSuccessionFactorEffect.SuccessionFactorEffect.FactorTargetType,System.Int32>",
-        "methods": [
-          {"name": "ApplyFactor", "params": ["byref Gallop.MasterSuccessionFactor.SuccessionFactor", "byref Gallop.MasterSkillData.SkillData", "i4 factorLv"], "ret": "void"},
-          {"name": "GetBonusValueByType", "params": ["ptr FactorTargetType"], "ret": "i4"},
-          {"name": "get_TipsSkillIdList", "ret": "List<int>"},
-          {"name": "get_AddSkillMatchBonusList", "ret": "List<WorkSingleModeChangeParameterInfo.SkillLevel>"},
-          {"name": "SetAddSkillMatchBonusList", "params": ["byref SkillLevel"]}
-        ]
-      },
-      "SuccessionFactor_static_consts": [
-        "FACTOR_TYPE_PARAM=1",
-        "FACTOR_TYPE_PROPER=2",
-        "FACTOR_TYPE_CHARA=3",
-        "FACTOR_TYPE_SKILL=4",
-        "FACTOR_TYPE_RACE=5",
-        "FACTOR_TYPE_SEANARIO=6",
-        "FACTOR_TYPE_MATCH_BONUS=7",
-        "FACTOR_TYPE_PARENT_STAR=8",
-        "FACTOR_TYPE_SPECIAL_CONDITION=9",
-        "FACTOR_TYPE_PARENT_STAR_AD1",
-        "FACTOR_TYPE_PARENT_STAR_AD2",
-        "MAIN_FACTOR_MAX"
-      ],
-      "ParamFactorValue2Type": ["ParamUp", "MaxUp"]
+  "correction": {
+    "old_63_interpretation": "63 = 9 x 7 succession-trigger gain",
+    "correct_63_interpretation": "63 is an opening/base-stat bonus, not a succession-event gain.",
+    "proof": {
+      "table": "succession_initial_factor",
+      "factor_type": 1,
+      "value_1": 3,
+      "value_2": 0,
+      "value_2_meaning": "ParamUp",
+      "add_point": 21,
+      "example": "three applicable 3-star white parameter factors: 21 x 3 = 63"
+    },
+    "mechanism_separation": {
+      "white_parameter_factor_at_opening": {"1_star": 5, "2_star": 12, "3_star": 21},
+      "blue_parameter_factor_per_succession_trigger": {"1_star": 3, "2_star": 6, "3_star": 9}
     }
   },
-
+  "il2cpp": {
+    "SuccessionFactorEffect_fields": {
+      "Id": "0x10", "FactorGroupId": "0x14", "EffectId": "0x18",
+      "TargetType": "0x1c", "Value1": "0x20", "Value2": "0x24"
+    },
+    "SuccessionInitialFactor_fields": {
+      "Id": "0x10", "FactorType": "0x14", "Value1": "0x18",
+      "Value2": "0x1c", "AddPoint": "0x20"
+    },
+    "SuccessionBonusParams_methods": [
+      "ApplyFactor(ref factorData, ref uniqueSkill, int factorLv) -> void",
+      "GetBonusValueByType(FactorTargetType) -> int"
+    ],
+    "SuccessionFactor_methods": ["Name(int lv) -> string", "get_Description() -> string"],
+    "factor_type_constants": {
+      "PARAM": 1, "PROPER": 2, "CHARA": 3, "SKILL": 4, "RACE": 5,
+      "SCENARIO": 6, "MATCH_BONUS": 7, "PARENT_STAR": 8,
+      "SPECIAL_CONDITION": 9
+    },
+    "ParamFactorValue2Type": ["ParamUp", "MaxUp"]
+  },
   "mdb_tables": {
-    "succession_factor": {
-      "rows": 2577,
-      "columns": ["factor_id PK", "factor_group_id", "rarity 1..3", "grade", "factor_type", "effect_group_id", "succession_search_hidden", "start_date", "end_date"]
+    "succession_factor": {"rows": 2577},
+    "succession_factor_effect": {"rows": 6674},
+    "succession_factor_addon_effect": {"rows": 2},
+    "succession_initial_factor": {
+      "rows": 13,
+      "full_dump": [
+        {"id": 1, "factor_type": 1, "value_1": 1, "value_2": 0, "add_point": 5},
+        {"id": 2, "factor_type": 1, "value_1": 2, "value_2": 0, "add_point": 12},
+        {"id": 3, "factor_type": 1, "value_1": 3, "value_2": 0, "add_point": 21},
+        {"id": 4, "factor_type": 2, "value_1": 1, "value_2": 3, "add_point": 1},
+        {"id": 5, "factor_type": 2, "value_1": 4, "value_2": 6, "add_point": 2},
+        {"id": 6, "factor_type": 2, "value_1": 7, "value_2": 9, "add_point": 3},
+        {"id": 7, "factor_type": 2, "value_1": 10, "value_2": 999, "add_point": 4},
+        {"id": 8, "factor_type": 1, "value_1": 1, "value_2": 1, "add_point": 4},
+        {"id": 9, "factor_type": 1, "value_1": 2, "value_2": 1, "add_point": 9},
+        {"id": 10, "factor_type": 1, "value_1": 3, "value_2": 1, "add_point": 16},
+        {"id": 11, "factor_type": 3, "value_1": 1, "value_2": 1, "add_point": 0},
+        {"id": 12, "factor_type": 3, "value_1": 2, "value_2": 2, "add_point": 0},
+        {"id": 13, "factor_type": 3, "value_1": 3, "value_2": 4, "add_point": 0}
+      ]
     },
-    "succession_factor_effect": {
-      "rows": 6674,
-      "columns": ["id PK", "factor_group_id", "effect_id", "target_type", "value_1", "value_2"],
-      "indexes": ["idx target_type", "idx (factor_group_id, effect_id)", "idx factor_group_id"]
-    },
-    "succession_factor_addon_effect": {"rows": 2, "full_dump": [
-      {"id": 1, "condition_type": 1, "cv": [31011, 31012, 31013, 0, 0, 0], "factor_id": 3101403},
-      {"id": 2, "condition_type": 2, "cv": [3, 31015, 31016, 31017, 31018, 31019], "factor_id": 3102003}
-    ]},
-    "succession_initial_factor": {"rows": 13, "full_dump": [
-      {"factor_type": 1, "v1": 1, "v2": 0, "add_point": 5},
-      {"factor_type": 1, "v1": 2, "v2": 0, "add_point": 12},
-      {"factor_type": 1, "v1": 3, "v2": 0, "add_point": 21},
-      {"factor_type": 2, "v1": 1, "v2": 3, "add_point": 1},
-      {"factor_type": 2, "v1": 4, "v2": 6, "add_point": 2},
-      {"factor_type": 2, "v1": 7, "v2": 9, "add_point": 3},
-      {"factor_type": 2, "v1": 10, "v2": 999, "add_point": 4},
-      {"factor_type": 1, "v1": 1, "v2": 1, "add_point": 4},
-      {"factor_type": 1, "v1": 2, "v2": 1, "add_point": 9},
-      {"factor_type": 1, "v1": 3, "v2": 1, "add_point": 16},
-      {"factor_type": 3, "v1": 1, "v2": 1, "add_point": 0},
-      {"factor_type": 3, "v1": 2, "v2": 2, "add_point": 0},
-      {"factor_type": 3, "v1": 3, "v2": 4, "add_point": 0}
-    ]},
-    "single_mode_12_factor_bonus": {"rows": 9, "full_dump": [
-      {"factor_group_id": 1, "stratum_type": 1, "bonus_value": 10},
-      {"factor_group_id": 5, "stratum_type": 1, "bonus_value": 6},
-      {"factor_group_id": 2, "stratum_type": 1, "bonus_value": 3},
-      {"factor_group_id": 4, "stratum_type": 2, "bonus_value": 10},
-      {"factor_group_id": 1, "stratum_type": 2, "bonus_value": 6},
-      {"factor_group_id": 3, "stratum_type": 2, "bonus_value": 3},
-      {"factor_group_id": 3, "stratum_type": 3, "bonus_value": 10},
-      {"factor_group_id": 5, "stratum_type": 3, "bonus_value": 6},
-      {"factor_group_id": 2, "stratum_type": 3, "bonus_value": 3}
-    ]}
+    "single_mode_12_factor_bonus": {"rows": 9},
+    "text_data": {"columns": ["id", "category", "index", "text"]}
   },
-
-  "target_types_observed": {
-    "distinct_values": [1, 2, 3, 4, 5, 6, 7, 11, 12, 21, 22, 23, 24, 31, 32, 33, 34, 41, 51, 61, 62, 63, 64, 65],
-    "row_counts": {"t1": 88, "t2": 73, "t3": 88, "t4": 85, "t5": 61, "t6": 52, "t7": 120, "t11_34": "4 each", "t41": 3414, "t51": 7, "t61": 562, "t62": 458, "t63": 634, "t64": 510, "t65": 482}
+  "target_type_semantics": {
+    "1": "speed", "2": "stamina", "3": "power", "4": "guts", "5": "wisdom",
+    "6": "skill_points", "7": "skill_hint", "11_12": "ground_aptitude",
+    "21_24": "distance_aptitude", "31_34": "running_style_aptitude",
+    "41": "race_factor_id", "51": "scenario_factor_id", "61_65": "parent_star_linkage"
   },
-
-  "param_ladder_mainline": {
-    "note": "target_type 1..5 identical shape; effect_id == star-tier slot",
+  "blue_parameter_ladder": {
     "effect_id_to_value1": {"1": 1, "2": 4, "3": 7, "4": 10, "5": 13, "6": 16, "7": 19, "8": 22, "9": 25, "10": 28},
-    "interpretation": "star N cumulative bonus = value_1 at effect_id N; per-star delta = +3 (last step +3)",
-    "variants_present": true
+    "displayed_succession_gain": {"1_star": 3, "2_star": 6, "3_star": 9},
+    "note": "This is succession-event gain and must not be used to explain opening value 63."
   },
-
-  "skill_pt_ladder_t6": {
-    "effect_id_1": [3, 4, 5],
-    "effect_id_2": [6, 8, 10],
-    "effect_id_3": [9, 12, 15]
+  "factor_id_text_mapping": {
+    "note": "factor IDs require text/resource mapping; factor_id is not assumed equal to text_data.id.",
+    "reference_implementation": "WinSaddleAnalyzer uses factor_effects.br index -> text; deserializedb5 is another reference implementation."
   },
-
-  "skill_hint_t7": {"pattern": "(value_1,value_2) = (6,1)/(12,1)/(18,1)", "groups": 40},
-
-  "proper_factors_t11_34": {"star1": 1, "star2": 2},
-
-  "parent_star_t61_example": {
-    "e1": [1], "e2": [1, 2], "e3": [1, 2, 4], "e4": [2, 4, 6], "e5_e10": [2, 3, 4]
-  },
-
-  "memory_snapshot_libil2cpp": {
-    "aslr_note": "addresses are session-instantaneous; file offsets are stable identifiers",
-    "segments": [
-      {"base": "0x78f0026000", "perms": "r--p", "size": 63238144, "hits_63": 36, "sample_offsets": ["0x17FE0", "0x1D3DE9C", "0x27F2C28"]},
-      {"base": "0x78fa22e000", "perms": "rw-p", "size": 51372032, "hot_cluster": "0x79A000-0x7B1000 dense 21/35/63/126", "sample_hits_126": ["0x117E630", "0x1141A8C", "0x1CB6B40"]}
-    ]
-  },
-
-  "endpoint_status_2026_08_26": {
-    "works": ["/mdb/raw?sql=", "/mdb/schema?name=", "/debug/dumpclass?name=", "/il2cpp/static?name=", "/il2cpp/methods?name=", "/il2cpp/search_int?values="],
-    "broken_or_restricted": ["/mdb", "/mdb/raw?table=", "/mdb/search?table=", "/mdb/dl_batch", "/debug/download_table", "/debug/push_table", "/il2cpp/method_detail?class=&method=", "/il2cpp/enum_values (unresolved)", "/inherit/bonus_params (empty outside scenario)"],
-    "hooks": {"meta.sqlcipher": "disabled_v3.24.57"}
+  "memory_snapshot_note": "Runtime virtual addresses are ASLR-dependent; preserve file offsets instead.",
+  "endpoint_status": {
+    "static_sql": "/mdb/raw?sql=... works in SO 3.27.15",
+    "game_tool_called_for_this_update": false,
+    "so_update_needed": false
   }
 }
