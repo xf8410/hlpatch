@@ -7,6 +7,7 @@ on:
     paths:
       - scripts/apply_v32715_home_training_gains.py
       - scripts/apply_v32715_home_training_gains_direct_fix.py
+      - scripts/apply_v32715_ramen_checkpoint_snapshot.py
       - .github/workflows/build-v32715-home-training-gains.yml
 
 permissions:
@@ -26,9 +27,11 @@ jobs:
           python3 scripts/apply_protocol_send_discovery.py
           python3 scripts/apply_v32715_home_training_gains.py
           python3 scripts/apply_v32715_home_training_gains_direct_fix.py
+          python3 scripts/apply_v32715_ramen_checkpoint_snapshot.py
           FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           python3 scripts/apply_v32715_home_training_gains.py
           python3 scripts/apply_v32715_home_training_gains_direct_fix.py
+          python3 scripts/apply_v32715_ramen_checkpoint_snapshot.py
           SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           test "$FIRST" = "$SECOND"
           python3 - <<'PY'
@@ -40,7 +43,9 @@ jobs:
           PY
           cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
           grep -Fq '"/debug/home_training_gains"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/debug/ramen_checkpoint"' hachimi_ura_plugin/src/lib.rs
           test "$(grep -Fc '// ===== v3.27.15 verified direct home gain path =====' hachimi_ura_plugin/src/lib.rs)" = 1
+          test "$(grep -Fc '// ===== v3.27.15 current ramen checkpoint snapshot =====' hachimi_ura_plugin/src/lib.rs)" = 1
           grep -Fq 'let commands = read_ptr_at(home, 0x10);' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'let params = read_ptr_at(command, 0x60);' hachimi_ura_plugin/src/lib.rs
           test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.15"
@@ -67,7 +72,7 @@ jobs:
           SO=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
           test -s "$SO"
           sha256sum "$SO" > SHA256SUMS
-          printf 'version=3.27.15\nsource_commit=%s\nfeature=home_final_training_gains_verified_direct\nendpoint=/debug/home_training_gains\n' "$GITHUB_SHA" > BUILD-MANIFEST.txt
+          printf 'version=3.27.15\nsource_commit=%s\nfeatures=home_final_training_gains_verified_direct,ramen_checkpoint_protocol_snapshot\nendpoints=/debug/home_training_gains,/debug/ramen_checkpoint\n' "$GITHUB_SHA" > BUILD-MANIFEST.txt
       - uses: actions/upload-artifact@v4
         with:
           name: libhachimi_ura-v3.27.15-home-training-gains-${{ github.run_id }}
