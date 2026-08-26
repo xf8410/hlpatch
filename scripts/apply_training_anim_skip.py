@@ -17,15 +17,11 @@ boot_anchor = '"/api/sniff/signup_plaintext",'
 assert boot_anchor in s, "signup boot-safe anchor missing"
 for route in ('"/api/training/anim_skip"', '"/api/training/anim_skip/on"', '"/api/training/anim_skip/off"'):
     if route not in s:
-        s = s.replace(
-            boot_anchor,
-            boot_anchor + "\n    " + route + ",",
-            1,
-        )
+        s = s.replace(boot_anchor, boot_anchor + "\n    " + route + ",", 1)
 
 # 3. route dispatch (exact-path style, mirrors sibling observers)
 route_anchor = '    } else if path == "/api/sniff/signup_plaintext" {\n'
-assert route_anchor in s, f"route anchor missing"
+assert route_anchor in s, "route dispatch anchor missing"
 dispatch_block = (
     '    } else if path == "/api/training/anim_skip" {\n'
     "        training_anim_skip::endpoint()\n"
@@ -36,15 +32,16 @@ dispatch_block = (
 )
 s = s.replace(route_anchor, dispatch_block + route_anchor, 1)
 
-# 4. installer invocation near other observers' install sites
-install_anchor = "keychain_source_observer::install();"
-if install_anchor in s:
-    s = s.replace(install_anchor, install_anchor + "\n    training_anim_skip::install();", 1)
-else:
-    import re
-    m = re.search(r"^(\s*)(\w+_observer::install\(\);)", s, re.M)
-    assert m, "no observer install anchor found"
-    s = s[: m.end()] + "\n" + m.group(1) + "training_anim_skip::install();" + s[m.end():]
+# 4. installer invocation: piggyback on install_api_sniff_hooks, which the
+# game calls during initialization, fallback probing and manual toggles.
+# Same pattern as the TextCommon observer integration.
+install_anchor = "unsafe fn install_api_sniff_hooks() {\n"
+assert s.count(install_anchor) == 1, f"install anchor count={s.count(install_anchor)}"
+s = s.replace(
+    install_anchor,
+    install_anchor + "    training_anim_skip::install();\n",
+    1,
+)
 
 # 5. source marker for idempotency bookkeeping
 source_anchor = "/// 辅助函数：IL2CPP类型枚举转可读名称\n"
