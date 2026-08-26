@@ -8,6 +8,7 @@ on:
       - scripts/apply_v32715_home_training_gains.py
       - scripts/apply_v32715_home_training_gains_direct_fix.py
       - scripts/apply_v32715_ramen_checkpoint_snapshot.py
+      - scripts/apply_v32715_home_training_gains_runtime_fix.py
       - .github/workflows/build-v32715-home-training-gains.yml
 
 permissions:
@@ -18,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Generate v3.27.15 source and apply complete observation hotfix
+      - name: Generate source and apply complete observation fixes
         run: |
           set -euo pipefail
           python3 scripts/run_generated_succession_l_cumulative.py
@@ -28,10 +29,12 @@ jobs:
           python3 scripts/apply_v32715_home_training_gains.py
           python3 scripts/apply_v32715_home_training_gains_direct_fix.py
           python3 scripts/apply_v32715_ramen_checkpoint_snapshot.py
+          python3 scripts/apply_v32715_home_training_gains_runtime_fix.py
           FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           python3 scripts/apply_v32715_home_training_gains.py
           python3 scripts/apply_v32715_home_training_gains_direct_fix.py
           python3 scripts/apply_v32715_ramen_checkpoint_snapshot.py
+          python3 scripts/apply_v32715_home_training_gains_runtime_fix.py
           SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
           test "$FIRST" = "$SECOND"
           python3 - <<'PY'
@@ -42,13 +45,9 @@ jobs:
           p.write_text(s)
           PY
           cargo generate-lockfile --manifest-path hachimi_ura_plugin/Cargo.toml
-          for route in /debug/home_training_gains /debug/ramen_checkpoint /debug/ramen_runtime /debug/ramen_transitions_v2 /training/result; do
-            grep -Fq "\"$route\"" hachimi_ura_plugin/src/lib.rs
-          done
-          test "$(grep -Fc '// ===== v3.27.15 verified direct home gain path =====' hachimi_ura_plugin/src/lib.rs)" = 1
-          test "$(grep -Fc '// ===== v3.27.15 complete ramen runtime snapshot =====' hachimi_ura_plugin/src/lib.rs)" = 1
-          grep -Fq 'let commands = read_ptr_at(home, 0x10);' hachimi_ura_plugin/src/lib.rs
-          grep -Fq 'let params = read_ptr_at(command, 0x60);' hachimi_ura_plugin/src/lib.rs
+          for route in /debug/home_training_gains /debug/ramen_checkpoint /debug/ramen_runtime /debug/ramen_transitions_v2 /training/result; do grep -Fq "\"$route\"" hachimi_ura_plugin/src/lib.rs; done
+          grep -Fq 'HomeInfo runtime command-array resolution' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'no_valid_runtime_array' hachimi_ura_plugin/src/lib.rs
           grep -Fq '"semantic_verified":false' hachimi_ura_plugin/src/lib.rs
           test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.15"
           grep -A1 -F 'name = "hachimi_ura"' hachimi_ura_plugin/Cargo.lock | grep -Fq 'version = "3.27.15"'
@@ -65,6 +64,7 @@ jobs:
           CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
           CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
           HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
         run: cargo build --locked --target aarch64-linux-android --release 2>&1 | tee build-v32715-home-training-gains.log
@@ -74,7 +74,7 @@ jobs:
           SO=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
           test -s "$SO"
           sha256sum "$SO" > SHA256SUMS
-          printf 'version=3.27.15\nsource_commit=%s\nfeatures=home_final_training_gains_verified_direct,ramen_checkpoint_snapshot,complete_ramen_runtime_snapshot,protocol_transition_timeline,honest_training_result\nendpoints=/debug/home_training_gains,/debug/ramen_checkpoint,/debug/ramen_runtime,/debug/ramen_transitions_v2,/training/result\n' "$GITHUB_SHA" > BUILD-MANIFEST.txt
+          printf 'version=3.27.15\nsource_commit=%s\nfeatures=home_final_training_gains_runtime_resolver,complete_ramen_runtime_snapshot,protocol_transition_timeline,honest_training_result\nendpoints=/debug/home_training_gains,/debug/ramen_checkpoint,/debug/ramen_runtime,/debug/ramen_transitions_v2,/training/result\n' "$GITHUB_SHA" > BUILD-MANIFEST.txt
       - uses: actions/upload-artifact@v4
         with:
           name: libhachimi_ura-v3.27.15-complete-observation-${{ github.run_id }}
