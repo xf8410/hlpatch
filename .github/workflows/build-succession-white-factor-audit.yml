@@ -1,0 +1,82 @@
+name: Build Succession White Factor Audit
+
+on:
+  push:
+    branches:
+      - workbench/succession-white-factor-audit-20260827
+    paths:
+      - scripts/apply_succession_white_factor_audit.py
+      - .github/workflows/build-succession-white-factor-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate cumulative source and apply audit feature
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/apply_succession_white_factor_audit.py
+          python3 scripts/apply_succession_white_factor_audit.py
+          grep -Fq 'Succession white-factor static lookup and runtime audit Q-stage' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'path == "/inherit/factor_static"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'path == "/inherit/factors_static"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'path == "/inherit/audit/events"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'SuccessionBonusParams.ApplyFactor' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'GetBonusValueByType' hachimi_ura_plugin/src/lib.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          for path in (Path('hachimi_ura_plugin/Cargo.toml'), Path('hachimi_ura_plugin/Cargo.lock')):
+              text=path.read_text(encoding='utf-8')
+              if path.name == 'Cargo.toml':
+                  import re
+                  text=re.sub(r'(?m)^version = "[^"]+"$', 'version = "3.27.22"', text, count=1)
+              else:
+                  text=text.replace('name = "hachimi_ura"\nversion = "3.27.11"','name = "hachimi_ura"\nversion = "3.27.22"',1)
+              path.write_text(text,encoding='utf-8')
+          PY
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
+        run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee succession-audit-cargo.log
+      - name: Prepare artifact manifest
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          sha256sum "$ASSET" > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          version=3.27.22
+          build_kind=artifact_only
+          feature=succession_white_factor_static_lookup_and_runtime_audit
+          endpoints=/inherit/factor_static,/inherit/factors_static,/inherit/audit/events,/inherit/audit/clear
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhachimi_ura-succession-white-factor-audit-${{ github.run_id }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/succession-audit-cargo.log
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: warn
