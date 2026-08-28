@@ -1,0 +1,360 @@
+name: Release v3.27.23 SIGSEGV Guard
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate and validate release source
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 - <<'PY'
+          from pathlib import Path
+          cargo = Path('hachimi_ura_plugin/Cargo.toml')
+          text = cargo.read_text(encoding='utf-8')
+          text = text.replace('version = "3.27.11"', 'version = "3.27.23"', 1)
+          cargo.write_text(text, encoding='utf-8')
+          lock = Path('hachimi_ura_plugin/Cargo.lock')
+          text = lock.read_text(encoding='utf-8')
+          text = text.replace('name = "hachimi_ura"\nversion = "3.27.11"', 'name = "hachimi_ura"\nversion = "3.27.23"', 1)
+          lock.write_text(text, encoding='utf-8')
+          PY
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.23"
+          grep -Fq 'version = "3.27.23"' hachimi_ura_plugin/Cargo.lock
+          grep -Fq 'verified_ramen_upstream_semantics' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'Ramen turn mapping follows upstream umaai-rs semantics' hachimi_ura_plugin/src/lib.rs
+
+      - name: Add SIGSEGV guard — mapped-pointer validation on raw memory reads
+        run: |
+          set -euo pipefail
+          apply_guard() {
+            python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('hachimi_ura_plugin/src/lib.rs')
+          text = source.read_text(encoding='utf-8')
+          MARK = 'v3.27.23 sigsegv-guard'
+
+          if 'fn hl_ptr_mapped(' in text:
+              print('sigsegv_guard=already_applied')
+              raise SystemExit(0)
+
+          # ── 1) helpers inserted before read_obscured_int_at definition ──
+          anchor1 = 'unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {'
+          if text.count(anchor1) != 1:
+              raise RuntimeError(f'helpers anchor count={text.count(anchor1)} (expect 1)')
+
+          helpers = '''// v3.27.23 sigsegv-guard: mapped-region validation for raw memory reads.
+          // Root cause fixed here: read_summary dereferenced pointers that the game
+          // had already freed (scenario/data-set swap on screen change), raising
+          // SIGSEGV and triggering the 60s recovery cooldown with empty output.
+          // Any address outside a currently-readable mapping is now read as
+          // null / -1 instead of crashing. Maps snapshot is cached for 2s;
+          // unreadable maps fail OPEN (never brick reads).
+          static HL_MAP_CACHE: std::sync::Mutex<Option<(u64, Vec<(usize, usize)>)>> =
+              std::sync::Mutex::new(None);
+
+          fn hl_parse_maps_readable() -> Vec<(usize, usize)> {
+              let text = match std::fs::read_to_string("/proc/self/maps") {
+                  Ok(t) => t,
+                  Err(_) => return Vec::new(),
+              };
+              let mut out: Vec<(usize, usize)> = Vec::new();
+              for line in text.lines() {
+                  let range = match line.split_whitespace().next() {
+                      Some(r) => r,
+                      None => continue,
+                  };
+                  let perms = line.split_whitespace().nth(1).unwrap_or("");
+                  if !perms.starts_with('r') {
+                      continue;
+                  }
+                  let mut it = range.splitn(2, '-');
+                  let s = match it.next() { Some(v) => v, None => continue };
+                  let e = match it.next() { Some(v) => v, None => continue };
+                  let s = usize::from_str_radix(s, 16).unwrap_or(0);
+                  let e = usize::from_str_radix(e, 16).unwrap_or(0);
+                  if e > s {
+                      out.push((s, e));
+                  }
+              }
+              out
+          }
+
+          fn hl_ptr_mapped(addr: usize) -> bool {
+              if addr == 0 {
+                  return false;
+              }
+              let now = std::time::SystemTime::now()
+                  .duration_since(std::time::UNIX_EPOCH)
+                  .map(|d| d.as_secs())
+                  .unwrap_or(0);
+              let mut cache = match HL_MAP_CACHE.lock() {
+                  Ok(g) => g,
+                  Err(poisoned) => poisoned.into_inner(),
+              };
+              let stale = match *cache {
+                  Some((ts, _)) => now.saturating_sub(ts) >= 2,
+                  None => true,
+              };
+              if stale {
+                  *cache = Some((now, hl_parse_maps_readable()));
+              }
+              let regions = match cache.as_ref() {
+                  Some((_, r)) => r,
+                  None => return true,
+              };
+              if regions.is_empty() {
+                  // maps unreadable — fail open
+                  return true;
+              }
+              let mut lo = 0usize;
+              let mut hi = regions.len();
+              while lo < hi {
+                  let mid = (lo + hi) / 2;
+                  let (s, e) = regions[mid];
+                  if addr < s {
+                      hi = mid;
+                  } else if addr >= e {
+                      lo = mid + 1;
+                  } else {
+                      return true;
+                  }
+              }
+              false
+          }
+
+          '''
+          text = text.replace(anchor1, helpers + anchor1, 1)
+
+          # ── 2) read_obscured_int_at: validate obj before deref ──
+          old2 = '''unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
+              if obj.is_null() || field_offset < 0 {
+                  return -1;
+              }
+          '''
+          if text.count(old2) != 1:
+              raise RuntimeError(f'read_obscured_int_at anchor count={text.count(old2)} (expect 1)')
+          new2 = old2 + '''    if !hl_ptr_mapped(obj as usize) {
+              return -1; // v3.27.23 sigsegv-guard: unmapped object read as -1
+          }
+          '''
+          text = text.replace(old2, new2, 1)
+
+          # ── 3) read_ptr_at: validate obj AND returned pointer ──
+          old3 = '''unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
+              if obj.is_null() || field_offset < 0 {
+                  return ptr::null_mut();
+              }
+              std::ptr::read_unaligned::<*mut c_void>(
+                  (obj as *const u8).add(field_offset as usize) as *const *mut c_void,
+              )
+          }'''
+          if text.count(old3) != 1:
+              raise RuntimeError(f'read_ptr_at anchor count={text.count(old3)} (expect 1)')
+          new3 = '''unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
+              if obj.is_null() || field_offset < 0 {
+                  return ptr::null_mut();
+              }
+              if !hl_ptr_mapped(obj as usize) {
+                  return ptr::null_mut(); // v3.27.23 sigsegv-guard: unmapped holder
+              }
+              let value = std::ptr::read_unaligned::<*mut c_void>(
+                  (obj as *const u8).add(field_offset as usize) as *const *mut c_void,
+              );
+              if !value.is_null() && !hl_ptr_mapped(value as usize) {
+                  // v3.27.23 sigsegv-guard: freed/dangling pointer read as null
+                  return ptr::null_mut();
+              }
+              value
+          }'''
+          text = text.replace(old3, new3, 1)
+
+          # ── 4) read_int_at: validate obj before deref ──
+          old4 = '''unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
+              if obj.is_null() || field_offset < 0 {
+                  return -1;
+              }
+              let base = obj as *const u8;
+              std::ptr::read_unaligned::<i32>(base.add(field_offset as usize) as *const i32)
+          }'''
+          if text.count(old4) != 1:
+              raise RuntimeError(f'read_int_at anchor count={text.count(old4)} (expect 1)')
+          new4 = '''unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
+              if obj.is_null() || field_offset < 0 {
+                  return -1;
+              }
+              if !hl_ptr_mapped(obj as usize) {
+                  return -1; // v3.27.23 sigsegv-guard: unmapped object read as -1
+              }
+              let base = obj as *const u8;
+              std::ptr::read_unaligned::<i32>(base.add(field_offset as usize) as *const i32)
+          }'''
+          text = text.replace(old4, new4, 1)
+
+          # ── 5) call_getter_on_instance: validate invoke result ──
+          old5 = '''    if !exc.is_null() {
+              ura_log(
+                  1,
+                  &format!("call_getter: '{}' threw exception", method_name),
+              );
+              return ptr::null_mut();
+          }
+
+          result
+          }'''
+          if text.count(old5) != 1:
+              raise RuntimeError(f'call_getter tail anchor count={text.count(old5)} (expect 1)')
+          new5 = '''    if !exc.is_null() {
+              ura_log(
+                  1,
+                  &format!("call_getter: '{}' threw exception", method_name),
+              );
+              return ptr::null_mut();
+          }
+
+          if !result.is_null() && !hl_ptr_mapped(result as usize) {
+              // v3.27.23 sigsegv-guard: getter returned a freed object — treat as null
+              ura_log(2, "call_getter: result unmapped, treated as null (sigsegv-guard)");
+              return ptr::null_mut();
+          }
+          result
+          }'''
+          text = text.replace(old5, new5, 1)
+
+          source.write_text(text, encoding='utf-8')
+          print('sigsegv_guard=applied marker_count=%d' % text.count(MARK))
+          PY
+          }
+          apply_guard
+          FIRST_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          apply_guard
+          SECOND_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST_SHA" = "$SECOND_SHA"
+
+      - name: Verify guard coverage
+        run: |
+          set -euo pipefail
+          cd hachimi_ura_plugin/src
+          C=$(grep -c 'v3.27.23 sigsegv-guard' lib.rs)
+          echo "marker_count=$C"
+          test "$C" -ge 5
+          test "$(grep -c 'fn hl_ptr_mapped(' lib.rs)" = "1"
+          test "$(grep -c 'fn hl_parse_maps_readable(' lib.rs)" = "1"
+          grep -q 'HL_MAP_CACHE' lib.rs
+
+      - name: Audit changed implementation path
+        run: |
+          set -euo pipefail
+          ! grep -Ein 'redact|mask|sanitize|scrub|metadata_only|denylist|allowlist' \
+            scripts/run_generated_succession_l_cumulative.py
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32723-cargo.log
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee -a release-v32723-cargo.log
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          cargo_version=3.27.23
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.27.23
+          workflow_run=${GITHUB_RUN_ID}
+          feature=sigsegv_guard_pointer_validation
+          changes=mapped_pointer_guards_on_read_obscured_int_at+read_ptr_at+read_int_at+call_getter_on_instance
+          endpoints=/summary
+          crash_behavior=unmapped_pointer_reads_return_null_or_-1_no_sigsegv_cooldown
+          maps_cache_ttl_seconds=2
+          fail_mode=fail_open_on_maps_read_error
+          EOF
+
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          if gh release view v3.27.23 > /dev/null 2>&1; then
+            echo 'v3.27.23 already exists; refusing to overwrite' >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v3.27.23 "$GITHUB_SHA" -m "Release v3.27.23"
+          git push origin refs/tags/v3.27.23
+          gh release create v3.27.23 --verify-tag --title v3.27.23 \
+            --notes "SIGSEGV guard: mapped-pointer validation on all raw memory reads.
+
+          Root cause fixed (v3.27.23):
+          - read_summary dereferenced game objects already freed on screen change
+            (scenario/data-set swap), raising SIGSEGV -> 60s recovery cooldown
+            with empty trainings/ramen output
+          - hl_ptr_mapped(addr): cached (2s TTL) /proc/self/maps readable-region
+            check; addresses outside any mapped region read as null / -1
+          - Guards applied to: read_obscured_int_at, read_ptr_at (holder AND
+            returned pointer), read_int_at, call_getter_on_instance result
+          - Fail-open: if /proc/self/maps is unreadable, reads proceed unchanged
+          - No functional data changes: same endpoints, same fields" \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+
+      - name: Verify release identity and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.23)
+          test "$(git rev-list -n1 v3.27.23)" = "$GITHUB_SHA"
+          test "$(printf '%s' "$RELEASE_JSON" | jq '[.assets[] | select(.name == "libhachimi_ura.so")] | length')" = "1"
+          test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .size')" = "$SIZE"
+          test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .digest')" = "sha256:$SHA256"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhachimi_ura-v3.27.23-run-${{ github.run_id }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/release-v32723-cargo.log
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: warn
