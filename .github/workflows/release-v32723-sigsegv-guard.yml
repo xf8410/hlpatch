@@ -34,7 +34,7 @@ jobs:
           grep -Fq 'verified_ramen_upstream_semantics' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'Ramen turn mapping follows upstream umaai-rs semantics' hachimi_ura_plugin/src/lib.rs
 
-      - name: Add SIGSEGV guard — wrapper rename strategy (no body assumptions)
+      - name: Add SIGSEGV guard — rename first, then insert wrappers
         run: |
           set -euo pipefail
           apply_guard() {
@@ -49,14 +49,29 @@ jobs:
               print('sigsegv_guard=already_applied')
               raise SystemExit(0)
 
-          # 策略：不做任何函数体匹配（生成器函数体会漂移，v1 曾因此锚点失配）。
-          # 只锚定函数签名行（count==1 断言），把原函数改名为 _inner，
-          # 在 helpers 块里追加同名包装函数做映射校验——原函数体原样保留。
+          # v3 顺序：先改名，再插块。
+          # （v2 教训：先插块会让 rename 锚点同时命中包装函数定义 → count=2）
+          # 只锚函数签名行，不碰任何函数体（生成器函数体会漂移）。
 
-          # ── 1) helpers + wrappers 插在 read_obscured_int_at 定义之前 ──
-          anchor_roia = 'unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {'
-          if text.count(anchor_roia) != 1:
-              raise RuntimeError(f'roia def anchor count={text.count(anchor_roia)} (expect 1)')
+          # ── 1) 原函数改名 _inner（此时文件里签名行必然唯一，count==1 断言）──
+          renames = [
+              ('unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {',
+               'unsafe fn read_obscured_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'),
+              ('unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {',
+               'unsafe fn read_ptr_at_inner(obj: *const c_void, field_offset: i32) -> *mut c_void {'),
+              ('unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {',
+               'unsafe fn read_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'),
+          ]
+          for old, new in renames:
+              c = text.count(old)
+              if c != 1:
+                  raise RuntimeError(f'rename anchor count={c} (expect 1): {old[:60]}')
+              text = text.replace(old, new, 1)
+
+          # ── 2) helpers + 同名包装插在 read_obscured_int_at_inner 定义之前 ──
+          anchor = 'unsafe fn read_obscured_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'
+          if text.count(anchor) != 1:
+              raise RuntimeError(f'insert anchor count={text.count(anchor)} (expect 1)')
 
           block = '''// v3.27.23 sigsegv-guard: mapped-region validation for raw memory reads.
           // Root cause: read_summary dereferenced game objects already freed on
@@ -64,8 +79,8 @@ jobs:
           // recovery cooldown with empty trainings/ramen output. Any address
           // outside a currently-readable mapping is now read as null / -1.
           // Maps snapshot cached 2s; unreadable maps fail OPEN (never brick reads).
-          // Original read helpers are renamed to *_inner; same-name wrappers add
-          // the guard without assuming anything about the original bodies.
+          // Original helpers renamed *_inner; same-name wrappers add the guard
+          // without assuming anything about the original bodies.
           static HL_MAP_CACHE: std::sync::Mutex<Option<(u64, Vec<(usize, usize)>)>> =
               std::sync::Mutex::new(None);
 
@@ -167,22 +182,7 @@ jobs:
           }
 
           '''
-          text = text.replace(anchor_roia, block + anchor_roia, 1)
-
-          # ── 2) 原函数改名 _inner（签名行 count==1 断言，函数体不动）──
-          renames = [
-              ('unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {',
-               'unsafe fn read_obscured_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'),
-              ('unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {',
-               'unsafe fn read_ptr_at_inner(obj: *const c_void, field_offset: i32) -> *mut c_void {'),
-              ('unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {',
-               'unsafe fn read_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'),
-          ]
-          for old, new in renames:
-              c = text.count(old)
-              if c != 1:
-                  raise RuntimeError(f'rename anchor count={c} (expect 1): {old[:60]}')
-              text = text.replace(old, new, 1)
+          text = text.replace(anchor, block + anchor, 1)
 
           source.write_text(text, encoding='utf-8')
           print('sigsegv_guard=applied marker_count=%d' % text.count(MARK))
