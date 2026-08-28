@@ -34,7 +34,7 @@ jobs:
           grep -Fq 'verified_ramen_upstream_semantics' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'Ramen turn mapping follows upstream umaai-rs semantics' hachimi_ura_plugin/src/lib.rs
 
-      - name: Add SIGSEGV guard — mapped-pointer validation on raw memory reads
+      - name: Add SIGSEGV guard — wrapper rename strategy (no body assumptions)
         run: |
           set -euo pipefail
           apply_guard() {
@@ -49,18 +49,23 @@ jobs:
               print('sigsegv_guard=already_applied')
               raise SystemExit(0)
 
-          # ── 1) helpers inserted before read_obscured_int_at definition ──
-          anchor1 = 'unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {'
-          if text.count(anchor1) != 1:
-              raise RuntimeError(f'helpers anchor count={text.count(anchor1)} (expect 1)')
+          # 策略：不做任何函数体匹配（生成器函数体会漂移，v1 曾因此锚点失配）。
+          # 只锚定函数签名行（count==1 断言），把原函数改名为 _inner，
+          # 在 helpers 块里追加同名包装函数做映射校验——原函数体原样保留。
 
-          helpers = '''// v3.27.23 sigsegv-guard: mapped-region validation for raw memory reads.
-          // Root cause fixed here: read_summary dereferenced pointers that the game
-          // had already freed (scenario/data-set swap on screen change), raising
-          // SIGSEGV and triggering the 60s recovery cooldown with empty output.
-          // Any address outside a currently-readable mapping is now read as
-          // null / -1 instead of crashing. Maps snapshot is cached for 2s;
-          // unreadable maps fail OPEN (never brick reads).
+          # ── 1) helpers + wrappers 插在 read_obscured_int_at 定义之前 ──
+          anchor_roia = 'unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {'
+          if text.count(anchor_roia) != 1:
+              raise RuntimeError(f'roia def anchor count={text.count(anchor_roia)} (expect 1)')
+
+          block = '''// v3.27.23 sigsegv-guard: mapped-region validation for raw memory reads.
+          // Root cause: read_summary dereferenced game objects already freed on
+          // screen change (scenario/data-set swap), raising SIGSEGV -> 60s
+          // recovery cooldown with empty trainings/ramen output. Any address
+          // outside a currently-readable mapping is now read as null / -1.
+          // Maps snapshot cached 2s; unreadable maps fail OPEN (never brick reads).
+          // Original read helpers are renamed to *_inner; same-name wrappers add
+          // the guard without assuming anything about the original bodies.
           static HL_MAP_CACHE: std::sync::Mutex<Option<(u64, Vec<(usize, usize)>)>> =
               std::sync::Mutex::new(None);
 
@@ -115,8 +120,7 @@ jobs:
                   None => return true,
               };
               if regions.is_empty() {
-                  // maps unreadable — fail open
-                  return true;
+                  return true; // maps unreadable — fail open
               }
               let mut lo = 0usize;
               let mut hi = regions.len();
@@ -134,103 +138,51 @@ jobs:
               false
           }
 
-          '''
-          text = text.replace(anchor1, helpers + anchor1, 1)
-
-          # ── 2) read_obscured_int_at: validate obj before deref ──
-          old2 = '''unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
-              if obj.is_null() || field_offset < 0 {
-                  return -1;
-              }
-          '''
-          if text.count(old2) != 1:
-              raise RuntimeError(f'read_obscured_int_at anchor count={text.count(old2)} (expect 1)')
-          new2 = old2 + '''    if !hl_ptr_mapped(obj as usize) {
-              return -1; // v3.27.23 sigsegv-guard: unmapped object read as -1
-          }
-          '''
-          text = text.replace(old2, new2, 1)
-
-          # ── 3) read_ptr_at: validate obj AND returned pointer ──
-          old3 = '''unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
-              if obj.is_null() || field_offset < 0 {
-                  return ptr::null_mut();
-              }
-              std::ptr::read_unaligned::<*mut c_void>(
-                  (obj as *const u8).add(field_offset as usize) as *const *mut c_void,
-              )
-          }'''
-          if text.count(old3) != 1:
-              raise RuntimeError(f'read_ptr_at anchor count={text.count(old3)} (expect 1)')
-          new3 = '''unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
-              if obj.is_null() || field_offset < 0 {
-                  return ptr::null_mut();
-              }
+          // v3.27.23 sigsegv-guard wrapper: unmapped holder or returned pointer -> null
+          unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
               if !hl_ptr_mapped(obj as usize) {
-                  return ptr::null_mut(); // v3.27.23 sigsegv-guard: unmapped holder
+                  return std::ptr::null_mut();
               }
-              let value = std::ptr::read_unaligned::<*mut c_void>(
-                  (obj as *const u8).add(field_offset as usize) as *const *mut c_void,
-              );
+              let value = read_ptr_at_inner(obj, field_offset);
               if !value.is_null() && !hl_ptr_mapped(value as usize) {
-                  // v3.27.23 sigsegv-guard: freed/dangling pointer read as null
-                  return ptr::null_mut();
+                  return std::ptr::null_mut(); // freed/dangling pointer read as null
               }
               value
-          }'''
-          text = text.replace(old3, new3, 1)
+          }
 
-          # ── 4) read_int_at: validate obj before deref ──
-          old4 = '''unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
-              if obj.is_null() || field_offset < 0 {
-                  return -1;
-              }
-              let base = obj as *const u8;
-              std::ptr::read_unaligned::<i32>(base.add(field_offset as usize) as *const i32)
-          }'''
-          if text.count(old4) != 1:
-              raise RuntimeError(f'read_int_at anchor count={text.count(old4)} (expect 1)')
-          new4 = '''unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
-              if obj.is_null() || field_offset < 0 {
-                  return -1;
-              }
+          // v3.27.23 sigsegv-guard wrapper: unmapped holder -> -1
+          unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
               if !hl_ptr_mapped(obj as usize) {
-                  return -1; // v3.27.23 sigsegv-guard: unmapped object read as -1
+                  return -1;
               }
-              let base = obj as *const u8;
-              std::ptr::read_unaligned::<i32>(base.add(field_offset as usize) as *const i32)
-          }'''
-          text = text.replace(old4, new4, 1)
-
-          # ── 5) call_getter_on_instance: validate invoke result ──
-          old5 = '''    if !exc.is_null() {
-              ura_log(
-                  1,
-                  &format!("call_getter: '{}' threw exception", method_name),
-              );
-              return ptr::null_mut();
+              read_obscured_int_at_inner(obj, field_offset)
           }
 
-          result
-          }'''
-          if text.count(old5) != 1:
-              raise RuntimeError(f'call_getter tail anchor count={text.count(old5)} (expect 1)')
-          new5 = '''    if !exc.is_null() {
-              ura_log(
-                  1,
-                  &format!("call_getter: '{}' threw exception", method_name),
-              );
-              return ptr::null_mut();
+          // v3.27.23 sigsegv-guard wrapper: unmapped holder -> -1
+          unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
+              if !hl_ptr_mapped(obj as usize) {
+                  return -1;
+              }
+              read_int_at_inner(obj, field_offset)
           }
 
-          if !result.is_null() && !hl_ptr_mapped(result as usize) {
-              // v3.27.23 sigsegv-guard: getter returned a freed object — treat as null
-              ura_log(2, "call_getter: result unmapped, treated as null (sigsegv-guard)");
-              return ptr::null_mut();
-          }
-          result
-          }'''
-          text = text.replace(old5, new5, 1)
+          '''
+          text = text.replace(anchor_roia, block + anchor_roia, 1)
+
+          # ── 2) 原函数改名 _inner（签名行 count==1 断言，函数体不动）──
+          renames = [
+              ('unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {',
+               'unsafe fn read_obscured_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'),
+              ('unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {',
+               'unsafe fn read_ptr_at_inner(obj: *const c_void, field_offset: i32) -> *mut c_void {'),
+              ('unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {',
+               'unsafe fn read_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'),
+          ]
+          for old, new in renames:
+              c = text.count(old)
+              if c != 1:
+                  raise RuntimeError(f'rename anchor count={c} (expect 1): {old[:60]}')
+              text = text.replace(old, new, 1)
 
           source.write_text(text, encoding='utf-8')
           print('sigsegv_guard=applied marker_count=%d' % text.count(MARK))
@@ -248,9 +200,15 @@ jobs:
           cd hachimi_ura_plugin/src
           C=$(grep -c 'v3.27.23 sigsegv-guard' lib.rs)
           echo "marker_count=$C"
-          test "$C" -ge 5
+          test "$C" -ge 4
           test "$(grep -c 'fn hl_ptr_mapped(' lib.rs)" = "1"
           test "$(grep -c 'fn hl_parse_maps_readable(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_ptr_at(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_ptr_at_inner(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_obscured_int_at(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_obscured_int_at_inner(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_int_at(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_int_at_inner(' lib.rs)" = "1"
           grep -q 'HL_MAP_CACHE' lib.rs
 
       - name: Audit changed implementation path
@@ -298,7 +256,9 @@ jobs:
           tag=v3.27.23
           workflow_run=${GITHUB_RUN_ID}
           feature=sigsegv_guard_pointer_validation
-          changes=mapped_pointer_guards_on_read_obscured_int_at+read_ptr_at+read_int_at+call_getter_on_instance
+          strategy=wrapper_rename_no_body_assumptions
+          guarded=read_obscured_int_at+read_ptr_at(holder_and_value)+read_int_at
+          known_residual=getter_result_direct_klass_derefs_unguarded
           endpoints=/summary
           crash_behavior=unmapped_pointer_reads_return_null_or_-1_no_sigsegv_cooldown
           maps_cache_ttl_seconds=2
@@ -320,7 +280,7 @@ jobs:
           git tag -a v3.27.23 "$GITHUB_SHA" -m "Release v3.27.23"
           git push origin refs/tags/v3.27.23
           gh release create v3.27.23 --verify-tag --title v3.27.23 \
-            --notes "SIGSEGV guard: mapped-pointer validation on all raw memory reads.
+            --notes "SIGSEGV guard: mapped-pointer validation on raw memory reads.
 
           Root cause fixed (v3.27.23):
           - read_summary dereferenced game objects already freed on screen change
@@ -328,8 +288,11 @@ jobs:
             with empty trainings/ramen output
           - hl_ptr_mapped(addr): cached (2s TTL) /proc/self/maps readable-region
             check; addresses outside any mapped region read as null / -1
-          - Guards applied to: read_obscured_int_at, read_ptr_at (holder AND
-            returned pointer), read_int_at, call_getter_on_instance result
+          - Strategy: original helpers renamed *_inner (bodies untouched);
+            same-name wrappers add the guard — zero assumptions about generated
+            function bodies
+          - Guarded: read_obscured_int_at, read_ptr_at (holder AND returned
+            pointer), read_int_at
           - Fail-open: if /proc/self/maps is unreadable, reads proceed unchanged
           - No functional data changes: same endpoints, same fields" \
             "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
