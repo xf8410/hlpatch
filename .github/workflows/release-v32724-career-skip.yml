@@ -122,7 +122,7 @@ jobs:
                   None => true,
               };
               if stale {
-                  cache = Some((now, hl_parse_maps_readable()));
+                  *cache = Some((now, hl_parse_maps_readable()));
               }
               let regions = match cache.as_ref() {
                   Some((_, r)) => r,
@@ -270,7 +270,7 @@ jobs:
           cd hachimi_ura_plugin/src
           test "$(grep -c 'mod career_skip;' lib.rs)" = "1"
           test "$(grep -c 'career_skip::handle' lib.rs)" = "1"
-          grep -Fq 'pub unsafe fn handle' career_skip.rs
+          grep -Fq 'pub fn handle' career_skip.rs
           grep -Fq 'set_IsEnableSuperHighSpeedSkip' career_skip.rs
           grep -Fq 'get_SaveLoader' career_skip.rs
           grep -Fq '/skip/enable' career_skip.rs
