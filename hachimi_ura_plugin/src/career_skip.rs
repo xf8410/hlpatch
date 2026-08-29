@@ -27,15 +27,23 @@
 use std::ffi::c_void;
 
 /// Route entry — return Some(body) if this module owns the path.
-pub unsafe fn handle(path: &str) -> Option<String> {
-    if path == "/skip/status" {
-        Some(skip_status())
-    } else if path == "/skip/enable" {
-        Some(skip_set(true))
-    } else if path == "/skip/disable" {
-        Some(skip_set(false))
-    } else {
-        None
+/// MUST be a safe fn: the lib.rs route chain runs in a safe context
+/// (E0133 otherwise). Panic guard mirrors lib.rs's own read_summary pattern.
+pub fn handle(path: &str) -> Option<String> {
+    match path {
+        "/skip/status" => Some(
+            std::panic::catch_unwind(|| unsafe { skip_status() })
+                .unwrap_or_else(|_| r#"{"ok":false,"error":"career_skip_panic_caught"}"#.to_string()),
+        ),
+        "/skip/enable" => Some(
+            std::panic::catch_unwind(|| unsafe { skip_set(true) })
+                .unwrap_or_else(|_| r#"{"ok":false,"error":"career_skip_panic_caught"}"#.to_string()),
+        ),
+        "/skip/disable" => Some(
+            std::panic::catch_unwind(|| unsafe { skip_set(false) })
+                .unwrap_or_else(|_| r#"{"ok":false,"error":"career_skip_panic_caught"}"#.to_string()),
+        ),
+        _ => None,
     }
 }
 
