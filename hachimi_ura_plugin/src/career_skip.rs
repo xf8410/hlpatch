@@ -19,9 +19,12 @@
 //!   GET /skip/disable  — flag=false
 //!
 //! All calls are local il2cpp_runtime_invoke; zero network traffic.
-//! This module is self-contained: it only uses crate-root helpers
-//! (find_class_by_short_name / get_singleton / call_getter_* / read_int_at /
-//!  resolve_il2cpp_symbol / get_class_from_object / ura_log / get_image).
+//! Self-contained: uses only crate-root helpers (find_class_by_short_name /
+//! get_singleton / call_getter_ref / call_getter_bool / call_getter_int /
+//! read_int_at / resolve_il2cpp_symbol / get_class_from_object / ura_log /
+//! get_image / to_cstr / FnRuntimeInvoke / FnClassGetMethodFromName).
+
+use std::ffi::c_void;
 
 /// Route entry — return Some(body) if this module owns the path.
 pub unsafe fn handle(path: &str) -> Option<String> {
@@ -64,7 +67,7 @@ unsafe fn invoke_set_bool(
         return false;
     }
     // il2cpp_runtime_invoke expects argv entries pointing at unboxed value data.
-    // bool param: reads the first byte — i32 0/1 works on little-endian ARM64.
+    // bool param reads the first byte — i32 0/1 works on little-endian ARM64.
     let mut arg: i32 = if value { 1 } else { 0 };
     let mut args: [*mut c_void; 1] = [&mut arg as *mut i32 as *mut c_void];
     let mut exc: *mut c_void = std::ptr::null_mut();
@@ -119,14 +122,13 @@ unsafe fn invoke_set_int(
 struct SkipContext {
     loader: *const c_void,
     loader_class: *mut c_void,
-    sd_class: *mut c_void,
     sd_instance: *const c_void,
 }
 
-/// Resolve SaveDataManager -> get_SaveLoader() -> loader instance,
-/// and derive the loader's EXACT class from the object header
-/// (two ApplicationSettingSaveLoader classes exist: Gallop ns + global ns —
-///  header-derived class removes the ambiguity entirely).
+/// Resolve SaveDataManager -> get_SaveLoader() -> loader instance, and derive
+/// the loader's EXACT class from the object header (two
+/// ApplicationSettingSaveLoader classes exist: Gallop ns + global ns —
+/// header-derived class removes that ambiguity entirely).
 unsafe fn resolve_skip_context() -> Result<SkipContext, String> {
     let image = crate::get_image();
     if image.is_null() {
@@ -151,12 +153,11 @@ unsafe fn resolve_skip_context() -> Result<SkipContext, String> {
     Ok(SkipContext {
         loader,
         loader_class,
-        sd_class,
         sd_instance,
     })
 }
 
-/// Read StoryManager choice-guard flag (offset 101 byte). Null when no story active.
+/// Read StoryManager choice-guard flag (byte @101). "null" when no story active.
 unsafe fn read_choice_guard() -> String {
     let image = crate::get_image();
     if image.is_null() {
@@ -170,8 +171,7 @@ unsafe fn read_choice_guard() -> String {
     if sm_inst.is_null() {
         return "null".to_string(); // not in a story/career scene right now
     }
-    let v = crate::read_int_at(sm_inst, 101);
-    if v == 0 {
+    if crate::read_int_at(sm_inst, 101) == 0 {
         "false".to_string()
     } else {
         "true".to_string()
@@ -187,24 +187,22 @@ unsafe fn skip_status() -> String {
                 ctx.loader,
                 "get_IsEnableSuperHighSpeedSkip",
             );
-            let story_hs = crate::call_getter_int(
-                ctx.loader_class,
-                ctx.loader,
-                "get_StoryHighSpeedType",
-            );
+            let story_hs =
+                crate::call_getter_int(ctx.loader_class, ctx.loader, "get_StoryHighSpeedType");
             let train_hs = crate::call_getter_int(
                 ctx.loader_class,
                 ctx.loader,
                 "get_TrainingHighSpeedType",
             );
             format!(
-                r#"{{"ok":true,"enabled":{},"story_high_speed_type":{},"training_high_speed_type":{},"choice_guard_101":{},"save_data_manager":"{:p}","save_loader":"{:p}"}},"#,
-                enabled, story_hs, train_hs,
-                read_choice_guard(), ctx.sd_instance, ctx.loader
+                r#"{{"ok":true,"enabled":{},"story_high_speed_type":{},"training_high_speed_type":{},"choice_guard_101":{},"save_data_manager":"{:p}","save_loader":"{:p}"}}"#,
+                enabled,
+                story_hs,
+                train_hs,
+                read_choice_guard(),
+                ctx.sd_instance,
+                ctx.loader
             )
-            .trim_end_matches(",}")
-            .to_string()
-                + "}"
         }
     }
 }
@@ -236,29 +234,25 @@ unsafe fn skip_set(enable: bool) -> String {
                     HS_X4,
                 ));
             }
-            // Read back for verification (authoritative: the game's own getter).
+            // Authoritative readback via the game's own getter.
             let enabled = crate::call_getter_bool(
                 ctx.loader_class,
                 ctx.loader,
                 "get_IsEnableSuperHighSpeedSkip",
             );
-            let story_hs = crate::call_getter_int(
-                ctx.loader_class,
-                ctx.loader,
-                "get_StoryHighSpeedType",
-            );
+            let story_hs =
+                crate::call_getter_int(ctx.loader_class, ctx.loader, "get_StoryHighSpeedType");
             let train_hs = crate::call_getter_int(
                 ctx.loader_class,
                 ctx.loader,
                 "get_TrainingHighSpeedType",
             );
             if set_flag_ok && enabled != enable {
-                // getter disagrees with the setter — surface it loudly
                 crate::ura_log(
                     1,
                     &format!(
-                        "skip: setter ok={} but readback {} != {}",
-                        set_flag_ok, enabled, enable
+                        "skip: setter reported ok but readback {} != {}",
+                        enabled, enable
                     ),
                 );
                 set_flag_ok = false;
@@ -277,8 +271,12 @@ unsafe fn skip_set(enable: bool) -> String {
                 enabled,
                 story_hs,
                 train_hs,
-                story_hs_set.map(|b| b.to_string()).unwrap_or_else(|| "skipped".to_string()),
-                train_hs_set.map(|b| b.to_string()).unwrap_or_else(|| "skipped".to_string()),
+                story_hs_set
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "\"skipped\"".to_string()),
+                train_hs_set
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "\"skipped\"".to_string()),
                 read_choice_guard()
             )
         }
