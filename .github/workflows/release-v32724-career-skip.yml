@@ -1,0 +1,374 @@
+name: Release v3.27.24 Career Skip
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate and validate release source
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          cargo = Path('hachimi_ura_plugin/Cargo.toml')
+          text = cargo.read_text(encoding='utf-8')
+          new = re.sub(r'version = "3\.27\.\d+"', 'version = "3.27.24"', text, count=1)
+          assert new != text, 'Cargo.toml version anchor not found'
+          cargo.write_text(new, encoding='utf-8')
+          lock = Path('hachimi_ura_plugin/Cargo.lock')
+          text = lock.read_text(encoding='utf-8')
+          new = re.sub(r'(name = "hachimi_ura"\nversion = ")3\.27\.\d+(")', r'\g<1>3.27.24\g<2>', text, count=1)
+          assert new != text, 'Cargo.lock hachimi_ura version anchor not found'
+          lock.write_text(new, encoding='utf-8')
+          PY
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.24"
+          grep -Fq 'version = "3.27.24"' hachimi_ura_plugin/Cargo.lock
+          grep -Fq 'verified_ramen_upstream_semantics' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'Ramen turn mapping follows upstream umaai-rs semantics' hachimi_ura_plugin/src/lib.rs
+
+      - name: Carry over v3.27.23 SIGSEGV guard — rename first, then insert wrappers
+        run: |
+          set -euo pipefail
+          apply_guard() {
+            python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('hachimi_ura_plugin/src/lib.rs')
+          text = source.read_text(encoding='utf-8')
+          MARK = 'v3.27.23 sigsegv-guard'
+
+          if 'fn hl_ptr_mapped(' in text:
+              print('sigsegv_guard=already_applied')
+              raise SystemExit(0)
+
+          renames = [
+              ('unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {',
+               'unsafe fn read_obscured_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'),
+              ('unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {',
+               'unsafe fn read_ptr_at_inner(obj: *const c_void, field_offset: i32) -> *mut c_void {'),
+              ('unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {',
+               'unsafe fn read_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'),
+          ]
+          for old, new in renames:
+              c = text.count(old)
+              if c != 1:
+                  raise RuntimeError(f'rename anchor count={c} (expect 1): {old[:60]}')
+              text = text.replace(old, new, 1)
+
+          anchor = 'unsafe fn read_obscured_int_at_inner(obj: *const c_void, field_offset: i32) -> i32 {'
+          if text.count(anchor) != 1:
+              raise RuntimeError(f'insert anchor count={text.count(anchor)} (expect 1)')
+
+          block = '''// v3.27.23 sigsegv-guard: mapped-region validation for raw memory reads.
+          // Carried over into v3.27.24 so career-skip ships on top of the guard.
+          static HL_MAP_CACHE: std::sync::Mutex<Option<(u64, Vec<(usize, usize)>)>> =
+              std::sync::Mutex::new(None);
+
+          fn hl_parse_maps_readable() -> Vec<(usize, usize)> {
+              let text = match std::fs::read_to_string("/proc/self/maps") {
+                  Ok(t) => t,
+                  Err(_) => return Vec::new(),
+              };
+              let mut out: Vec<(usize, usize)> = Vec::new();
+              for line in text.lines() {
+                  let range = match line.split_whitespace().next() {
+                      Some(r) => r,
+                      None => continue,
+                  };
+                  let perms = line.split_whitespace().nth(1).unwrap_or("");
+                  if !perms.starts_with('r') {
+                      continue;
+                  }
+                  let mut it = range.splitn(2, '-');
+                  let s = match it.next() { Some(v) => v, None => continue };
+                  let e = match it.next() { Some(v) => v, None => continue };
+                  let s = usize::from_str_radix(s, 16).unwrap_or(0);
+                  let e = usize::from_str_radix(e, 16).unwrap_or(0);
+                  if e > s {
+                      out.push((s, e));
+                  }
+              }
+              out
+          }
+
+          fn hl_ptr_mapped(addr: usize) -> bool {
+              if addr == 0 {
+                  return false;
+              }
+              let now = std::time::SystemTime::now()
+                  .duration_since(std::time::UNIX_EPOCH)
+                  .map(|d| d.as_secs())
+                  .unwrap_or(0);
+              let mut cache = match HL_MAP_CACHE.lock() {
+                  Ok(g) => g,
+                  Err(poisoned) => poisoned.into_inner(),
+              };
+              let stale = match *cache {
+                  Some((ts, _)) => now.saturating_sub(ts) >= 2,
+                  None => true,
+              };
+              if stale {
+                  cache = Some((now, hl_parse_maps_readable()));
+              }
+              let regions = match cache.as_ref() {
+                  Some((_, r)) => r,
+                  None => return true,
+              };
+              if regions.is_empty() {
+                  return true; // maps unreadable — fail open
+              }
+              let mut lo = 0usize;
+              let mut hi = regions.len();
+              while lo < hi {
+                  let mid = (lo + hi) / 2;
+                  let (s, e) = regions[mid];
+                  if addr < s {
+                      hi = mid;
+                  } else if addr >= e {
+                      lo = mid + 1;
+                  } else {
+                      return true;
+                  }
+              }
+              false
+          }
+
+          // v3.27.23 sigsegv-guard wrapper: unmapped holder or returned pointer -> null
+          unsafe fn read_ptr_at(obj: *const c_void, field_offset: i32) -> *mut c_void {
+              if !hl_ptr_mapped(obj as usize) {
+                  return std::ptr::null_mut();
+              }
+              let value = read_ptr_at_inner(obj, field_offset);
+              if !value.is_null() && !hl_ptr_mapped(value as usize) {
+                  return std::ptr::null_mut(); // freed/dangling pointer read as null
+              }
+              value
+          }
+
+          // v3.27.23 sigsegv-guard wrapper: unmapped holder -> -1
+          unsafe fn read_obscured_int_at(obj: *const c_void, field_offset: i32) -> i32 {
+              if !hl_ptr_mapped(obj as usize) {
+                  return -1;
+              }
+              read_obscured_int_at_inner(obj, field_offset)
+          }
+
+          // v3.27.23 sigsegv-guard wrapper: unmapped holder -> -1
+          unsafe fn read_int_at(obj: *const c_void, field_offset: i32) -> i32 {
+              if !hl_ptr_mapped(obj as usize) {
+                  return -1;
+              }
+              read_int_at_inner(obj, field_offset)
+          }
+
+          '''
+          text = text.replace(anchor, block + anchor, 1)
+
+          source.write_text(text, encoding='utf-8')
+          print('sigsegv_guard=applied marker_count=%d' % text.count(MARK))
+          PY
+          }
+          apply_guard
+          FIRST_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          apply_guard
+          SECOND_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST_SHA" = "$SECOND_SHA"
+
+      - name: Verify guard coverage
+        run: |
+          set -euo pipefail
+          cd hachimi_ura_plugin/src
+          C=$(grep -c 'v3.27.23 sigsegv-guard' lib.rs)
+          echo "marker_count=$C"
+          test "$C" -ge 4
+          test "$(grep -c 'fn hl_ptr_mapped(' lib.rs)" = "1"
+          test "$(grep -c 'fn hl_parse_maps_readable(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_ptr_at(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_ptr_at_inner(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_obscured_int_at(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_obscured_int_at_inner(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_int_at(' lib.rs)" = "1"
+          test "$(grep -c 'unsafe fn read_int_at_inner(' lib.rs)" = "1"
+          grep -q 'HL_MAP_CACHE' lib.rs
+
+      - name: Wire career_skip module — mod declaration + route arm
+        run: |
+          set -euo pipefail
+          apply_skip() {
+            python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('hachimi_ura_plugin/src/lib.rs')
+          text = source.read_text(encoding='utf-8')
+
+          if 'mod career_skip;' in text:
+              print('career_skip=already_applied')
+              raise SystemExit(0)
+
+          if not Path('hachimi_ura_plugin/src/career_skip.rs').exists():
+              raise RuntimeError('career_skip.rs missing from checkout')
+
+          # 1) mod declaration right after the crate-level allow attribute
+          a1 = '#![allow(dead_code)]'
+          c = text.count(a1)
+          if c != 1:
+              raise RuntimeError(f'mod anchor count={c} (expect 1)')
+          text = text.replace(a1, a1 + '\nmod career_skip;', 1)
+
+          # 2) route arm — try known anchors in order, then fall back to the
+          #    final not_found else. Insert BEFORE the anchor so our arm runs first.
+          arm = '} else if let Some(body) = career_skip::handle(&path) {\n            body\n'
+          done = False
+          for anchor in [
+              '} else if path == "/config.html" {',
+              '} else if path == "/debug/upload" {',
+              '} else if path == "/api/hook/install" {',
+              '} else if path == "/api/sniff" {',
+          ]:
+              if anchor in text:
+                  text = text.replace(anchor, arm + anchor, 1)
+                  done = True
+                  print('route_anchor=' + anchor)
+                  break
+          if not done:
+              idx = text.find('"error":"not_found"')
+              if idx < 0:
+                  raise RuntimeError('no route anchor found (config.html/upload/hook/sniff/not_found all missing)')
+              e = text.rfind('} else {', 0, idx)
+              if e < 0:
+                  raise RuntimeError('no final else before not_found')
+              text = text[:e] + arm + text[e:]
+              print('route_anchor=final_not_found_else')
+
+          source.write_text(text, encoding='utf-8')
+          print('career_skip=applied')
+          PY
+          }
+          apply_skip
+          FIRST_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          apply_skip
+          SECOND_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST_SHA" = "$SECOND_SHA"
+
+      - name: Verify career_skip wiring
+        run: |
+          set -euo pipefail
+          cd hachimi_ura_plugin/src
+          test "$(grep -c 'mod career_skip;' lib.rs)" = "1"
+          test "$(grep -c 'career_skip::handle' lib.rs)" = "1"
+          grep -Fq 'pub unsafe fn handle' career_skip.rs
+          grep -Fq 'set_IsEnableSuperHighSpeedSkip' career_skip.rs
+          grep -Fq 'get_SaveLoader' career_skip.rs
+          grep -Fq '/skip/enable' career_skip.rs
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32724-cargo.log
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee -a release-v32724-cargo.log
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          cargo_version=3.27.24
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.27.24
+          workflow_run=${GITHUB_RUN_ID}
+          feature=career_skip_hidden_setting
+          strategy=module_file_plus_two_line_wiring
+          new_module=hachimi_ura_plugin/src/career_skip.rs
+          endpoints=/skip/status,/skip/enable,/skip/disable
+          mechanism=SaveDataManager.get_SaveLoader().set_IsEnableSuperHighSpeedSkip(true)
+          persisted=SQLiteSaveLoadHelper_local_only
+          choice_guard=StoryManager+101_untouched_choices_still_pop
+          carried_over=v3.27.23_sigsegv_guard
+          EOF
+
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          if gh release view v3.27.24 > /dev/null 2>&1; then
+            echo 'v3.27.24 already exists; refusing to overwrite' >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v3.27.24 "$GITHUB_SHA" -m "Release v3.27.24"
+          git push origin refs/tags/v3.27.24
+          gh release create v3.27.24 --verify-tag --title v3.27.24 \
+            --notes "Career skip: hidden super-high-speed skip setting, wired as /skip endpoints.
+
+          New (v3.27.24):
+          - hachimi_ura_plugin/src/career_skip.rs: SaveDataManager -> get_SaveLoader()
+            -> set_IsEnableSuperHighSpeedSkip(true|false) via il2cpp_runtime_invoke
+          - GET /skip/enable: flips the hidden setting (persists via SQLiteSaveLoadHelper,
+            local only) and bumps Story/TrainingHighSpeedType to HighSpeedX4
+          - GET /skip/disable: flips the setting back off
+          - GET /skip/status: flag + speed types + StoryManager choice-guard (offset 101)
+          - Choice guard is never written: event/support choices still pop up
+          - Carried over: v3.27.23 SIGSEGV mapped-pointer guard" \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
+
+      - name: Verify release identity and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.24)
+          test "$(git rev-list -n1 v3.27.24)" = "$GITHUB_SHA"
+          test "$(printf '%s' "$RELEASE_JSON" | jq '[.assets[] | select(.name == "libhachimi_ura.so")] | length')" = "1"
+          test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .size')" = "$SIZE"
+          test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .digest')" = "sha256:$SHA256"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhachimi_ura-v3.27.24-run-${{ github.run_id }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/release-v32724-cargo.log
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: warn
