@@ -2,6 +2,9 @@ name: Release v3.27.24 Career Skip
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - workbench/career-skip-20260829
 
 permissions:
   contents: write
