@@ -1,4 +1,4 @@
-name: Release v3.27.24 Career Skip
+name: Release v3.27.25 Career Auto-Skip
 
 on:
   workflow_dispatch:
@@ -26,17 +26,17 @@ jobs:
           from pathlib import Path
           cargo = Path('hachimi_ura_plugin/Cargo.toml')
           text = cargo.read_text(encoding='utf-8')
-          new = re.sub(r'version = "3\.27\.\d+"', 'version = "3.27.24"', text, count=1)
+          new = re.sub(r'version = "3\.27\.\d+"', 'version = "3.27.25"', text, count=1)
           assert new != text, 'Cargo.toml version anchor not found'
           cargo.write_text(new, encoding='utf-8')
           lock = Path('hachimi_ura_plugin/Cargo.lock')
           text = lock.read_text(encoding='utf-8')
-          new = re.sub(r'(name = "hachimi_ura"\nversion = ")3\.27\.\d+(")', r'\g<1>3.27.24\g<2>', text, count=1)
+          new = re.sub(r'(name = "hachimi_ura"\nversion = ")3\.27\.\d+(")', r'\g<1>3.27.25\g<2>', text, count=1)
           assert new != text, 'Cargo.lock hachimi_ura version anchor not found'
           lock.write_text(new, encoding='utf-8')
           PY
-          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.24"
-          grep -Fq 'version = "3.27.24"' hachimi_ura_plugin/Cargo.lock
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.25"
+          grep -Fq 'version = "3.27.25"' hachimi_ura_plugin/Cargo.lock
           grep -Fq 'verified_ramen_upstream_semantics' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'Ramen turn mapping follows upstream umaai-rs semantics' hachimi_ura_plugin/src/lib.rs
 
@@ -74,7 +74,7 @@ jobs:
               raise RuntimeError(f'insert anchor count={text.count(anchor)} (expect 1)')
 
           block = '''// v3.27.23 sigsegv-guard: mapped-region validation for raw memory reads.
-          // Carried over into v3.27.24 so career-skip ships on top of the guard.
+          // Carried over into v3.27.25 so career-skip ships on top of the guard.
           static HL_MAP_CACHE: std::sync::Mutex<Option<(u64, Vec<(usize, usize)>)>> =
               std::sync::Mutex::new(None);
 
@@ -274,6 +274,7 @@ jobs:
           grep -Fq 'set_IsEnableSuperHighSpeedSkip' career_skip.rs
           grep -Fq 'get_SaveLoader' career_skip.rs
           grep -Fq '/skip/enable' career_skip.rs
+          grep -Fq '_isApplySuperHighSpeedSkip' career_skip.rs
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
@@ -295,8 +296,8 @@ jobs:
           HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -o pipefail
-          cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32724-cargo.log
-          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee -a release-v32724-cargo.log
+          cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32725-cargo.log
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee -a release-v32725-cargo.log
 
       - name: Prepare release assets
         run: |
@@ -308,18 +309,17 @@ jobs:
           printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
           cat > BUILD-MANIFEST.txt <<EOF
           source_commit=${GITHUB_SHA}
-          cargo_version=3.27.24
+          cargo_version=3.27.25
           binary_size=$SIZE
           binary_sha256=$SHA256
-          tag=v3.27.24
+          tag=v3.27.25
           workflow_run=${GITHUB_RUN_ID}
-          feature=career_skip_hidden_setting
-          strategy=module_file_plus_two_line_wiring
-          new_module=hachimi_ura_plugin/src/career_skip.rs
-          endpoints=/skip/status,/skip/enable,/skip/disable
-          mechanism=SaveDataManager.get_SaveLoader().set_IsEnableSuperHighSpeedSkip(true)
+          feature=career_auto_skip_force_apply
+          strategy=watcher_force_apply_on_live_timeline
+          mechanism=FindObjectOfType(StoryTimelineController)._isApplySuperHighSpeedSkip=true + static _highSpeedType=HighSpeedX4 + IsAutoPlay=true, 1.5s poll
+          endpoints=/skip/status,/skip/enable,/skip/apply,/skip/disable
           persisted=SQLiteSaveLoadHelper_local_only
-          choice_guard=StoryManager+101_untouched_choices_still_pop
+          choice_guard=StoryManager+101_and_IsSkipMultiChoice_untouched
           carried_over=v3.27.23_sigsegv_guard
           EOF
 
@@ -329,25 +329,29 @@ jobs:
         run: |
           set -euo pipefail
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-          if gh release view v3.27.24 > /dev/null 2>&1; then
-            echo 'v3.27.24 already exists; refusing to overwrite' >&2
+          if gh release view v3.27.25 > /dev/null 2>&1; then
+            echo 'v3.27.25 already exists; refusing to overwrite' >&2
             exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a v3.27.24 "$GITHUB_SHA" -m "Release v3.27.24"
-          git push origin refs/tags/v3.27.24
-          gh release create v3.27.24 --verify-tag --title v3.27.24 \
-            --notes "Career skip: hidden super-high-speed skip setting, wired as /skip endpoints.
+          git tag -a v3.27.25 "$GITHUB_SHA" -m "Release v3.27.25"
+          git push origin refs/tags/v3.27.25
+          gh release create v3.27.25 --verify-tag --title v3.27.25 \
+            --notes "Career auto-skip: force-applies super-high-speed on live timelines.
 
-          New (v3.27.24):
-          - hachimi_ura_plugin/src/career_skip.rs: SaveDataManager -> get_SaveLoader()
-            -> set_IsEnableSuperHighSpeedSkip(true|false) via il2cpp_runtime_invoke
-          - GET /skip/enable: flips the hidden setting (persists via SQLiteSaveLoadHelper,
-            local only) and bumps Story/TrainingHighSpeedType to HighSpeedX4
-          - GET /skip/disable: flips the setting back off
-          - GET /skip/status: flag + speed types + StoryManager choice-guard (offset 101)
-          - Choice guard is never written: event/support choices still pop up
+          Root cause fixed (v3.27.25):
+          - v3.27.24 flipped only the persisted hidden setting; the game reads it
+            to decide whether the PLAYER may engage skip, and sets the actual
+            fast-forward state per scene only when the skip button is tapped
+          - New: watcher thread (1.5s poll) finds the live
+            Gallop.StoryTimelineController via UnityEngine.Object.FindObjectOfType
+            and force-applies _isApplySuperHighSpeedSkip=true (instance),
+            static _highSpeedType=HighSpeedX4, static IsAutoPlay=true
+          - GET /skip/enable: persists setting + starts watcher + applies now
+          - GET /skip/apply: force-apply on the current scene (manual)
+          - GET /skip/disable: stops the watcher + unsets the setting
+          - Choices never written: StoryManager+101 and IsSkipMultiChoice untouched
           - Carried over: v3.27.23 SIGSEGV mapped-pointer guard" \
             "$ASSET" SHA256SUMS BUILD-MANIFEST.txt
 
@@ -359,8 +363,8 @@ jobs:
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
           SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
           SIZE=$(stat -c%s "$ASSET")
-          RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.24)
-          test "$(git rev-list -n1 v3.27.24)" = "$GITHUB_SHA"
+          RELEASE_JSON=$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v3.27.25)
+          test "$(git rev-list -n1 v3.27.25)" = "$GITHUB_SHA"
           test "$(printf '%s' "$RELEASE_JSON" | jq '[.assets[] | select(.name == "libhachimi_ura.so")] | length')" = "1"
           test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .size')" = "$SIZE"
           test "$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "libhachimi_ura.so") | .digest')" = "sha256:$SHA256"
@@ -368,10 +372,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: libhachimi_ura-v3.27.24-run-${{ github.run_id }}
+          name: libhachimi_ura-v3.27.25-run-${{ github.run_id }}
           path: |
             hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-            hachimi_ura_plugin/release-v32724-cargo.log
+            hachimi_ura_plugin/release-v32725-cargo.log
             SHA256SUMS
             BUILD-MANIFEST.txt
           if-no-files-found: warn
