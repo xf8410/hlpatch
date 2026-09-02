@@ -276,14 +276,21 @@ replace_once(
 )
 
 # Never silently discard malformed session rows.
-replace_once(
-    '    let sessions: Vec<String> = rows.filter_map(Result::ok).collect();\n    format!(r#"{{\\"ok\\":true,\\"count\\":{},\\"sessions\\":[{}]}}"#, sessions.len(), sessions.join(","))\n',
-    '    let mut sessions = Vec::new();\n'
-    '    for row in rows { match row { Ok(value) => sessions.push(value), Err(error) => { let detail = format!("decode_session_row:{}", error); storage_set_error(&detail); return format!(r#"{{\\"ok\\":false,\\"error\\":\\"{}\\",\\"sessions\\":[]}}"#, json_escape(&detail)); } } }\n'
-    '    storage_clear_error();\n'
-    '    format!(r#"{{\\"ok\\":true,\\"count\\":{},\\"sessions\\":[{}]}}"#, sessions.len(), sessions.join(","))\n',
-    "sessions_rows",
-)
+session_rows_old = '    let sessions: Vec<String> = rows.filter_map(Result::ok).collect();\n'
+session_rows_new = '''    let mut sessions = Vec::new();
+    for row in rows {
+        match row {
+            Ok(value) => sessions.push(value),
+            Err(error) => {
+                let detail = format!("decode_session_row:{}", error);
+                storage_set_error(&detail);
+                return format!(r#"{{"ok":false,"error":"{}","sessions":[]}}"#, json_escape(&detail));
+            }
+        }
+    }
+    storage_clear_error();
+'''
+replace_once(session_rows_old, session_rows_new, "sessions_rows")
 # Checkpoint must succeed before publishing a new flush timestamp.
 replace_once(
     '''    if let Err(error) = connection.execute(
@@ -365,16 +372,15 @@ for endpoint in [
     "/il2cpp/method_index_status", "/il2cpp/method_by_addr", "/il2cpp/method_detail",
     "/il2cpp/nested_types", "/il2cpp/enum_values", "/inherit/pair_compat", "/inherit/selected_parent_runtime",
 ]:
-    token = f'\\"{endpoint}\\"'
+    token = f'"{endpoint}"'
     if token not in s:
         raise AssertionError(f"route token absent before advertisement: {endpoint}")
-# Insert missing advertisements at the start of each static list, without altering route behavior.
-new_advertised = "\\\"/storage/status\\\",\\\"/storage/sessions\\\",\\\"/storage/session\\\",\\\"/storage/flush\\\",\\\"/storage/recover\\\",\\\"/il2cpp/method_index_status\\\",\\\"/il2cpp/method_by_addr\\\",\\\"/il2cpp/method_detail\\\",\\\"/il2cpp/nested_types\\\",\\\"/il2cpp/enum_values\\\",\\\"/inherit/pair_compat\\\",\\\"/inherit/selected_parent_runtime\\\","
-health_needle = 'r#"{{\\"status\\":\\"ok\\",\\"version\\":\\"{}\\",\\"endpoints\\":['
-assert s.count(health_needle) == 1
+new_advertised = '"/storage/status","/storage/sessions","/storage/session","/storage/flush","/storage/recover","/il2cpp/method_index_status","/il2cpp/method_by_addr","/il2cpp/method_detail","/il2cpp/nested_types","/il2cpp/enum_values","/inherit/pair_compat","/inherit/selected_parent_runtime",'
+health_needle = 'r#"{{"status":"ok","version":"{}","endpoints":['
+assert s.count(health_needle) == 1, s.count(health_needle)
 s = s.replace(health_needle, health_needle + new_advertised, 1)
-available_needle = 'r#"{{\\"error\\":\\"not_found\\",\\"path\\":\\"{}\\",\\"available\\":['
-assert s.count(available_needle) == 1
+available_needle = 'r#"{{"error":"not_found","path":"{}","available":['
+assert s.count(available_needle) == 1, s.count(available_needle)
 s = s.replace(available_needle, available_needle + new_advertised, 1)
 
 anchor = "/// 辅助函数：IL2CPP类型枚举转可读名称\n"
