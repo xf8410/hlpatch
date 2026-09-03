@@ -28,9 +28,7 @@ jobs:
           cargo.write_text(text, encoding='utf-8')
           lock = Path('hachimi_ura_plugin/Cargo.lock')
           text = lock.read_text(encoding='utf-8')
-          text = text.replace('name = "hachimi_ura"
-version = "3.27.11"', 'name = "hachimi_ura"
-version = "3.27.23"', 1)
+          text = text.replace('name = "hachimi_ura"\nversion = "3.27.11"', 'name = "hachimi_ura"\nversion = "3.27.23"', 1)
           lock.write_text(text, encoding='utf-8')
           PY
           test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.23"

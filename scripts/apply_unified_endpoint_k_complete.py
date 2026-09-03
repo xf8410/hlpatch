@@ -178,7 +178,7 @@ unsafe fn il2cpp_object_dump(uri: &str) -> String {
 fn k_observation_files(domain: &str, uri: &str) -> String {
     let pairs=match parse_query_pairs(uri){Ok(v)=>v,Err(e)=>return k_json_error(&e)};let requested_session=query_pair(&pairs,"session_id");let connection=match open_observation_storage(){Ok(v)=>v,Err(e)=>return k_json_error(&e)};
     let session_id=if requested_session.is_empty(){match ensure_observation_session(){Ok(v)=>v,Err(e)=>return k_json_error(&e)}}else{requested_session};
-    let token=domain.replace('/',"_");let like=format!("%{}%",token);
+    let token=domain.replace('/','_');let like=format!("%{}%",token);
     let mut statement=match connection.prepare("SELECT file_id,relative_path,content_type,byte_length,created_at_ms FROM observation_files WHERE session_id=?1 AND (relative_path LIKE ?2 OR relative_path LIKE '%protocol%') ORDER BY file_id") {Ok(v)=>v,Err(e)=>return k_json_error(&format!("prepare_domain_history:{}",e))};
     let rows=match statement.query_map(rusqlite::params![session_id,like],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?,r.get::<_,i64>(4)?))){Ok(v)=>v,Err(e)=>return k_json_error(&format!("query_domain_history:{}",e))};
     let mut items=Vec::new();for row in rows{let(id,path,ct,len,created)=match row{Ok(v)=>v,Err(e)=>return k_json_error(&format!("decode_domain_history:{}",e))};items.push(format!(r#"{{"file_id":{},"relative_path":"{}","content_type":"{}","byte_length":{},"created_at_ms":{}}}"#,id,json_escape(&path),json_escape(&ct),len,created));}
@@ -227,7 +227,7 @@ for endpoint in [
 "/generate_succession/status","/generate_succession/limits","/generate_succession/request","/generate_succession/result","/generate_succession/candidates","/generate_succession/race_reserve","/generate_succession/race_validation","/generate_succession/factor_priority","/generate_succession/factor_order","/generate_succession/probability_trace","/generate_succession/cost_trace",
 "/factor/finish_trace","/factor/candidates","/factor/roll_trace","/factor/probability_model","/factor/history","/factor/stats","/factor/breeding_advice","/api/sniff/exchanges","/api/sniff/exchange","/api/hook/install","/api/hook/remove","/api/hook/list","/api/hook/events"]:
     routes += f'''    }} else if path == "{endpoint}" {{
-        k_domain_endpoint(&path, &full_uri)
+        k_domain_endpoint(path, &full_uri)
 '''
 routes += route_anchor
 s=s.replace(route_anchor,routes,1)
@@ -240,11 +240,11 @@ advertised=[
 "/generate_succession/status","/generate_succession/limits","/generate_succession/request","/generate_succession/result","/generate_succession/candidates","/generate_succession/race_reserve","/generate_succession/race_validation","/generate_succession/factor_priority","/generate_succession/factor_order","/generate_succession/probability_trace","/generate_succession/cost_trace",
 "/factor/finish_trace","/factor/candidates","/factor/roll_trace","/factor/probability_model","/factor/history","/factor/stats","/factor/breeding_advice","/il2cpp/call_targets","/il2cpp/callers","/il2cpp/type_detail","/il2cpp/object_dump","/api/sniff/exchanges","/api/sniff/exchange","/api/hook/install","/api/hook/remove","/api/hook/list","/api/hook/events","/storage/files","/storage/download"]
 prefix=','.join('\\"'+x+'\\"' for x in advertised)+','
-health='r#"{{\"status\":\"ok\",\"version\":\"{}\",\"endpoints\":['
-assert s.count(health)==1, f"health_advertisement_anchor_count={s.count(health)}"
+health='r#"{{\\"status\\":\\"ok\\",\\"version\\":\\"{}\\",\\"endpoints\\":['
+assert s.count(health)==1
 s=s.replace(health,health+prefix,1)
-available='r#"{{\"error\":\"not_found\",\"path\":\"{}\",\"available\":['
-assert s.count(available)==1, f"available_advertisement_anchor_count={s.count(available)}"
+available='r#"{{\\"error\\":\\"not_found\\",\\"path\\":\\"{}\\",\\"available\\":['
+assert s.count(available)==1
 s=s.replace(available,available+prefix,1)
 
 s=s.replace(anchor,MARKER+"\n"+anchor,1)
