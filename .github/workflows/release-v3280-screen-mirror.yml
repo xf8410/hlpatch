@@ -207,10 +207,15 @@ jobs:
       - name: Qualification greps (mirror invariants)
         run: |
           set -euo pipefail
-          grep -Fq 'MIRROR_FRAME: Mutex<Option<Vec<u8>>>' hachimi_ura_plugin/src/lib.rs
-          grep -Fq 'MIRROR_TOUCHES: Mutex<Vec<(i64, f32, f32)>>' hachimi_ura_plugin/src/lib.rs
-          grep -Fq 'glReadPixels' hachimi_ura_plugin/src/lib.rs
-          grep -Fq 'X-Frame-Seq' hachimi_ura_plugin/src/lib.rs
+          for s in \
+            'MIRROR_FRAME: Mutex<Option<Vec<u8>>>' \
+            'MIRROR_TOUCHES: Mutex<Vec<(u64, f32, f32)>>' \
+            'glReadPixels' \
+            'X-Frame-Seq' \
+            'mirror_egl_swap_handler' \
+            'install_screen_mirror_hook'
+          do grep -aFq "$s" hachimi_ura_plugin/src/lib.rs || { echo "MISSING INVARIANT: $s"; exit 1; }
+          done
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
       - uses: nttld/setup-ndk@v1
