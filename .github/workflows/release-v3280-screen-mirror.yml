@@ -258,6 +258,6 @@ jobs:
         run: |
           set -euo pipefail
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
-          gh release create "v3.28.0" "$ASSET" SHA256SUMS BUILD-MANIFEST.txt release-v3280-cargo.log \
+          gh release create "v3.28.0" "$ASSET" SHA256SUMS BUILD-MANIFEST.txt hachimi_ura_plugin/release-v3280-cargo.log \
             --title "v3.28.0 训练画面映射 A 阶段" \
             --notes "基线 v3.27.23 + SIGSEGV guard + 画面映射 A 阶段：hook eglSwapBuffers 抓帧（150ms 限频，BMP 降采样 1/2）；GET /api/frame 返回帧+X-Frame-* 头；POST /api/touch 收归一化坐标（记录，B 阶段注入）；GET /api/frame_toggle 采集开关；三端点 BOOT_SAFE。umawork 侧 TrainingMirrorPanel 轮询显示+点击上报（Tab 训练映射）。"
