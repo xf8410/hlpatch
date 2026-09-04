@@ -117,8 +117,8 @@ unsafe fn mirror_capture() {
     pixelstore(GL_PACK_ALIGNMENT, 1);
     let mut px = vec![0u8; w * h * 4];
     readpx(0, 0, w as i32, h as i32, GL_RGBA, GL_UNSIGNED_BYTE, px.as_mut_ptr() as *mut c_void);
-    MIRROR_GAME_W.store(w, Ordering::Relaxed);
-    MIRROR_GAME_H.store(h, Ordering::Relaxed);
+    MIRROR_GAME_W.store(w as u64, Ordering::Relaxed);
+    MIRROR_GAME_H.store(h as u64, Ordering::Relaxed);
     if let Some(tx) = &MIRROR_TX {
         let _ = tx.send((px, w, h));
     }
@@ -273,7 +273,7 @@ replace_once(
                             g.drain(0..n - 256);
                         }
                     }
-                    ura_log(3, &format!("mirror touch: {:.3},{:.3}", x, y));
+                    unsafe { ura_log(3, &format!("mirror touch: {:.3},{:.3}", x, y)); }
                     r#"{"ok":true,"received":true,"phase":"a_logged_only","injection":"B-stage"}"#.to_string()
                 }
                 _ => r#"{"ok":false,"error":"x_y_0_to_1_required"}"#.to_string(),
