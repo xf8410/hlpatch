@@ -1,7 +1,12 @@
 ================================================================================
-hlpatch SO 插件完整端点清单 (142 个)
-版本: main 分支 2026-08-05
+hlpatch SO 插件完整端点清单 (151 个)
+版本: 3.27.12-slim (workbench/slim 减负版)
 基址: http://127.0.0.1:18765
+说明: 端点全集提取自 3.27.12-slim 生成链产物 lib.rs 的全部 route 分支。
+      较 main 版清单 (138 个实际端点) — 移除 63 个 (内存/文件/资源扫描下载、
+      IL2CPP 全量 dump/反汇编/数值搜索等逆向探查类为主)，新增 76 个
+      (生成链育成业务、Hook 注册表、嗅探交换记录、存储诊断、IL2CPP 精细调用)。
+      判定依据: 消费方盘点 — App/Agora 点名端点全保留，事件系统与调用基建不删。
 ================================================================================
 
 === 核心 (6) ===
@@ -12,7 +17,7 @@ hlpatch SO 插件完整端点清单 (142 个)
   /update                      — 更新检查
   /update/status               — 更新状态
 
-=== Sniff / 协议观测 (14) ===
+=== Sniff / 协议观测 (16) ===
   /api/sniff                   — sniff 总入口
   /api/sniff/metadata          — ★完整协议观测 (body_hex + headers + path + size)
   /api/sniff/status            — sniff 状态 (enabled, count)
@@ -20,63 +25,116 @@ hlpatch SO 插件完整端点清单 (142 个)
   /api/sniff/clear             — 清空 sniff 缓冲
   /api/sniff/diag              — hook 诊断 (compress/decompress/post)
   /api/sniff/unity             — Unity 请求观测 (body_hex + method + path)
+  /api/sniff/exchanges         — ★请求/响应交换记录列表
+  /api/sniff/exchange          — ★单条交换详情 (?session_id=&request_id=)
   /api/md5log                  — ★MakeMd5 input→output 对
   /api/md5log/clear            — 清空 MD5 日志
   /api/md5log/install          — 手动安装 MakeMd5 hook
   /api/event/choices           — 事件选择肢快照
   /api/event/clear             — 清空事件
-  /api/event/observations     — 完成的事件观测
+  /api/event/observations      — 完成的事件观测
   /api/event/observations/clear — 清空事件观测
 
-=== IL2CPP (33) ===
+=== Hook 管理 / 运行时 (8) ===
+  /api/hook/install            — 安装 Hook 注册项
+  /api/hook/list               — Hook 注册项列表
+  /api/hook/remove             — 移除 Hook 注册项
+  /api/hook/events             — Hook 触发事件流
+  /hooks/registry              — HookRegistry 注册表快照
+  /hooks/diagnostics           — Hook 注册表诊断
+  /runtime/init_status         — 被动初始化状态
+  /capture/status              — 捕获管线状态
+
+=== IL2CPP (25) ===
   /il2cpp/call                 — ★调用 singleton getter
   /il2cpp/call_static          — 调用 static 方法
+  /il2cpp/invoke_instance      — 调用实例方法 (按索引)
+  /il2cpp/invoke_static        — 调用 static 方法 (按索引)
+  /il2cpp/call_targets         — 调用目标解析
+  /il2cpp/callers              — 方法调用方查询
   /il2cpp/classes              — 完整类列表
-  /il2cpp/tree                 — 类字段结构 dump
-  /il2cpp/methods             — 类方法列表
+  /il2cpp/methods              — 类方法列表
   /il2cpp/field                — 读字段
   /il2cpp/static               — ★读 static 字段 (含账号id)
-  /il2cpp/read_mem             — ★读原始进程内存
-  /il2cpp/read_mem_dl          — 读内存 (下载)
   /il2cpp/read_string          — ★读 IL2CPP string 对象
-  /il2cpp/disassemble          — 反汇编方法
-  /il2cpp/disassemble_dl       — 反汇编 (下载)
-  /il2cpp/disassemble_addr     — 按地址反汇编
-  /il2cpp/disassemble_addr_dl  — 按地址反汇编 (下载)
-  /il2cpp/dump                 — dump
-  /il2cpp/dump_all_methods     — dump 所有方法
-  /il2cpp/dump_all_methods_dl — dump 所有方法 (下载)
-  /il2cpp/search_float         — 搜索 float
-  /il2cpp/search_float_dl      — 搜索 float (下载)
-  /il2cpp/search_int           — 搜索 int
-  /il2cpp/search_int_dl        — 搜索 int (下载)
-  /il2cpp/search_methods       — 搜索方法
+  /il2cpp/exact_method         — 精确单方法探针 (B1)
+  /il2cpp/method_index_status  — 方法索引状态
+  /il2cpp/method_by_addr       — 按地址查方法
+  /il2cpp/method_detail        — 方法详情
+  /il2cpp/nested_types         — 嵌套类型
+  /il2cpp/enum_values          — 枚举值
+  /il2cpp/type_detail          — 类型详情
+  /il2cpp/object_dump          — 对象字段 dump
   /il2cpp/search_methods_dl    — 搜索方法 (下载)
-  /il2cpp/search_methods_page  — 搜索方法 (分页)
-  /scan                        — 类扫描
-  /classes/                    — 类名搜索
-  /fields/                     — 字段读取
-  /methods/                    — 方法读取
-  /find_method/                — 方法搜索
+  /classes                     — 类名前缀查询 (顶层快捷)
+  /classes/search/keyword      — 类名关键字搜索
+  /fields                      — 字段读取 (顶层快捷)
+  /methods                     — 方法读取 (顶层快捷)
+  /find_method                 — 方法搜索 (顶层快捷)
 
-=== Debug (61) ===
-  /debug/all                   — 全部调试数据
-  /debug/laststep              — 最后一步 buffer
+=== 生成链 / 育成业务 (44) ===
+  /inherit/tree                — 继承树
+  /inherit/parent_records      — 父辈记录
+  /inherit/selected_parent_records — 选定父辈记录
+  /inherit/selected_parent_runtime — 选定父辈运行时
+  /inherit/race_history        — 比赛历史
+  /inherit/race_compat         — 比赛兼容
+  /inherit/full_compat         — 全量兼容
+  /inherit/pair_compat         — 配对兼容
+  /inherit/compat              — 继承兼容
+  /inherit/compat_trace        — 兼容追溯
+  /inherit/factor_tree         — 因子树
+  /inherit/bonus_params        — 加成参数
+  /inherit/event_trace         — 事件追溯
+  /inherit/deck_runtime        — 卡组运行时
+  /inherit/deck_validate       — 卡组校验
+  /inherit/friend_rental_context — 好友租借上下文
+  /inherit/auto_select_trace   — 自动选择追溯
+  /generate_succession/status  — 生成继承状态
+  /generate_succession/limits  — 生成继承上限
+  /generate_succession/request — 生成继承请求
+  /generate_succession/result  — 生成继承结果
+  /generate_succession/candidates — 候选列表
+  /generate_succession/race_reserve — 比赛预约
+  /generate_succession/race_validation — 比赛校验
+  /generate_succession/factor_priority — 因子优先级
+  /generate_succession/factor_order — 因子顺序
+  /generate_succession/probability_trace — 概率追溯
+  /generate_succession/cost_trace — 代价追溯
+  /generate_succession/runtime_full — 运行时全量
+  /factor/candidates           — 因子候选
+  /factor/roll_trace           — 因子 roll 追溯
+  /factor/probability_model    — 概率模型
+  /factor/history              — 因子历史
+  /factor/stats                — 因子统计
+  /factor/finish_trace         — 因子完成追溯
+  /factor/breeding_advice      — 配种建议
+  /autoplay/plan               — 自动育成计划
+  /autoplay/runtime            — 自动育成运行时
+  /autoplay/action_trace       — 行动追溯
+  /autoplay/factor_select_trace — 因子选择追溯
+  /offline_auto/start_request  — 离线自动请求
+  /offline_auto/runtime        — 离线自动运行时
+  /offline_auto/race_reserve   — 离线自动比赛预约
+  /offline_auto/result         — 离线自动结果
+
+=== 存储诊断 (10) ===
+  /storage/status              — 存储状态
+  /storage/sessions            — 会话列表
+  /storage/session             — 单会话
+  /storage/files               — 文件列表
+  /storage/download            — 文件下载
+  /storage/turn_event_jsons    — 回合事件 JSON
+  /storage/read_range          — 按范围读取
+  /storage/flush               — 落盘
+  /storage/recover             — 恢复
+  /storage/audit               — 审计
+
+=== Debug / 诊断 (24) ===
   /debug/params                — 参数
   /debug/paramsincdec          — 参数增减
-  /debug/breeders              — 育成师
-  /debug/cmdinfo               — 命令信息
-  /debug/training_partners     — 训练伙伴
-  /debug/training_seed          — 训练种子
   /debug/training_log          — 训练日志
   /debug/training_log_dl       — 训练日志 (下载)
-  /debug/turn_probe            — 回合探针
-  /debug/gauge                 — 量表1
-  /debug/gauge2                — 量表2
-  /debug/hint_gain             — 提示增益
-  /debug/sc_effect             — SC 效果
-  /debug/unique_skills         — 独特技能
-  /debug/unique_detail         — 独特详情
   /debug/rameninfo             — 拉面信息
   /debug/ramenfields           — 拉面字段
   /debug/ramengains            — 拉面增益
@@ -87,9 +145,6 @@ hlpatch SO 插件完整端点清单 (142 个)
   /debug/ramen_formula_targets — 拉面公式目标
   /debug/ramen_transition      — 拉面过渡
   /debug/event_reward_targets  — 事件奖励目标
-  /debug/storydata             — 故事数据
-  /debug/dump                  — dump
-  /debug/dumpclass             — dump 类
   /debug/crashlog              — 崩溃日志
   /debug/upload                — 上传
   /debug/hookdiag              — hook 诊断
@@ -99,48 +154,19 @@ hlpatch SO 插件完整端点清单 (142 个)
   /debug/download_table        — 下载表
   /debug/push_table            — 推送表
   /debug/table                 — 表
-  /debug/maps_list             — ★内存映射列表
-  /debug/mem_maps              — 内存映射
-  /debug/mem_scan_hex          — ★内存搜索 (hex 模式)
-  /debug/mem_scan_sqlite       — 内存搜索 (SQLite)
-  /debug/mem_scan_zdict        — 内存搜索 (ZDict)
-  /debug/file_scan_hex         — 文件搜索 (hex)
-  /debug/file_range_hex        — 文件范围 (hex)
-  /debug/file_dl               — 文件下载
-  /debug/meta_dump             — metadata dump
   /debug/global_metadata_probe — 全局 metadata 探测
-  /debug/resource_reads        — 资源读取
-  /debug/resource_storage     — 资源存储
-  /debug/resource_db_keys     — 资源 DB keys
-  /debug/resource_meta_key     — 资源 meta key
-  /debug/resource_meta_schema  — 资源 meta schema
-  /debug/resource_meta_probe  — 资源 meta 探测
-  /debug/resource_meta_dl     — 资源 meta 下载
-  /debug/resource_file_dl     — 资源文件下载
-  /debug/resource_crypto_symbols — 资源加密符号
-  /debug/private_file_inventory — ★私有文件清单
-  /debug/private_file_dl      — ★私有文件下载
-  /debug/race_random_program_exact — 比赛随机程序精确值
 
-=== 游戏数据 (28) ===
+=== 游戏数据 (18) ===
   /summary                     — ★当前训练状态摘要 (含账号id)
   /data                        — 游戏数据
   /scenario                    — 剧本
   /event/recommend             — 事件推荐
   /events                      — 事件列表
-  /hall                        — 大厅
-  /ranking                     — 排名
-  /saddles                     — 赛鞍
-  /saddles-dl                  — 赛鞍 (下载)
-  /saddle-analysis             — 赛鞍分析
   /ramen                       — 拉面
   /action/latest               — 最新行动
   /log                         — 日志
   /log/turn                    — 回合日志
   /training/result             — 训练结果
-  /inherit/compat              — 继承兼容
-  /seed/history                — 种子历史
-  /seed/stats                  — 种子统计
   /carddb                      — 卡牌数据库
   /skilldata                   — 技能数据
   /mdb                         — MDB 数据库
@@ -149,10 +175,10 @@ hlpatch SO 插件完整端点清单 (142 个)
   /mdb/search                  — MDB 搜索
   /mdb/dl_batch                — MDB 批量下载
   /tables                      — 表列表
-  /singletons                  — 单例列表
-  /dev/                        — 开发入口
 
 ================================================================================
-★ = 花落重点关注 (协议逆向/发包相关)
+★ = 协议逆向/发包重点关注
 所有端点均为 GET 请求, 基址 http://127.0.0.1:18765
+已移除的 63 个 main 端点 (内存/文件/资源扫描下载、IL2CPP dump/反汇编/数值搜索、
+hall/ranking/saddles/seed 等杂项) 可经 git log -S 于 main 历史找回。
 ================================================================================

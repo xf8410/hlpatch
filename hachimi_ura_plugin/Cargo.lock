@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "hachimi_ura"
-version = "3.27.4"
+version = "3.27.12-slim"
 dependencies = [
  "libc",
  "rusqlite",

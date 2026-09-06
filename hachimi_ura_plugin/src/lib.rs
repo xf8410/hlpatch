@@ -318,112 +318,6 @@ unsafe fn read_il2cpp_string(s: *const c_void) -> String {
 
 // ★ Push-to-app state (v3.10.0): auto-push /summary to uma-juece when data changes
 static mut LAST_PUSH_HASH: u64 = 0;
-static PUSH_INTERVAL_SECS: u64 = 1;
-
-// ★ Config (v3.11.0): runtime config updated via POST /config from App
-// No file editing needed — App settings page sends config to plugin HTTP endpoint
-#[derive(Clone)]
-struct PluginConfig {
-    push_host: String,       // default: "127.0.0.1"
-    push_port: u16,          // default: 18766
-    http_port: u16,          // default: 18765
-    push_interval_secs: u64, // default: 1
-    push_enabled: bool,      // default: true
-    http_enabled: bool,      // default: true
-}
-
-impl PluginConfig {
-    fn defaults() -> Self {
-        Self {
-            push_host: "127.0.0.1".to_string(),
-            push_port: 18766,
-            http_port: 18765,
-            push_interval_secs: 5,
-            push_enabled: true,
-            http_enabled: true,
-        }
-    }
-
-    fn push_addr(&self) -> String {
-        format!("{}:{}", self.push_host, self.push_port)
-    }
-
-    // Parse JSON config from POST /config body (simple manual parse, no serde)
-    fn from_json(data: &str) -> Option<Self> {
-        let mut cfg = Self::defaults();
-        let mut changed = false;
-        // Extract key-value pairs from JSON
-        for line in data.lines() {
-            let l = line.trim().trim_end_matches(',');
-            if l.is_empty() || l == "{" || l == "}" {
-                continue;
-            }
-            if let Some((k, v)) = l.split_once(':') {
-                let k = k.trim().trim_matches('"');
-                let v = v.trim().trim_matches('"');
-                match k {
-                    "push_host" => {
-                        cfg.push_host = v.to_string();
-                        changed = true;
-                    }
-                    "push_port" => {
-                        if let Ok(n) = v.parse::<u16>() {
-                            cfg.push_port = n;
-                            changed = true;
-                        }
-                    }
-                    "http_port" => {
-                        if let Ok(n) = v.parse::<u16>() {
-                            cfg.http_port = n;
-                            changed = true;
-                        }
-                    }
-                    "push_interval_secs" => {
-                        if let Ok(n) = v.parse::<u64>() {
-                            cfg.push_interval_secs = n.max(1);
-                            changed = true;
-                        }
-                    }
-                    "push_enabled" => {
-                        cfg.push_enabled = v == "true";
-                        changed = true;
-                    }
-                    "http_enabled" => {
-                        cfg.http_enabled = v == "true";
-                        changed = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if changed {
-            Some(cfg)
-        } else {
-            None
-        }
-    }
-
-    fn to_json(&self) -> String {
-        format!(
-            r#"{{"push_host":"{}","push_port":{},"http_port":{},"push_interval_secs":{},"push_enabled":{},"http_enabled":{}}}"#,
-            self.push_host,
-            self.push_port,
-            self.http_port,
-            self.push_interval_secs,
-            self.push_enabled,
-            self.http_enabled
-        )
-    }
-}
-
-static mut PLUGIN_CONFIG: Option<PluginConfig> = None;
-
-// ★ Text edit buffers for GUI config (v3.12.0): persist across frames for egui immediate mode
-static mut GUI_HOST_BUF: [u8; 64] = [0u8; 64]; // push_host input buffer
-static mut GUI_HOST_BUF_LEN: i32 = 0;
-static mut GUI_PORT_BUF: [u8; 8] = [0u8; 8]; // push_port input buffer
-static mut GUI_PORT_BUF_LEN: i32 = 0;
-
 unsafe fn get_config() -> &'static PluginConfig {
     if PLUGIN_CONFIG.is_none() {
         PLUGIN_CONFIG = Some(PluginConfig::defaults());
@@ -549,11 +443,6 @@ extern "C" {
     fn sys_siglongjmp(env: *const u8, val: i32) -> !;
 }
 
-const CRASH_LOG_PATH: &str = "/data/data/jp.pokemon.pokeuma/files/uma_predict.log";
-
-// ★ v3.22.35: SIGSEGV recovery for push thread
-// sigsetjmp buffer: 200 bytes is enough for jmp_buf on aarch64 (typically 24 x 8 = 192 bytes)
-static mut SIGSEGV_JMP_BUF: [u8; 200] = [0u8; 200];
 static SIGSEGV_RECOVERY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 // Cooldown: after SIGSEGV recovery, skip reads for N seconds
 static SIGSEGV_COOLDOWN_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -692,23 +581,6 @@ fn log_predict_step(msg: &str) {
             .append(true)
             .open("/data/data/jp.pokemon.pokeuma/files/uma_predict.log")
             .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
-    }
-}
-
-fn clear_predict_log() {
-    PREDICT_STEP.store(0, std::sync::atomic::Ordering::Relaxed);
-    LAST_STEP_LEN.store(0, std::sync::atomic::Ordering::Relaxed);
-    let path1 = b"/data/data/jp.pokemon.pokeuma/files/uma_predict.log\0";
-    let path2 = b"/data/local/tmp/uma_predict.log\0";
-    unsafe {
-        let fd = sys_open(path1.as_ptr() as *const i8, 1 | 64 | 512, 0o644);
-        if fd >= 0 {
-            sys_close(fd);
-        }
-        let fd2 = sys_open(path2.as_ptr() as *const i8, 1 | 64 | 512, 0o644);
-        if fd2 >= 0 {
-            sys_close(fd2);
-        }
     }
 }
 
@@ -1054,52 +926,6 @@ unsafe fn find_class_by_iteration(image: *const c_void, class_name: &str) -> *mu
 
 /// Find an exact namespace/class pair across every loaded IL2CPP assembly.
 /// System.Int32 normally lives in mscorlib.dll rather than umamusume.dll.
-unsafe fn find_class_global(namespace: &str, class_name: &str) -> *mut c_void {
-    let domain_get = resolve_il2cpp_symbol("il2cpp_domain_get");
-    let domain_get_assemblies = resolve_il2cpp_symbol("il2cpp_domain_get_assemblies");
-    let assembly_get_image = resolve_il2cpp_symbol("il2cpp_assembly_get_image");
-    if domain_get.is_null()
-        || domain_get_assemblies.is_null()
-        || assembly_get_image.is_null()
-    {
-        return ptr::null_mut();
-    }
-
-    let get_domain: FnDomainGet = std::mem::transmute(domain_get);
-    let get_assemblies: FnDomainGetAssemblies =
-        std::mem::transmute(domain_get_assemblies);
-    let get_image: FnAssemblyGetImage = std::mem::transmute(assembly_get_image);
-    let domain = get_domain();
-    if domain.is_null() {
-        return ptr::null_mut();
-    }
-
-    let mut count = 0usize;
-    let assemblies = get_assemblies(domain, &mut count);
-    if assemblies.is_null() || count == 0 || count > 4096 {
-        return ptr::null_mut();
-    }
-
-    let namespace_c = to_cstr(namespace);
-    let class_name_c = to_cstr(class_name);
-    for index in 0..count {
-        let assembly = *assemblies.add(index);
-        if assembly.is_null() {
-            continue;
-        }
-        let image = get_image(assembly);
-        if image.is_null() {
-            continue;
-        }
-        let class = find_class(image, namespace_c.as_ptr(), class_name_c.as_ptr());
-        if !class.is_null() {
-            return class;
-        }
-    }
-    ptr::null_mut()
-}
-
-/// ★ Get class name directly from an Il2CppClass pointer (no iteration needed)
 unsafe fn get_class_name_from_pointer(klass: *mut c_void) -> String {
     if klass.is_null() {
         return String::new();
@@ -1335,84 +1161,6 @@ unsafe fn call_getter_bool(class: *mut c_void, instance: *const c_void, method_n
 /// Used for TrainingFeelingEntity.GetGainCount(int FeelingId)
 /// IMPORTANT: il2cpp_runtime_invoke needs properly boxed args.
 /// We find Int32 klass, box our arg into it, then invoke.
-unsafe fn call_getter_int_with_arg(
-    class: *mut c_void,
-    instance: *const c_void,
-    method_name: &str,
-    int_arg: i32,
-) -> i32 {
-    if class.is_null() || instance.is_null() {
-        return -1;
-    }
-    let get_method_ptr = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-    let invoke_ptr = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-    if get_method_ptr.is_null() || invoke_ptr.is_null() {
-        return -1;
-    }
-    let get_method: FnClassGetMethodFromName = std::mem::transmute(get_method_ptr);
-    let invoke: FnRuntimeInvoke = std::mem::transmute(invoke_ptr);
-    let method_info = get_method(class, to_cstr(method_name).as_ptr(), 1);
-    if method_info.is_null() {
-        ura_log(4, &format!("call_int_with_arg: '{}' not found", method_name));
-        return -1;
-    }
-
-    // il2cpp_runtime_invoke expects argv entries to point to unboxed value data.
-    let mut arg = int_arg;
-    let mut args = [&mut arg as *mut i32 as *mut c_void];
-    let mut exc: *mut c_void = ptr::null_mut();
-    let result = invoke(
-        method_info,
-        instance as *mut c_void,
-        args.as_mut_ptr(),
-        &mut exc,
-    );
-    if !exc.is_null() || result.is_null() {
-        return -1;
-    }
-    std::ptr::read_unaligned::<i32>((result as *const u8).add(16) as *const i32)
-}
-
-
-/// ★ ObscuredInt getter: The C# property returns ObscuredInt struct,
-/// but il2cpp_runtime_invoke boxes it. We need to call the implicit
-/// conversion operator to get a plain int.
-/// ObscuredInt has an implicit operator that converts to int.
-/// Alternative: ObscuredInt struct has fields we can read directly.
-/// ObscuredInt layout (from dump.cs struct, 0x20 bytes on 64-bit):
-///   offset 0x10: int currentValue (the decrypted value if no crypto)
-///   offset 0x14: int fakeValue
-///   offset 0x18: int fakeValueActive  
-///   offset 0x1C: byte cryptoKey
-/// Actually, the getter method get_SkillPoint() returns ObscuredInt,
-/// but the C# property SkillPoint has type ObscuredInt.
-/// When il2cpp_runtime_invoke calls it, the result is boxed ObscuredInt.
-/// We need to read the ObscuredInt struct fields from the boxed result.
-///
-/// From dump.cs line 1166804:
-/// public struct ObscuredInt : IFormattable, IEquatable`1, IComparable`1
-/// It has: implicit operator int, explicit operator int
-/// The boxed result will have the ObscuredInt data starting at offset 0x10
-///
-/// Looking at ObscuredInt implementation (Anti-Cheat Toolkit):
-/// struct ObscuredInt {
-///     int currentValue;   // offset 0x10 in boxed form (after header)
-///     int fakeValue;      // offset 0x14
-///     int fakeValueActive; // offset 0x18
-///     byte cryptoKey;     // offset 0x1C
-/// }
-/// currentValue = encrypted_value ^ cryptoKey
-/// Decrypted = currentValue ^ cryptoKey
-///
-/// BUT: When we call get_SkillPoint() via il2cpp_runtime_invoke,
-/// the return type is ObscuredInt (value type), so it gets boxed.
-/// We read the boxed ObscuredInt fields and decrypt manually.
-///
-/// HOWEVER: There's a simpler approach! The C# property wrapper
-/// actually calls the internal get method which returns ObscuredInt.
-/// We can try calling the implicit conversion operator instead.
-///
-/// Simplest approach: Read ObscuredInt fields from boxed result and decrypt.
 unsafe fn call_getter_obscured_int(
     class: *mut c_void,
     instance: *const c_void,
@@ -2445,93 +2193,6 @@ const KNOWN_CLASSES: &[(&str, &str)] = &[
 
 // ============================================================
 // Scan Classes
-// ============================================================
-
-unsafe fn scan_il2cpp_classes() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let mut found_list: Vec<String> = Vec::new();
-    let mut singleton_list: Vec<String> = Vec::new();
-
-    for (ns, cls) in KNOWN_CLASSES {
-        let ns_c = to_cstr(ns);
-        let cls_c = to_cstr(cls);
-        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
-        if !class.is_null() {
-            let full_name = if ns.is_empty() {
-                cls.to_string()
-            } else {
-                format!("{}.{}", ns, cls)
-            };
-            if !found_list.contains(&full_name) {
-                found_list.push(full_name.clone());
-            }
-            let inst = get_singleton(class);
-            if !inst.is_null() {
-                singleton_list.push(full_name);
-            }
-        }
-    }
-
-    format!(
-        r#"{{"found_classes":["{}"],"singletons":["{}"],"total":{}}}"#,
-        found_list.join("\",\""),
-        singleton_list.join("\",\""),
-        found_list.len()
-    )
-}
-
-// ============================================================
-// /singletons endpoint
-// ============================================================
-
-unsafe fn find_all_singletons() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let mut results: Vec<String> = Vec::new();
-
-    for (ns, cls) in KNOWN_CLASSES {
-        let ns_c = to_cstr(ns);
-        let cls_c = to_cstr(cls);
-        let class = find_class(image, ns_c.as_ptr(), cls_c.as_ptr());
-        if !class.is_null() {
-            let full_name = if ns.is_empty() {
-                cls.to_string()
-            } else {
-                format!("{}.{}", ns, cls)
-            };
-            let inst = get_singleton(class);
-            let has_singleton = !inst.is_null();
-            results.push(format!(
-                r#"{{"class":"{}","singleton":{},"instance":"{:p}"}}"#,
-                full_name, has_singleton, inst
-            ));
-        }
-    }
-
-    format!(
-        r#"{{"total":{},"classes":[{}]}}"#,
-        results.len(),
-        results.join(",")
-    )
-}
-
-// ============================================================
-// ★ Read Training Data v3.7.8 — All via getter methods
 // ============================================================
 
 unsafe fn read_training_data() -> String {
@@ -3674,13 +3335,6 @@ const DEFAULT_TOTAL_TURNS: i32 = 72; // Standard scenarios have 72 turns
 const RAMEN_GAUGE_HEAD_VALUE: f64 = 25.0; // 拉面杯每个人头的素材边际价值(人头→3种素材各+1) [候选]
 const RAMEN_KAKUSHIMI_CAP: i32 = 4; // 隠し味上限 [截图]
 const RAMEN_OUTING_KAKUSHIMI_VALUE: f64 = 60.0; // 外出给隠し味的单价 [MDB outing_effect + 候选权重]
-const NEXT_RACE_OUTING_FACTOR: f64 = 0.3; // 下回合比赛时外出价值折扣(体力溢出) [用户规则]
-
-// Game CommandId constants (IL2CPP method identifiers)
-// 2026-07-17 修正: 102=力量(Power), 105=耐力(Stamina) — 游戏内ID与UI顺序速耐力根智相反
-// 证据: support_card_data 名卡 command_id — 小海湾SSR 30016=105, 麦昆SSR 30022/30139=105,
-// 小栗帽SSR 30024=102, 北黑SSR 30028=101, 诗歌剧SSR 30030=103
-// Ramen(剧本14)指令 601-605 经 MDB single_mode_training.base_command_id 实证: 601→101速度, 602→105耐力, 603→102力量, 604→103根性, 605→106智力
 const CMD_SPEED: i32 = 101;
 const CMD_STAMINA: i32 = 105;
 const CMD_GUTS: i32 = 103;
@@ -3726,8 +3380,6 @@ const URA_PRE_FINAL_VITAL: i32 = 10; // vital needed at pre-final turn
 const URA_FINAL_VITAL: i32 = 30; // vital needed at final training turn
 const URA_MAX_NON_RACE_TURNS: i32 = 6; // max non-race turns before URA
 const URA_VITAL_PER_NON_RACE: i32 = 15; // vital equivalent per non-race turn
-const TEXT_DATA_CATEGORY_CHARA_NAME: i32 = 6; // text_data.category=6: character name
-const TEXT_DATA_CATEGORY_RACE_NAME: i32 = 32; // text_data.category=32: race name
 const TEXT_DATA_CATEGORY_STORY_TITLE: i32 = 45; // text_data.category=45: single mode story title
 const TEXT_DATA_CATEGORY_SKILL_NAME: i32 = 47; // text_data.category=47: skill name
 const IL2CPP_LIST_COUNT_OFF: usize = 0x18; // Il2CppList._count (il2cpp internal, all List<T>)
@@ -3736,15 +3388,11 @@ const IL2CPP_LIST_ITEM_SIZE: usize = 0x08; // sizeof(pointer) on aarch64
 const IL2CPP_OBSCURED_INT_KEY_OFF: usize = 0x10; // ObscuredInt.currentCryptoKey (boxed layout)
 const IL2CPP_OBSCURED_INT_HIDDEN_OFF: usize = 0x14; // ObscuredInt.hiddenValue (boxed layout)
 const IL2CPP_UNBOX_FIRST_FIELD: usize = 0x10; // Unbox() result: first field offset (after Il2CppObject header 0x10)
-const IL2CPP_UNBOX_SECOND_FIELD: usize = 0x14; // Unbox() result: second field offset
-const IL2CPP_SUPPORT_CARD_POSITION_OFF: usize = 0x10; // SingleModeEquipSupportCard.position (IL2CPP /fields/ offset=16)
 const IL2CPP_SUPPORT_CARD_ID_OFF: usize = 0x14; // SingleModeEquipSupportCard.supportCardId (IL2CPP /fields/ offset=20)
-const IL2CPP_SUPPORT_CARD_LIMIT_OFF: usize = 0x18; // SingleModeEquipSupportCard.limitBreakCount (IL2CPP /fields/ offset=24)
 const IL2CPP_TARGET_RACE_ID_OFF: usize = 0x10; // SingleModeTargetRace.targetId (IL2CPP /fields/ offset=16)
 const IL2CPP_TARGET_RACE_EVAL_OFF: usize = 0x14; // SingleModeTargetRace.evaluation (IL2CPP /fields/ offset=20)
 
 // ★ v3.24.9: Named offsets for ObscuredSingleModeRamenCommandInfo (confirmed by /debug/dumpclass)
-const RAMEN_CMD_COMMAND_TYPE_OFF: usize = 0x10; // CommandType (ObscuredInt inline, 20 bytes)
 const RAMEN_CMD_COMMAND_ID_OFF: usize = 0x24; // CommandId (ObscuredInt inline, 20 bytes) — key at 0x24, hidden at 0x28
 const RAMEN_CMD_PARAMS_ARRAY_OFF: usize = 0x38; // ParamsIncDecInfoArray (List ptr)
 const RAMEN_DATASET_CMD_ARRAY_OFF: usize = 0x10; // DataSet.CommandInfoArray (List ptr at offset 16)
@@ -3771,10 +3419,6 @@ const IL2CPP_OBSCURED_INT_UNBOX_KEY_OFF: usize = 0x10; // ObscuredInt unboxed: c
 const IL2CPP_OBSCURED_INT_UNBOX_HIDDEN_OFF: usize = 0x14; // ObscuredInt unboxed: hiddenValue (offset=0x14)
 const IL2CPP_OBSCURED_INT_PAIR2_KEY_OFF: usize = 0x24; // Second ObscuredInt in pair: currentCryptoKey (offset=0x24)
 const IL2CPP_OBSCURED_INT_PAIR2_HIDDEN_OFF: usize = 0x28; // Second ObscuredInt in pair: hiddenValue (offset=0x28)
-const IL2CPP_LIST_ARRAY_OFF: usize = 0x10; // Il2CppList._items array pointer (offset=0x10)
-
-/// Compute current evaluation score from five stats (per-stat lookup then sum)
-/// 評価点 = STAT_EVAL_SCORE[speed] + STAT_EVAL_SCORE[stamina] + ... + STAT_EVAL_SCORE[wiz]
 fn compute_score(speed: i32, stamina: i32, power: i32, guts: i32, wiz: i32) -> i32 {
     let lookup = |x: i32| -> i32 {
         if x <= 0 {
@@ -4514,25 +4158,6 @@ fn ramen_transition_probe() -> String {
 
 /// ★ v3.24.69: 查询指定回合是否比赛回合（带缓存）[MDB single_mode_turn.race_entry_type]
 static mut NEXT_RACE_CACHE: (i32, bool) = (-1, false);
-unsafe fn query_next_turn_race_entry(next_turn: i32) -> bool {
-    if NEXT_RACE_CACHE.0 == next_turn {
-        return NEXT_RACE_CACHE.1;
-    }
-    let entry: Option<i32> = (|| {
-        let mdb = find_mdb_path()?;
-        let conn = Connection::open_with_flags(&mdb, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
-        conn.query_row(
-            "SELECT race_entry_type FROM single_mode_turn WHERE turn=?1 LIMIT 1",
-            [next_turn],
-            |r| r.get::<_, i32>(0),
-        )
-        .ok()
-    })();
-    let is_race = entry == Some(1);
-    NEXT_RACE_CACHE = (next_turn, is_race);
-    is_race
-}
-
 fn read_summary() -> String {
     // ★ v3.22.35: SIGSEGV cooldown — if we recently recovered from a crash, skip reads
     let now = std::time::SystemTime::now()
@@ -7057,353 +6682,6 @@ unsafe fn debug_ramengains() -> String {
 // ★ v3.24.61: in-process meta dump via libnative's own sqlite3.
 // The game reads meta with these exact functions + the captured passphrase,
 // so this works regardless of how customized the cipher/KDF is.
-fn hex_decode(s: &str) -> Vec<u8> {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len() / 2);
-    let v = |c: u8| -> u8 {
-        match c {
-            b'0'..=b'9' => c - b'0',
-            b'a'..=b'f' => c - b'a' + 10,
-            b'A'..=b'F' => c - b'A' + 10,
-            _ => 0,
-        }
-    };
-    let mut i = 0;
-    while i + 1 < b.len() {
-        out.push((v(b[i]) << 4) | v(b[i + 1]));
-        i += 2;
-    }
-    out
-}
-
-fn meta_dump_endpoint() -> String {
-    unsafe {
-        type OpenV2 =
-            extern "C" fn(*const i8, *mut *mut c_void, libc::c_int, *const i8) -> libc::c_int;
-        type KeyFn = extern "C" fn(*mut c_void, *const c_void, libc::c_int) -> libc::c_int;
-        type PrepV2 = extern "C" fn(
-            *mut c_void,
-            *const i8,
-            libc::c_int,
-            *mut *mut c_void,
-            *mut *const i8,
-        ) -> libc::c_int;
-        type StepFn = extern "C" fn(*mut c_void) -> libc::c_int;
-        type ColText = extern "C" fn(*mut c_void, libc::c_int) -> *const u8;
-        type FinFn = extern "C" fn(*mut c_void) -> libc::c_int;
-
-        let p_open = resolve_module_symbol("libnative.so", "sqlite3_open_v2");
-        let p_key = resolve_module_symbol("libnative.so", "sqlite3_key");
-        let p_prep = resolve_module_symbol("libnative.so", "sqlite3_prepare_v2");
-        let p_step = resolve_module_symbol("libnative.so", "sqlite3_step");
-        let p_coltext = resolve_module_symbol("libnative.so", "sqlite3_column_text");
-        let p_fin = resolve_module_symbol("libnative.so", "sqlite3_finalize");
-        let p_close = resolve_module_symbol("libnative.so", "sqlite3_close");
-        if p_open == 0
-            || p_key == 0
-            || p_prep == 0
-            || p_step == 0
-            || p_coltext == 0
-            || p_fin == 0
-            || p_close == 0
-        {
-            return r#"{"ok":false,"error":"symbol_resolve_failed"}"#.to_string();
-        }
-        let open_v2: OpenV2 = std::mem::transmute(p_open);
-        let key_fn: KeyFn = std::mem::transmute(p_key);
-        let prep: PrepV2 = std::mem::transmute(p_prep);
-        let step: StepFn = std::mem::transmute(p_step);
-        let coltext: ColText = std::mem::transmute(p_coltext);
-        let fin: FinFn = std::mem::transmute(p_fin);
-        let close: FinFn = std::mem::transmute(p_close);
-
-        let pkg_raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
-        let pkg = String::from_utf8_lossy(&pkg_raw)
-            .trim_matches(char::from(0))
-            .trim()
-            .to_string();
-        if pkg.is_empty() {
-            return r#"{"ok":false,"error":"pkg"}"#.to_string();
-        }
-        let db_path = format!("/data/user/0/{}/files/meta", pkg);
-        // key: prefer persisted file, fall back to in-memory capture
-        let key_hex =
-            std::fs::read_to_string(format!("/data/user/0/{}/files/ura_meta_key.txt", pkg))
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    META_KEY_HEX
-                        .lock()
-                        .ok()
-                        .map(|g| g.clone())
-                        .filter(|v| !v.is_empty())
-                });
-        let key_hex = match key_hex {
-            Some(h) => h,
-            None => return r#"{"ok":false,"error":"no_key_captured"}"#.to_string(),
-        };
-        let key_bytes = hex_decode(&key_hex);
-        if key_bytes.is_empty() {
-            return r#"{"ok":false,"error":"bad_key_hex"}"#.to_string();
-        }
-
-        let c_path = std::ffi::CString::new(db_path.clone()).unwrap();
-        let c_path_ptr = c_path.as_ptr() as *const i8;
-        let mut db: *mut c_void = std::ptr::null_mut();
-        // SQLITE_OPEN_READONLY (0x1) — never create journals on the live meta
-        let rc = open_v2(c_path_ptr, &mut db, 0x1, std::ptr::null());
-        if rc != 0 || db.is_null() {
-            return format!(r#"{{"ok":false,"error":"open_rc={}"}}"#, rc);
-        }
-        let krc = key_fn(
-            db,
-            key_bytes.as_ptr() as *const c_void,
-            key_bytes.len() as libc::c_int,
-        );
-        if krc != 0 {
-            close(db);
-            return format!(r#"{{"ok":false,"error":"key_rc={}"}}"#, krc);
-        }
-
-        let run_query = |sql: &str, mut on_row: &mut dyn FnMut(&[*const u8])| -> i32 {
-            let c_sql = std::ffi::CString::new(sql).unwrap();
-            let mut st: *mut c_void = std::ptr::null_mut();
-            let rc = prep(
-                db,
-                c_sql.as_ptr() as *const i8,
-                -1,
-                &mut st,
-                std::ptr::null_mut(),
-            );
-            if rc != 0 {
-                return rc;
-            }
-            let mut rows = 0;
-            loop {
-                let s = step(st);
-                if s == 100 {
-                    // SQLITE_ROW
-                    on_row(&[coltext(st, 0), coltext(st, 1)]);
-                    rows += 1;
-                } else {
-                    if s != 101 {
-                        rows = -(s as i32);
-                    } // SQLITE_DONE=101 else error
-                    break;
-                }
-            }
-            fin(st);
-            rows
-        };
-
-        // table list
-        let mut tables: Vec<String> = Vec::new();
-        {
-            let mut collect = |cols: &[*const u8]| {
-                if !cols[0].is_null() {
-                    tables.push(
-                        CStr::from_ptr(cols[0] as *const c_char)
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
-                }
-            };
-            run_query(
-                "SELECT name, NULL FROM sqlite_master WHERE type='table'",
-                &mut collect,
-            );
-        }
-
-        // dump `a` table to accessible media dir
-        let out_path = format!("/sdcard/Android/media/{}/hachimi/meta_dump.txt", pkg);
-        let mut rows_written: i64 = 0;
-        let mut err = String::new();
-        match std::fs::File::create(&out_path) {
-            Ok(f) => {
-                let mut w = std::io::BufWriter::new(f);
-                use std::io::Write;
-                let mut writer = |cols: &[*const u8]| {
-                    let a = if cols[0].is_null() {
-                        String::new()
-                    } else {
-                        CStr::from_ptr(cols[0] as *const c_char)
-                            .to_string_lossy()
-                            .into_owned()
-                    };
-                    let b = if cols[1].is_null() {
-                        String::new()
-                    } else {
-                        CStr::from_ptr(cols[1] as *const c_char)
-                            .to_string_lossy()
-                            .into_owned()
-                    };
-                    let _ = writeln!(w, "{}\t{}", a, b);
-                    rows_written += 1;
-                };
-                let r = run_query("SELECT n, h FROM a", &mut writer);
-                let _ = w.flush();
-                if r < 0 {
-                    err = format!("step_rc={}", -r);
-                }
-            }
-            Err(e) => {
-                err = format!("file_create: {}", e);
-            }
-        }
-        close(db);
-
-        let tables_json: Vec<String> = tables
-            .iter()
-            .map(|t| format!("\"{}\"", json_escape(t)))
-            .collect();
-        format!(
-            r#"{{"ok":{},"tables":[{}],"a_rows":{},"out":"{}","err":"{}"}}"#,
-            err.is_empty(),
-            tables_json.join(","),
-            rows_written,
-            out_path,
-            err
-        )
-    }
-}
-
-
-// SAFE_METADATA_PROBE_V1
-// Bounded, serialized process-memory scanner. It never dereferences candidate
-// addresses and never invokes IL2CPP while scanning.
-static SAFE_MEM_SCAN_LOCK: Mutex<()> = Mutex::new(());
-const SAFE_SCAN_CHUNK: usize = 256 * 1024;
-const SAFE_SCAN_MAX_BYTES: u64 = 256 * 1024 * 1024;
-const SAFE_SCAN_MAX_MAP: u64 = 64 * 1024 * 1024;
-const SAFE_SCAN_BUDGET_MS: u128 = 2500;
-
-#[derive(Clone)]
-struct SafeMap { start: u64, end: u64, perms: String, path: String }
-
-fn safe_json(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
-}
-
-fn safe_query(req: &str, key: &str) -> Option<String> {
-    let uri = req.lines().next()?.split_whitespace().nth(1)?;
-    let q = uri.split_once('?')?.1;
-    q.split('&').find_map(|p| {
-        let (k, v) = p.split_once('=').unwrap_or((p, ""));
-        if k == key { Some(v.to_string()) } else { None }
-    })
-}
-
-fn safe_hex(s: &str) -> Option<Vec<u8>> {
-    if s.is_empty() || s.len() > 128 || s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i+2], 16).ok()).collect()
-}
-
-fn safe_maps() -> std::io::Result<Vec<SafeMap>> {
-    let text = std::fs::read_to_string("/proc/self/maps")?;
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let mut p = line.split_whitespace();
-        let range = match p.next() { Some(v) => v, None => continue };
-        let perms = match p.next() { Some(v) => v.to_string(), None => continue };
-        let _offset = p.next(); let _dev = p.next(); let _inode = p.next();
-        let path = p.collect::<Vec<_>>().join(" ");
-        let (a,b) = match range.split_once('-') { Some(v) => v, None => continue };
-        let (start,end) = match (u64::from_str_radix(a,16),u64::from_str_radix(b,16)) { (Ok(a),Ok(b)) if b>a => (a,b), _ => continue };
-        out.push(SafeMap { start, end, perms, path });
-    }
-    Ok(out)
-}
-
-fn safe_read(addr: u64, dst: &mut [u8]) -> isize {
-    if dst.is_empty() { return 0; }
-    let local = libc::iovec { iov_base: dst.as_mut_ptr() as *mut c_void, iov_len: dst.len() };
-    let remote = libc::iovec { iov_base: addr as usize as *mut c_void, iov_len: dst.len() };
-    unsafe { libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) }
-}
-
-fn safe_metadata_header(addr: u64) -> Option<(u32,u64)> {
-    let mut h = [0u8; 0x200];
-    if safe_read(addr, &mut h) < 0x40 { return None; }
-    if h[0..4] != [0xaf,0x1b,0xb1,0xfa] { return None; }
-    let version = u32::from_le_bytes(h[4..8].try_into().ok()?);
-    if !(16..=40).contains(&version) { return None; }
-    let mut max_end = 0u64;
-    // Metadata headers are offset/size pairs after sanity+version. This is a
-    // bounded plausibility estimate, not permission to dump arbitrary memory.
-    for off in (8..h.len()-7).step_by(8) {
-        let a = u32::from_le_bytes(h[off..off+4].try_into().ok()?) as u64;
-        let z = u32::from_le_bytes(h[off+4..off+8].try_into().ok()?) as u64;
-        if a == 0 && z == 0 { continue; }
-        if a < 8 || a > 256*1024*1024 || z > 256*1024*1024 { continue; }
-        let e = a.checked_add(z)?;
-        if e <= 256*1024*1024 { max_end = max_end.max(e); }
-    }
-    if max_end < 0x1000 { return None; }
-    Some((version,max_end))
-}
-
-fn safe_mem_scan(req: &str, metadata_only: bool) -> String {
-    let _guard = match SAFE_MEM_SCAN_LOCK.try_lock() {
-        Ok(g) => g,
-        Err(_) => return r#"{"ok":false,"error":"scan_busy","retry_after_ms":3000}"#.to_string(),
-    };
-    let needle = if metadata_only { vec![0xaf,0x1b,0xb1,0xfa] } else {
-        match safe_query(req,"hex").and_then(|v| safe_hex(&v)) {
-            Some(v) => v,
-            None => return r#"{"ok":false,"error":"invalid_hex","max_hex_chars":128}"#.to_string(),
-        }
-    };
-    let max_hits = safe_query(req,"max").and_then(|v| v.parse::<usize>().ok()).unwrap_or(8).clamp(1,32);
-    let maps = match safe_maps() { Ok(v) => v, Err(e) => return format!(r#"{{"ok":false,"error":"maps_read_failed","detail":"{}"}}"#, safe_json(&e.to_string())) };
-    let started = std::time::Instant::now();
-    let mut selected=0u64; let mut attempted=0u64; let mut scanned=0u64; let mut failures=0u64; let mut truncated=false;
-    let mut hits: Vec<String> = Vec::new();
-    let mut buf = vec![0u8; SAFE_SCAN_CHUNK + needle.len().saturating_sub(1)];
-    'maps: for m in &maps {
-        if !m.perms.starts_with('r') { continue; }
-        if m.path.starts_with("/dev/") || m.path=="[vvar]" || m.path=="[vdso]" { continue; }
-        let map_len = m.end-m.start;
-        if map_len == 0 || map_len > SAFE_SCAN_MAX_MAP { continue; }
-        selected += 1;
-        let mut pos=m.start; let mut carry=0usize;
-        while pos<m.end {
-            if attempted>=SAFE_SCAN_MAX_BYTES || started.elapsed().as_millis()>=SAFE_SCAN_BUDGET_MS { truncated=true; break 'maps; }
-            let want=((m.end-pos) as usize).min(SAFE_SCAN_CHUNK).min((SAFE_SCAN_MAX_BYTES-attempted) as usize);
-            attempted += want as u64;
-            let n=safe_read(pos,&mut buf[carry..carry+want]);
-            if n<=0 { failures+=1; break; }
-            let n=n as usize; scanned+=n as u64; let total=carry+n;
-            if total>=needle.len() {
-                for i in 0..=total-needle.len() {
-                    if buf[i..i+needle.len()]==needle[..] {
-                        let addr=pos.saturating_sub(carry as u64)+i as u64;
-                        let meta=safe_metadata_header(addr);
-                        if !metadata_only || meta.is_some() {
-                            let extra=meta.map(|(v,z)| format!(r#",\"version\":{},\"size_estimate\":{}"#,v,z)).unwrap_or_default();
-                            hits.push(format!(r#"{{\"addr\":\"0x{:x}\",\"map_start\":\"0x{:x}\",\"map_end\":\"0x{:x}\",\"perms\":\"{}\",\"path\":\"{}\"{}}}"#,addr,m.start,m.end,safe_json(&m.perms),safe_json(&m.path),extra));
-                            if hits.len()>=max_hits { break 'maps; }
-                        }
-                    }
-                }
-            }
-            carry=needle.len().saturating_sub(1).min(total);
-            if carry>0 { buf.copy_within(total-carry..total,0); }
-            pos+=n as u64;
-            if n<want { failures+=1; break; }
-        }
-    }
-    format!(r#"{{"ok":true,"safe":true,"metadata_only":{},"maps_total":{},"maps_selected":{},"bytes_attempted":{},"bytes_scanned":{},"read_failures":{},"elapsed_ms":{},"truncated":{},"hits":{},"locations":[{}]}}"#,
-        metadata_only,maps.len(),selected,attempted,scanned,failures,started.elapsed().as_millis(),truncated,hits.len(),hits.join(","))
-}
-
-fn safe_maps_summary() -> String {
-    let maps=match safe_maps(){Ok(v)=>v,Err(e)=>return format!(r#"{{"ok":false,"error":"maps_read_failed","detail":"{}"}}"#,safe_json(&e.to_string()))};
-    let readable=maps.iter().filter(|m|m.perms.starts_with('r')).count();
-    let sample=maps.iter().filter(|m|m.perms.starts_with('r')).take(64).map(|m|format!(r#"{{"start":"0x{:x}","end":"0x{:x}","size":{},"perms":"{}","path":"{}"}}"#,m.start,m.end,m.end-m.start,safe_json(&m.perms),safe_json(&m.path))).collect::<Vec<_>>().join(",");
-    format!(r#"{{"ok":true,"maps_total":{},"readable":{},"sample_limited":true,"maps":[{}]}}"#,maps.len(),readable,sample)
-}
-
 fn handle_http(mut stream: std::net::TcpStream) {
     use std::io::{Read, Write};
     let mut buf = [0u8; 8192];
@@ -7453,8 +6731,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/event/observations/clear",
             "/api/event/clear",
             "/action/latest",
-            "/seed/history",
-            "/seed/stats",
             "/log",
             "/carddb",
             "/skilldata",
@@ -7468,16 +6744,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/mdb",
             "/debug/resource_",
             "/debug/private_file",
-            "/debug/mem_scan_sqlite",
-            "/debug/mem_scan_zdict",
-            "/debug/mem_scan_hex",
-            "/debug/file_scan_hex",
-            "/debug/maps_list",
-            "/debug/file_dl",
-            "/debug/file_range_hex",
             "/il2cpp/read_string",
-            "/il2cpp/read_mem",
-        ];
+            ];
         let safe = BOOT_SAFE_EXACT.iter().any(|p| path == *p)
             || BOOT_SAFE_PREFIX.iter().any(|p| path.starts_with(p));
         if !safe {
@@ -7506,46 +6774,22 @@ fn handle_http(mut stream: std::net::TcpStream) {
         "/api/event/choices",
         "/api/event/observations",
         "/debug/event_reward_targets",
-        "/debug/resource_meta_schema",
-        "/debug/resource_meta_probe",
-        "/debug/resource_crypto_symbols",
-        "/debug/all",
         "/debug/params",
-        "/debug/cmdinfo",
-        "/debug/breeders",
-        "/debug/training_partners",
         "/debug/rameninfo",
-        "/debug/laststep",
-        "/debug/storydata",
         "/debug/ramenfields",
-        "/debug/gauge",
-        "/debug/gauge2",
         "/debug/ramengains",
         "/debug/paramsincdec",
-        "/debug/training_seed",
-        "/debug/unique_skills",
-        "/debug/hint_gain",
-        "/debug/sc_effect",
-        "/debug/unique_detail",
         "/classes",
     ];
     let dl_flag = parse_query(&full_uri, "dl");
     let dl_name = parse_query(&full_uri, "name");
     let dl_enabled = !dl_flag.is_empty() && dl_flag != "0" && DL_ALLOWED.iter().any(|p| path == *p);
 
-    let body = if path == "/debug/global_metadata_probe" {
-        safe_mem_scan(req, true)
-    } else if path == "/debug/mem_scan_hex" {
-        safe_mem_scan(req, false)
-    } else if path == "/debug/mem_maps" {
-        safe_maps_summary()
-    } else if path == "/" || path == "/health" {
+    let body = if path == "/" || path == "/health" {
         format!(
-            r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#,
+            r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/event/recommend","/inherit/compat","/log/turn","/debug/params","/debug/crashlog","/debug/upload","/debug/ramenfields","/debug/ramengains","/debug/paramsincdec","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/call","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/action/latest","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets" ]}}"#,
             PLUGIN_VERSION
         )
-    } else if path == "/scan" {
-        unsafe { scan_il2cpp_classes() }
     } else if path == "/data" {
         let result = unsafe { read_training_data() };
         unsafe {
@@ -7558,8 +6802,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
             GAME_INITIALIZED.load(Ordering::Relaxed),
             HTTP_RUNNING.load(Ordering::Relaxed)
         )
-    } else if path == "/singletons" {
-        unsafe { find_all_singletons() }
     } else if path.starts_with("/find_method") {
         let method_name = if path == "/find_method" || path == "/find_method/" {
             "get_SingleMode"
@@ -7608,15 +6850,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else if path == "/summary" {
         read_summary()
-    } else if path == "/debug/turn_probe" {
-        // v3.24.72: expose decrypted raw field only; UI is a countdown and mapping is unknown.
-        let s = read_summary();
-        format!(
-            r#"{{"status":"ok","raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"unverified","year":null,"month":{},"half":{},"derived_turn":null}}"#,
-            extract_json_int(&s, "\"raw_total_turn_num\"").unwrap_or(-1),
-            extract_json_int(&s, "\"month\"").unwrap_or(-1),
-            extract_json_int(&s, "\"half\"").unwrap_or(-1)
-        )
     } else if path == "/debug/ramen_transition" {
         // v3.24.71: compact before/after observation; causality is always unknown.
         // Refresh summary first so this endpoint can itself advance the probe.
@@ -7642,36 +6875,16 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { get_training_log() }
     } else if path == "/debug/params" {
         unsafe { debug_params_inc_dec() }
-    } else if path == "/debug/breeders" {
-        unsafe { debug_breeders_team() }
     } else if path == "/debug/rameninfo" {
         // Dump ramen DataSet raw memory for field layout analysis
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             read_ramen_info()
         }))
         .unwrap_or_else(|_| r#"{"error":"rameninfo_panic"}"#.to_string())
-    } else if path == "/debug/laststep" {
-        let step = PREDICT_STEP.load(std::sync::atomic::Ordering::Relaxed);
-        let len = LAST_STEP_LEN.load(std::sync::atomic::Ordering::Relaxed) as usize;
-        let msg = if len > 0 && len < 128 {
-            unsafe {
-                let buf_ptr = LAST_STEP_BUF.as_ptr();
-                std::ffi::CStr::from_ptr(buf_ptr as *const c_char)
-                    .to_string_lossy()
-                    .into_owned()
-            }
-        } else {
-            String::new()
-        };
-        format!(r#"{{"step":{},"last_step":"{}"}}"#, step, msg)
     } else if path == "/debug/crashlog" {
         read_crash_log()
     } else if path == "/debug/upload" {
         upload_all_logs()
-    } else if path == "/debug/cmdinfo" {
-        unsafe { debug_cmdinfo() }
-    } else if path == "/debug/training_partners" {
-        debug_training_partners()
     } else if path == "/debug/ramen_participants" {
         debug_ramen_participants()
     } else if path == "/training/result" {
@@ -7806,396 +7019,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
             r#"{{"count":{},"entries":[{}]}}"#,
             entries.len(),
             entries.join(",")
-        )
-    } else if path == "/debug/resource_reads" {
-        // ★ v3.24.58: meta/dat file-read trace. Lazy-starts the /proc watcher
-        // on first request (never at init — thread spawn in init context).
-        start_res_fd_watcher();
-        let entries: Vec<String> = match RES_READ_LOG.lock() {
-            Ok(g) => g
-                .iter()
-                .map(|l| format!("\"{}\"", json_escape(l)))
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        format!(
-            r#"{{"count":{},"entries":[{}]}}"#,
-            entries.len(),
-            entries.join(",")
-        )
-    } else if path.starts_with("/debug/mem_scan_sqlite") {
-        // ★ v3.24.58: hunt plaintext "SQLite format 3" pages in process memory
-        // — any custom decryption MUST materialize this in RAM.
-        let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(8);
-        let mut hits: Vec<String> = Vec::new();
-        let needle = b"SQLite format 3 ";
-        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-            let mem = std::fs::File::open("/proc/self/mem");
-            use std::os::unix::fs::FileExt;
-            if let Ok(mem) = mem {
-                'outer: for line in maps.lines() {
-                    let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.len() < 6 {
-                        continue;
-                    }
-                    if !cols[1].contains("rw") {
-                        continue;
-                    }
-                    let range: Vec<&str> = cols[0].split('-').collect();
-                    if range.len() != 2 {
-                        continue;
-                    }
-                    let (Ok(sa), Ok(ea)) = (
-                        usize::from_str_radix(range[0], 16),
-                        usize::from_str_radix(range[1], 16),
-                    ) else {
-                        continue;
-                    };
-                    let len = ea - sa;
-                    if len < 4096 || len > 512 * 1024 * 1024 {
-                        continue;
-                    }
-                    let mut off = 0usize;
-                    while off < len {
-                        let chunk = (4 * 1024 * 1024usize).min(len - off);
-                        let mut buf = vec![0u8; chunk];
-                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() {
-                            break;
-                        }
-                        for (i, w) in buf.windows(needle.len()).enumerate() {
-                            if w == needle {
-                                let abs = sa + off + i;
-                                let after =
-                                    &buf[i + needle.len()..(i + needle.len() + 16).min(buf.len())];
-                                hits.push(format!("0x{:x} {}", abs, hex_encode(after)));
-                                if hits.len() >= max_hits {
-                                    break 'outer;
-                                }
-                            }
-                        }
-                        off += chunk;
-                    }
-                }
-            }
-        }
-        format!(
-            r#"{{"needle":"SQLite format 3","hits":{},"locations":[{}]}}"#,
-            hits.len(),
-            hits.iter()
-                .map(|h| format!("\"{}\"", h))
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    } else if path == "/debug/mem_scan_zdict" {
-        // ★ v3.24.63: hunt zstd dictionary magic (37 A4 30 EC) in ALL readable
-        // memory regions (incl. r-- rodata of .so files). Each hit dumps 256KB
-        // of context to the media dir for offline inspection.
-        let needle = [0x37u8, 0xa4, 0x30, 0xec];
-        let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(4);
-        let mut hits: Vec<String> = Vec::new();
-        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-            if let Ok(mem) = std::fs::File::open("/proc/self/mem") {
-                use std::os::unix::fs::FileExt;
-                'outer: for line in maps.lines() {
-                    let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.len() < 2 {
-                        continue;
-                    }
-                    if !cols[1].starts_with('r') {
-                        continue;
-                    }
-                    let range: Vec<&str> = cols[0].split('-').collect();
-                    if range.len() != 2 {
-                        continue;
-                    }
-                    let (Ok(sa), Ok(ea)) = (
-                        usize::from_str_radix(range[0], 16),
-                        usize::from_str_radix(range[1], 16),
-                    ) else {
-                        continue;
-                    };
-                    let len = ea - sa;
-                    if len < 4096 || len > 1024 * 1024 * 1024 {
-                        continue;
-                    }
-                    let mut off = 0usize;
-                    while off < len {
-                        let chunk = (8 * 1024 * 1024usize).min(len - off);
-                        let mut buf = vec![0u8; chunk];
-                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() {
-                            break;
-                        }
-                        for (i, w) in buf.windows(4).enumerate() {
-                            if w == needle {
-                                let abs = sa + off + i;
-                                // dump 256KB context starting at hit
-                                let dump_len = 256 * 1024usize;
-                                let mut dbuf = vec![0u8; dump_len];
-                                let got = mem.read_at(&mut dbuf, abs as u64).unwrap_or(0);
-                                dbuf.truncate(got);
-                                let fname = format!(
-                                    "/sdcard/Android/media/jp.co.cygames.umamusume/hachimi/zdict_{:x}.bin",
-                                    abs
-                                );
-                                let saved = std::fs::write(&fname, &dbuf).is_ok();
-                                let map_name = cols.get(5).copied().unwrap_or("");
-                                hits.push(format!(
-                                    "0x{:x} saved={} bytes={} map={}",
-                                    abs, saved, got, map_name
-                                ));
-                                if hits.len() >= max_hits {
-                                    break 'outer;
-                                }
-                            }
-                        }
-                        off += chunk;
-                    }
-                }
-            }
-        }
-        format!(
-            r#"{{"needle":"37a430ec","hits":{},"locations":[{}],"note":"raw-content dicts have no magic; if 0 hits use /debug/mem_scan_hex"}}"#,
-            hits.len(),
-            hits.iter()
-                .map(|h| format!("\"{}\"", json_escape(h)))
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    } else if path.starts_with("/debug/mem_scan_hex") {
-        // ★ v3.24.63: arbitrary <=32B hex pattern scan across readable maps
-        let hexq = parse_query(&full_uri, "hex");
-        let mut needle: Vec<u8> = Vec::new();
-        let hb = hexq.as_bytes();
-        let mut i = 0;
-        while i + 1 < hb.len() && needle.len() < 32 {
-            if let Ok(b) = u8::from_str_radix(&hexq[i..i + 2], 16) {
-                needle.push(b);
-            }
-            i += 2;
-        }
-        let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(8);
-        let mut hits: Vec<String> = Vec::new();
-        if needle.is_empty() {
-            let body = r#"{"error":"empty_needle","usage":"/debug/mem_scan_hex?hex=37a430ec"}"#
-                .to_string();
-            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
-            let _ = stream.write_all(resp.as_bytes());
-            return;
-        }
-        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-            if let Ok(mem) = std::fs::File::open("/proc/self/mem") {
-                use std::os::unix::fs::FileExt;
-                'outer: for line in maps.lines() {
-                    let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.len() < 2 || !cols[1].starts_with('r') {
-                        continue;
-                    }
-                    let range: Vec<&str> = cols[0].split('-').collect();
-                    if range.len() != 2 {
-                        continue;
-                    }
-                    let (Ok(sa), Ok(ea)) = (
-                        usize::from_str_radix(range[0], 16),
-                        usize::from_str_radix(range[1], 16),
-                    ) else {
-                        continue;
-                    };
-                    let len = ea - sa;
-                    if len < 4096 || len > 1024 * 1024 * 1024 {
-                        continue;
-                    }
-                    let mut off = 0usize;
-                    while off < len {
-                        let chunk = (8 * 1024 * 1024usize).min(len - off);
-                        let mut buf = vec![0u8; chunk];
-                        if mem.read_at(&mut buf, (sa + off) as u64).is_err() {
-                            break;
-                        }
-                        for (i, w) in buf.windows(needle.len()).enumerate() {
-                            if w == needle.as_slice() {
-                                let abs = sa + off + i;
-                                let tail_s = i + needle.len();
-                                let tail_e = (tail_s + 24).min(buf.len());
-                                hits.push(format!(
-                                    "0x{:x} {} {}",
-                                    abs,
-                                    hex_encode(&buf[tail_s..tail_e]),
-                                    cols.get(5).copied().unwrap_or("")
-                                ));
-                                if hits.len() >= max_hits {
-                                    break 'outer;
-                                }
-                            }
-                        }
-                        off += chunk;
-                    }
-                }
-            }
-        }
-        format!(
-            r#"{{"hits":{},"locations":[{}]}}"#,
-            hits.len(),
-            hits.iter()
-                .map(|h| format!("\"{}\"", json_escape(h)))
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    } else if path.starts_with("/debug/file_scan_hex") {
-        // ★ v3.24.64: scan device files for a hex pattern.
-        // path= empty -> scan every file-backed .so/.dat region listed in maps (dedup).
-        // Reports file offset hits with 24 bytes of trailing context.
-        let hexq = parse_query(&full_uri, "hex");
-        let mut needle: Vec<u8> = Vec::new();
-        let hb = hexq.as_bytes();
-        let mut i = 0;
-        while i + 1 < hb.len() && needle.len() < 64 {
-            if let Ok(b) = u8::from_str_radix(&hexq[i..i + 2], 16) {
-                needle.push(b);
-            }
-            i += 2;
-        }
-        let max_hits: usize = parse_query(&full_uri, "max").parse().unwrap_or(8);
-        let pathq = parse_query(&full_uri, "path");
-        let mut targets: Vec<String> = Vec::new();
-        if !pathq.is_empty() {
-            targets.push(pathq);
-        } else if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-            for line in maps.lines() {
-                let cols: Vec<&str> = line.split_whitespace().collect();
-                if let Some(name) = cols.get(5) {
-                    if (name.ends_with(".so") || name.ends_with(".apk") || name.contains("/dat/"))
-                        && !targets.iter().any(|t| t == name)
-                    {
-                        targets.push(name.to_string());
-                    }
-                }
-            }
-        }
-        let mut hits: Vec<String> = Vec::new();
-        if needle.is_empty() {
-            hits.push("error: empty needle, use ?hex=37a430ec".to_string());
-        } else {
-            use std::io::Read;
-            'files: for t in &targets {
-                if let Ok(mut f) = std::fs::File::open(t) {
-                    let mut fbuf: Vec<u8> = Vec::new();
-                    if f.read_to_end(&mut fbuf).is_err() {
-                        continue;
-                    }
-                    for (i, w) in fbuf.windows(needle.len()).enumerate() {
-                        if w == needle.as_slice() {
-                            let ts = i + needle.len();
-                            let te = (ts + 24).min(fbuf.len());
-                            hits.push(format!("{}@0x{:x} {}", t, i, hex_encode(&fbuf[ts..te])));
-                            if hits.len() >= max_hits {
-                                break 'files;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        format!(
-            r#"{{"targets":{},"hits":{},"locations":[{}]}}"#,
-            targets.len(),
-            hits.len(),
-            hits.iter()
-                .map(|h| format!("\"{}\"", json_escape(h)))
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    } else if path == "/debug/maps_list" {
-        // ★ v3.24.65: list file-backed memory maps (find libzstd / codec hosts)
-        let filter = parse_query(&full_uri, "filter");
-        let mut out: Vec<String> = Vec::new();
-        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-            for line in maps.lines() {
-                let cols: Vec<&str> = line.split_whitespace().collect();
-                if let Some(name) = cols.get(5) {
-                    if name.starts_with('/') && (filter.is_empty() || name.contains(&filter)) {
-                        let e = format!("{} {}", cols[0], name);
-                        if !out.contains(&e) {
-                            out.push(e);
-                        }
-                    }
-                }
-            }
-        }
-        format!(
-            r#"{{"count":{},"maps":[{}]}}"#,
-            out.len(),
-            out.iter()
-                .map(|h| format!("\"{}\"", json_escape(h)))
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    } else if path.starts_with("/debug/file_range_hex") {
-        // ★ v3.24.67: read a byte range of a maps-listed file, return hex (chunked RE)
-        let want = parse_query(&full_uri, "path");
-        let off_str = parse_query(&full_uri, "offset");
-        let len_str = parse_query(&full_uri, "len");
-        let off = usize::from_str_radix(off_str.trim_start_matches("0x"), 16).unwrap_or(0);
-        let max_len: usize = len_str.parse().unwrap_or(65536).min(4 * 1024 * 1024);
-        let mut allowed = false;
-        if !want.is_empty() {
-            if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-                for line in maps.lines() {
-                    let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.get(5).copied() == Some(want.as_str()) {
-                        allowed = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if !allowed {
-            format!(r#"{{"error":"not_in_maps"}}"#)
-        } else {
-            use std::io::{Read, Seek, SeekFrom};
-            match std::fs::File::open(&want) {
-                Ok(mut f) => {
-                    let mut buf = vec![0u8; max_len];
-                    let got = f
-                        .seek(SeekFrom::Start(off as u64))
-                        .and_then(|_| f.read(&mut buf))
-                        .unwrap_or(0);
-                    buf.truncate(got);
-                    format!(
-                        r#"{{"path":"{}","offset":"0x{:x}","len":{},"hex":"{}"}}"#,
-                        json_escape(&want),
-                        off,
-                        got,
-                        hex_encode(&buf)
-                    )
-                }
-                Err(e) => format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
-            }
-        }
-    } else if path == "/debug/meta_dump" {
-        // ★ v3.24.61: in-process meta dump (libnative sqlite + captured key)
-        meta_dump_endpoint()
-    } else if path == "/debug/resource_db_keys" {
-        // ★ v3.24.45: full db open/key/mc_config pairing log
-        let entries: Vec<String> = match DB_KEY_LOG.lock() {
-            Ok(g) => g
-                .iter()
-                .map(|l| format!("\"{}\"", json_escape(l)))
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        format!(
-            r#"{{"count":{},"entries":[{}]}}"#,
-            entries.len(),
-            entries.join(",")
-        )
-    } else if path == "/debug/resource_meta_key" {
-        // ★ v3.24.44: captured SQLCipher key for the resource `meta` DB
-        let key = META_KEY_HEX.lock().map(|g| g.clone()).unwrap_or_default();
-        format!(
-            r#"{{"captured":{},"key_len":{},"key_hex":"{}","persisted_file":"files/ura_meta_key.txt"}}"#,
-            if key.is_empty() { "false" } else { "true" },
-            key.len() / 2,
-            key
         )
     } else if path == "/debug/hookdiag" {
         // ★ v3.24.40: per-hook install status
@@ -8475,8 +7298,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
             r#"{{"sequence":{},"raw_command_id":{},"normalized_command_id":{},"action":"{}","result_type":{},"source":"training_hook"}}"#,
             seq, cmd_id, normalized, action, result_type
         )
-    } else if path == "/seed/history" || path == "/seed/stats" {
-        r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
     } else if path == "/debug/training_log" {
         let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
         let addr = unsafe { EXEC_TRAINING_ADDR };
@@ -8513,61 +7334,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
             debug_ramen_region_select()
         }))
         .unwrap_or_else(|_| r#"{"error":"ramen_region_select_panic"}"#.to_string())
-    } else if path == "/debug/race_random_program_exact" {
-        unsafe { debug_race_random_program_exact() }
-    } else if path.starts_with("/debug/dumpclass") {
-        // v3.22.51: Dump all fields of any IL2CPP class by name
-        // Usage: /debug/dumpclass?name=WorkSingleModeData
-        let class_name = if let Some(q) = full_uri.find("?name=") {
-            &full_uri[q + 6..]
-        } else {
-            ""
-        };
-        unsafe { debug_dumpclass(class_name) }
-    } else if path == "/debug/storydata" {
-        // v3.22.35: Discover all DataSet getters, find story/event related arrays
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            debug_storydata()
-        }))
-        .unwrap_or_else(|_| r#"{"error":"storydata_panic"}"#.to_string())
-    } else if path == "/debug/all" {
-        // ★ v3.22.35: Aggregate all debug data in one call — summary + scenario + storydata + cmdinfo + rameninfo
-        unsafe { debug_all() }
     } else if path == "/debug/ramenfields" {
         // v3.22.51: Dump all ramen array element classes + their fields at runtime
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             debug_ramenfields()
         }))
         .unwrap_or_else(|_| r#"{"error":"ramenfields_panic"}"#.to_string())
-    } else if path == "/debug/gauge" {
-        // ★ v3.22.39: sigsetjmp + READ_MUTEX protection — prevent game crash on SIGSEGV
-        let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
-        if jmp_result != 0 {
-            r#"{"error":"sigsegv_recovered","hint":"/debug/gauge hit native crash, game protected"}"#.to_string()
-        } else {
-            SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_gauge() }))
-                    .unwrap_or_else(|_| r#"{"error":"gauge_panic"}"#.to_string());
-            SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
-            result
-        }
-    } else if path == "/debug/gauge2" {
-        // v3.22.39: Scan all DataSet array fields for element class names
-        let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
-        if jmp_result != 0 {
-            r#"{"error":"sigsegv_recovered","hint":"/debug/gauge2 hit native crash, game protected"}"#.to_string()
-        } else {
-            SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                debug_gauge2()
-            }))
-            .unwrap_or_else(|_| r#"{"error":"gauge2_panic"}"#.to_string());
-            SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
-            result
-        }
     } else if path == "/debug/ramengains" {
         // ★ v3.24.9: Diagnose Ramen gains reading — trace every step
         let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -8598,21 +7370,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
             SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
             result
         }
-    } else if path == "/debug/training_seed" {
-        // 一键查找训练种子：自动完成 WorkDataManager → WorkSingleModeData → _fixedTurnCharaSeed
-        let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
-        if jmp_result != 0 {
-            r#"{"error":"sigsegv_recovered","hint":"/debug/training_seed hit native crash, game protected"}"#.to_string()
-        } else {
-            SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                debug_training_seed()
-            }))
-            .unwrap_or_else(|_| r#"{"error":"training_seed_panic"}"#.to_string());
-            SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
-            result
-        }
     } else if path == "/update" {
         // v3.22.51: Self-update SO from GitHub Release
         update_so()
@@ -8629,18 +7386,10 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else if path == "/events" {
         read_events_data()
-    } else if path == "/debug/unique_skills" {
-        debug_unique_skills()
     } else if path == "/debug/mdb_all_tables" {
         debug_mdb_all_tables()
     } else if path == "/debug/mdb_schema_dump" {
         debug_mdb_schema_dump()
-    } else if path == "/debug/hint_gain" {
-        debug_hint_gain()
-    } else if path == "/debug/sc_effect" {
-        debug_sc_effect()
-    } else if path == "/debug/unique_detail" {
-        debug_unique_detail()
     } else if path == "/debug/table" {
         let table_name = if let Some(q) = full_uri.find("?name=") {
             let rest = &full_uri[q + 6..];
@@ -8721,22 +7470,12 @@ fn handle_http(mut stream: std::net::TcpStream) {
         read_carddb()
     } else if path == "/skilldata" {
         read_skilldata()
-    } else if path == "/hall" {
-        unsafe { read_hall_data() }
     } else if path == "/event/recommend" {
         unsafe { read_event_recommend() }
     } else if path == "/inherit/compat" {
         unsafe { read_inherit_compat() }
-    } else if path == "/saddle-analysis" {
-        unsafe { read_win_saddle_analysis() }
     } else if path == "/log/turn" {
         unsafe { read_turn_log() }
-    } else if path == "/ranking" {
-        unsafe { read_ranking_data() }
-    } else if path == "/saddles-dl" {
-        read_saddles()
-    } else if path == "/saddles" {
-        read_saddles()
     } else if path == "/config" {
         let is_post = req.starts_with("POST");
         if is_post {
@@ -8761,10 +7500,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 unsafe { get_config() }.to_json()
             )
         }
-    } else if path == "/debug/dump" {
-        // v3.22.89: Dump tool - group tables by first letter, one file per group
-        let html = r#"<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dump</title><style>body{font-family:system-ui;max-width:600px;margin:12px auto;padding:0 8px;background:#1a1a2e;color:#e0e0e0}h1{color:#4fc3f7;font-size:1.2em;margin:8px 0}.g{display:inline-block;margin:4px 2px;padding:8px 12px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;cursor:pointer;font-size:14px;min-width:36px;text-align:center}.g:disabled{background:#555;color:#333;cursor:default}.g.ok{background:#2e7d32;border-color:#4caf50}.g.err{background:#b71c1c;border-color:#ff5252}.g.run{background:#e65100;border-color:#ff9800}select{padding:8px;background:#16213e;border:1px solid #333;border-radius:4px;color:#fff;font-size:16px;width:100%}button{padding:12px 24px;border:none;border-radius:4px;color:#000;font-weight:bold;cursor:pointer;font-size:16px;margin:4px}#btn{background:#4fc3f7}#btn:disabled{background:#555;color:#333}.p{margin:8px 0;font-size:0.95em}.ok{color:#4caf50}.err{color:#ff5252}progress{width:100%;height:20px;margin:8px 0}#lst{margin:8px 0;font-size:0.8em;color:#aaa;max-height:300px;overflow-y:auto}</style></head><body><h1>MDB Dump Tool</h1><div class="p" id="pg2">Loading table list...</div><div id="groups"></div><hr><select id="tn"><option value="">-- loading --</option></select><button id="btn" onclick="goOne()" disabled>Dump 1 Table</button><div class="p" id="pg">Press a letter group to dump all tables in that group as one file</div><progress id="pb" value="0" max="100"></progress><div id="lst"></div><script>function safeJson(t){try{return JSON.parse(t)}catch(e){return JSON.parse(t.replace(/[\x00-\x1f]/g,function(c){return"\\u"+("0000"+c.charCodeAt(0).toString(16)).slice(-4)}))}}var tables=[];var groups={};async function loadTables(){try{var r=await fetch("/debug/mdb_all_tables");var j=safeJson(await r.text());if(!j.ok){document.getElementById("pg2").innerHTML=`<span class="err">Error: ${j.error||"unknown"}</span>`;return;}tables=j.all_tables||[];var sel=document.getElementById("tn");sel.innerHTML="";groups={};for(var i=0;i<tables.length;i++){var t=tables[i];var o=document.createElement("option");o.value=t.name;o.textContent=t.name+" ("+t.rows+")";sel.appendChild(o);var fl=t.name[0].toUpperCase();if(!groups[fl])groups[fl]=[];groups[fl].push(t);}document.getElementById("btn").disabled=false;document.getElementById("pg2").innerHTML=`<span class="ok">${tables.length} tables in ${Object.keys(groups).length} groups</span>`;renderGroups();}catch(e){document.getElementById("pg2").innerHTML=`<span class="err">Fetch error: ${e}</span>`;}}function renderGroups(){var div=document.getElementById("groups");div.innerHTML="";var keys=Object.keys(groups).sort();for(var k=0;k<keys.length;k++){var key=keys[k];var btn=document.createElement("button");btn.className="g";btn.textContent=key+" ("+groups[key].length+")";btn.setAttribute("data-key",key);btn.onclick=function(){goGroup(this.getAttribute("data-key"),this);};div.appendChild(btn);}}async function dumpTable(n,onProgress){var allRows=[];var off=0;var total=0;var batch=100;var done=false;while(!done){try{var r=await fetch("/debug/table?name="+n+"&limit="+batch+"&offset="+off);var j=safeJson(await r.text());if(!j.ok){return{ok:false,error:j.error||"unknown"};}total=j.row_count||total;var nr=j.rows?j.rows.length:0;if(nr===0){done=true;break;}allRows=allRows.concat(j.rows);off+=nr;if(onProgress)onProgress(off,total);done=off>=total||nr<batch;}catch(e){return{ok:false,error:""+e};}}return{ok:true,table:n,row_count:total,rows_merged:allRows.length,rows:allRows};}function downloadJson(data,filename){var result=JSON.stringify(data);var blob=new Blob([result],{type:"application/json"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);}async function goGroup(key,btn){btn.disabled=true;btn.className="g run";var tbls=groups[key];var result={group:key,tables:{}};var log=document.getElementById("lst");log.innerHTML="";var ok=0,fail=0;for(var i=0;i<tbls.length;i++){var t=tbls[i];document.getElementById("pg").innerHTML=`<span class="ok">[${key}] ${(i+1)}/${tbls.length} ${t.name} (${t.rows} rows)...</span>`;document.getElementById("pb").value=Math.round((i+1)/tbls.length*100);if(t.rows===0){result.tables[t.name]={ok:true,rows:0,data:[]};log.innerHTML+=t.name+": skip (0)<br>";ok++;continue;}var res=await dumpTable(t.name);if(res.ok&&res.rows_merged>0){result.tables[t.name]={ok:true,row_count:res.row_count,rows_merged:res.rows_merged,rows:res.rows};log.innerHTML+=t.name+`: <span class="ok">${res.rows_merged}</span><br>`;ok++;}else{result.tables[t.name]={ok:false,error:res.error||"no rows"};log.innerHTML+=t.name+`: <span class="err">${res.error||"no rows"}</span><br>`;fail++;}}var fname="mdb_"+key.toLowerCase()+".json";downloadJson(result,fname);btn.className=ok>0&&fail===0?"g ok":"g err";btn.disabled=false;document.getElementById("pg").innerHTML=`<span class="ok">${key}: ${ok} OK, ${fail} fail -> ${fname}</span>`;document.getElementById("pb").value=0;}async function goOne(){var b=document.getElementById("btn");var n=document.getElementById("tn").value;if(!n)return;b.disabled=true;document.getElementById("pg").innerHTML=`<span class="ok">Dumping ${n}...</span>`;var res=await dumpTable(n,function(off,total){var pct=total>0?Math.round(off/total*100):0;document.getElementById("pb").value=pct;document.getElementById("pg").innerHTML="Dumping "+n+": "+off+"/"+total+" ("+pct+"%)";});if(res.ok&&res.rows_merged>0){downloadJson(res,n+".json");document.getElementById("pg").innerHTML=`<span class="ok">Done! ${res.rows_merged}/${res.row_count} -> ${n}.json</span>`;}else{document.getElementById("pg").innerHTML=`<span class="err">${res.error?"Error: "+res.error:"No rows found"}</span>`;}document.getElementById("pb").value=0;b.disabled=false;}loadTables();</script></body></html>"#.to_string();
-        html
     } else if path == "/config.html" {
         // Serve a simple HTML form for config editing - open in any browser
         let cfg = unsafe { get_config() };
@@ -8821,33 +7556,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
         );
         let _ = stream.write_all(resp.as_bytes());
         return;
-    } else if path.starts_with("/il2cpp/dump_all_methods_dl") {
-        // v3.22.91: 暴力dump全部类方法目录（下载JSON，修复：内联下载包装）
-        let letter = parse_query(&full_uri, "letter");
-        let body = unsafe { il2cpp_dump_all_methods(&letter) };
-        let safe_letter: String = letter.chars().filter(|c| c.is_alphanumeric()).collect();
-        let fname = format!(
-            "dump_all_methods_{}.json",
-            if safe_letter.is_empty() {
-                "ALL"
-            } else {
-                &safe_letter
-            }
-        );
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-        return;
-    } else if path.starts_with("/il2cpp/dump_all_methods") {
-        // v3.22.89: 暴力dump全部类方法目录（按letter分组避免手机卡死）
-        let letter = parse_query(&full_uri, "letter");
-        unsafe { il2cpp_dump_all_methods(&letter) }
-    } else if path.starts_with("/il2cpp/dump") {
-        // v3.22.89: dump单例实例（带运行时值）
-        let class_name = parse_query(&full_uri, "name");
-        unsafe { il2cpp_dump_singleton(&class_name) }
     } else if path.starts_with("/il2cpp/invoke_instance") {
         // v3.27: 调用实例方法 (基于 il2cpp_runtime_invoke, 需要 object 指针)
         let class_name = parse_query(&full_uri, "class");
@@ -8887,12 +7595,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
         let class_name = parse_query(&full_uri, "class");
         let method_name = parse_query(&full_uri, "method");
         unsafe { il2cpp_call_method(&class_name, &method_name) }
-    } else if path.starts_with("/il2cpp/tree") {
-        // v3.22.89: 递归dump引用类型字段
-        let class_name = parse_query(&full_uri, "name");
-        let depth_str = parse_query(&full_uri, "depth");
-        let depth = depth_str.parse::<usize>().unwrap_or(2);
-        unsafe { il2cpp_tree_dump(&class_name, depth) }
     } else if path.starts_with("/il2cpp/field") {
         // v3.22.89: 读取单例的指定字段值
         let class_name = parse_query(&full_uri, "class");
@@ -8910,124 +7612,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
         // v3.22.89: 列出类的所有方法名和参数数量
         let class_name = parse_query(&full_uri, "name");
         unsafe { il2cpp_list_methods(&class_name) }
-    } else if path.starts_with("/il2cpp/disassemble_dl") {
-        // v3.22.89: 反汇编结果下载JSON文件（手机浏览器复制上限对策）
-        let class_name = parse_query(&full_uri, "class");
-        let method_name = parse_query(&full_uri, "method");
-        let bytes_str = parse_query(&full_uri, "bytes");
-        let bytes_limit = bytes_str.parse::<usize>().unwrap_or(2048);
-        unsafe { il2cpp_disassemble(&class_name, &method_name, bytes_limit) }
-    } else if path.starts_with("/il2cpp/disassemble_addr_dl") {
-        // v3.22.91: 按地址反汇编结果下载JSON文件（修复：内联下载包装，避免被starts_with截胡）
-        let addr_str = parse_query(&full_uri, "addr");
-        let bytes_str = parse_query(&full_uri, "bytes");
-        let bytes_limit = bytes_str.parse::<usize>().unwrap_or(2048);
-        let body = unsafe { il2cpp_disassemble_addr(&addr_str, bytes_limit) };
-        let safe_addr: String = addr_str.chars().filter(|c| c.is_alphanumeric()).collect();
-        let fname = format!(
-            "disassemble_addr_{}.json",
-            if safe_addr.is_empty() {
-                "output"
-            } else {
-                &safe_addr
-            }
-        );
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-        return;
-    } else if path.starts_with("/il2cpp/disassemble_addr") {
-        // v3.22.89: 按地址反汇编ARM64指令体（分析ExecTraining等方法的子函数调用目标）
-        let addr_str = parse_query(&full_uri, "addr");
-        let bytes_str = parse_query(&full_uri, "bytes");
-        let bytes_limit = bytes_str.parse::<usize>().unwrap_or(2048);
-        unsafe { il2cpp_disassemble_addr(&addr_str, bytes_limit) }
-    } else if path.starts_with("/il2cpp/disassemble") {
-        // v3.22.89: 反汇编IL2CPP方法的ARM64指令体
-        let class_name = parse_query(&full_uri, "class");
-        let method_name = parse_query(&full_uri, "method");
-        let bytes_str = parse_query(&full_uri, "bytes");
-        let bytes_limit = bytes_str.parse::<usize>().unwrap_or(2048);
-        unsafe { il2cpp_disassemble(&class_name, &method_name, bytes_limit) }
-    } else if path.starts_with("/il2cpp/search_int_dl") {
-        // v3.22.91: 搜索整数千分比（下载JSON，修复：内联下载包装）
-        let values_str = parse_query(&full_uri, "values");
-        let body = unsafe { il2cpp_search_int(&values_str) };
-        let safe_vals: String = values_str
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == ',')
-            .collect();
-        let fname = format!(
-            "search_int_{}.json",
-            if safe_vals.is_empty() {
-                "all".into()
-            } else {
-                safe_vals
-            }
-        );
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-        return;
-    } else if path.starts_with("/il2cpp/search_int") {
-        // v3.22.89: 搜索整数千分比
-        let values_str = parse_query(&full_uri, "values");
-        unsafe { il2cpp_search_int(&values_str) }
-    } else if path.starts_with("/il2cpp/search_float_dl") {
-        // v3.22.93: 搜索浮点常量（下载JSON，与search_int_dl对称）
-        let value_str = parse_query(&full_uri, "value");
-        let body = unsafe { il2cpp_search_float(&value_str) };
-        let safe_val: String = value_str
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-')
-            .collect();
-        let fname = format!(
-            "search_float_{}.json",
-            if safe_val.is_empty() {
-                "all".into()
-            } else {
-                safe_val
-            }
-        );
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-        return;
-    } else if path.starts_with("/il2cpp/search_float") {
-        // v3.22.89: 在代码段搜索浮点常量（方案D）
-        let value_str = parse_query(&full_uri, "value");
-        unsafe { il2cpp_search_float(&value_str) }
-    } else if path.starts_with("/il2cpp/read_mem_dl") {
-        // v3.22.91: 读取原始内存（下载hex dump，修复：内联下载包装）
-        let addr_str = parse_query(&full_uri, "addr");
-        let size_str = parse_query(&full_uri, "size");
-        let body = il2cpp_read_mem(&addr_str, &size_str);
-        let safe_addr: String = addr_str.chars().filter(|c| c.is_alphanumeric()).collect();
-        let fname = format!(
-            "read_mem_{}.txt",
-            if safe_addr.is_empty() {
-                "output"
-            } else {
-                &safe_addr
-            }
-        );
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-        return;
-    } else if path.starts_with("/il2cpp/read_mem") {
-        // v3.22.89: 读取原始内存（hex dump）
-        let addr_str = parse_query(&full_uri, "addr");
-        let size_str = parse_query(&full_uri, "size");
-        il2cpp_read_mem(&addr_str, &size_str)
     } else if path.starts_with("/il2cpp/read_string") {
         (|| -> String {
         // ★ Read IL2CPP string at address (or via pointer indirection)
@@ -9066,129 +7650,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
             raw_len
         )
         })()
-    } else if path == "/il2cpp/search_methods_page" {
-        // v3.22.89: 搜索方法名HTML页面（A-Z分组）
-        search_methods_page()
-    } else if path.starts_with("/il2cpp/search_methods_dl") {
-        // v3.22.91: 跨类搜索方法名（下载JSON，修复：内联下载包装）
-        let keyword = parse_query(&full_uri, "keyword");
-        let letter = parse_query(&full_uri, "letter");
-        let body = unsafe { il2cpp_search_methods(&keyword, &letter) };
-        let kw = &keyword;
-        let safe_kw: String = kw
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        let fname = format!(
-            "search_methods_{}.json",
-            if safe_kw.is_empty() {
-                "all".into()
-            } else {
-                safe_kw
-            }
-        );
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-        return;
-    } else if path.starts_with("/il2cpp/search_methods") {
-        // v3.22.89: 跨类搜索方法名关键词
-        let keyword = parse_query(&full_uri, "keyword");
-        let letter = parse_query(&full_uri, "letter");
-        unsafe { il2cpp_search_methods(&keyword, &letter) }
-    } else if path == "/debug/private_file_inventory" {
-        debug_private_file_inventory(&full_uri)
-    } else if path == "/debug/private_file_dl" {
-        download_private_file_by_id(&mut stream, &full_uri);
-        return;
-    } else if path.starts_with("/debug/file_dl") {
-        // ★ v3.24.66: download an arbitrary file ONLY if its path currently appears
-        // in /proc/self/maps (i.e. a loaded game library) — no free-form path reads.
-        let want = parse_query(&full_uri, "path");
-        let mut allowed = false;
-        if !want.is_empty() {
-            if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-                for line in maps.lines() {
-                    let cols: Vec<&str> = line.split_whitespace().collect();
-                    if cols.get(5).copied() == Some(want.as_str()) {
-                        allowed = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if !allowed {
-            format!(
-                r#"{{"error":"not_in_maps","hint":"path must appear in /proc/self/maps (see /debug/maps_list)"}}"#
-            )
-        } else {
-            let fname = std::path::Path::new(&want)
-                .file_name()
-                .and_then(|v| v.to_str())
-                .unwrap_or("file.bin")
-                .to_string();
-            stream_private_file(&mut stream, &want, &fname);
-            return;
-        }
-    } else if path == "/debug/resource_storage" {
-        debug_resource_storage()
-    } else if path == "/debug/resource_meta_schema" {
-        debug_resource_meta_schema()
-    } else if path == "/debug/resource_meta_probe" {
-        debug_resource_meta_probe()
-    } else if path == "/debug/resource_crypto_symbols" {
-        debug_resource_crypto_symbols()
-    } else if path == "/debug/resource_meta_dl" {
-        // Allow only the index and its known SQLite sidecars; never an arbitrary path.
-        let part = parse_query(&full_uri, "part");
-        let (suffix, filename) = match part.as_str() {
-            "journal" => ("-journal", "meta-journal"),
-            "wal" => ("-wal", "meta-wal"),
-            "shm" => ("-shm", "meta-shm"),
-            _ => ("", "meta"),
-        };
-        match find_resource_storage() {
-            Ok((meta, _)) => {
-                let target = format!("{}{}", meta, suffix);
-                stream_private_file(&mut stream, &target, filename);
-                return;
-            }
-            Err(e) => format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
-        }
-    } else if path == "/debug/resource_file_dl" {
-        // v3.24.62: meta `a` 表的 h 是 Base32(A-Z2-7,32字符) 且就是 dat 文件名原文，
-        // 与 hex 哈希一并接受；Base32 需保持原样（不做 lowercase）。
-        let raw_hash = parse_query(&full_uri, "hash");
-        let hash = if raw_hash.len() == 32
-            && raw_hash
-                .bytes()
-                .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'2'..=b'7'))
-            && !raw_hash.bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            raw_hash.to_ascii_uppercase()
-        } else {
-            raw_hash.to_ascii_lowercase()
-        };
-        let hash_ok = valid_resource_hash(&hash)
-            || (hash.len() == 32 && hash.bytes().all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7')));
-        if !hash_ok {
-            r#"{"error":"invalid_hash","requirement":"8..128 hexadecimal characters"}"#.to_string()
-        } else {
-            match find_resource_storage() {
-                Ok((_, dat)) => {
-                    let target = std::path::Path::new(&dat).join(&hash[..2]).join(&hash);
-                    if !target.is_file() {
-                        format!(r#"{{"error":"resource_not_found","hash":"{}"}}"#, hash)
-                    } else {
-                        stream_private_file(&mut stream, &target.to_string_lossy(), &hash);
-                        return;
-                    }
-                }
-                Err(e) => format!(r#"{{"error":"{}"}}"#, json_escape(&e)),
-            }
-        }
     } else if path == "/mdb" {
         // v3.22.51: Serve raw MasterDB file for client-side processing
         // Uses marker string; binary file sent in response handler below
@@ -9198,7 +7659,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else {
         format!(
-            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
+            r#"{{"error":"not_found","path":"{}","available":["/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/event/recommend","/inherit/compat","/log/turn","/log","/debug/params","/fields","/methods","/find_method","/classes","/carddb","/skilldata","/debug/ramengains","/debug/paramsincdec","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/ramenfields","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/call","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
             path
         )
     };
@@ -9229,13 +7690,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 let _ = stream.write_all(resp.as_bytes());
             }
         }
-    } else if path == "/saddles-dl" {
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"saddles.json\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(), body
-        );
-        let _ = stream.write_all(resp.as_bytes());
-    } else if path == "/il2cpp/disassemble_dl" {
+    } else if path ==  {
         // v3.22.89: 反汇编结果下载为JSON文件
         let cn = parse_query(&full_uri, "class");
         let mn = parse_query(&full_uri, "method");
@@ -10622,117 +9077,6 @@ extern "C" fn sqlite3_exec_hook(
 }
 
 // fd -> path map for resource reads (meta / dat only)
-static RES_FDS: Mutex<Vec<(libc::c_int, String)>> = Mutex::new(Vec::new());
-static RES_READ_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
-fn res_read_track(entry: String) {
-    hook_log(&entry);
-    if let Ok(mut g) = RES_READ_LOG.lock() {
-        if g.len() >= 256 {
-            g.remove(0);
-        }
-        g.push(entry);
-    }
-}
-fn res_path_of_fd(fd: libc::c_int) -> Option<String> {
-    RES_FDS
-        .lock()
-        .ok()?
-        .iter()
-        .find(|(f, _)| *f == fd)
-        .map(|(_, p)| p.clone())
-}
-unsafe fn res_track_open(path: *const c_char, fd: libc::c_int) {
-    if path.is_null() || fd < 0 {
-        return;
-    }
-    let p = CStr::from_ptr(path).to_string_lossy().into_owned();
-    if !(p.contains("/meta") || p.contains("/dat/")) {
-        return;
-    }
-    res_read_track(format!("open: fd={} path={}", fd, p));
-    if let Ok(mut g) = RES_FDS.lock() {
-        if g.len() >= 128 {
-            g.remove(0);
-        }
-        g.push((fd, p));
-    }
-}
-
-// ★ v3.24.48: hook-free resource read watcher. Enumerates /proc/self/fd for
-// links into /meta or /dat and polls /proc/self/fdinfo for the read position.
-// Gives the same "when/what/where" as the removed libc tracer without touching
-// a single instruction of the process.
-static RES_WATCHER_STARTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-fn start_res_fd_watcher() {
-    if RES_WATCHER_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    std::thread::spawn(|| {
-        // (fd, path, last_pos)
-        let mut seen: Vec<(i32, String, i64)> = Vec::new();
-        loop {
-            if let Ok(rd) = std::fs::read_dir("/proc/self/fd") {
-                for e in rd.flatten() {
-                    let fd: i32 = match e.file_name().to_string_lossy().parse() {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    let link = match std::fs::read_link(e.path()) {
-                        Ok(l) => l.to_string_lossy().into_owned(),
-                        Err(_) => continue,
-                    };
-                    if !(link.contains("/meta") || link.contains("/dat/")) {
-                        continue;
-                    }
-                    let pos = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd))
-                        .ok()
-                        .and_then(|s| {
-                            s.lines()
-                                .find(|l| l.starts_with("pos:"))
-                                .and_then(|l| l[4..].trim().parse::<i64>().ok())
-                        })
-                        .unwrap_or(-1);
-                    match seen.iter_mut().find(|(f, _, _)| *f == fd) {
-                        None => {
-                            if seen.len() < 64 {
-                                seen.push((fd, link.clone(), pos));
-                            }
-                            res_read_track(format!(
-                                "fd_open: fd={} path={} pos=0x{:x}",
-                                fd, link, pos
-                            ));
-                        }
-                        Some((_, p, last)) => {
-                            if *p != link {
-                                *p = link.clone();
-                                *last = pos;
-                                res_read_track(format!(
-                                    "fd_reopen: fd={} path={} pos=0x{:x}",
-                                    fd, link, pos
-                                ));
-                            } else if pos >= 0 && pos != *last {
-                                let old = *last;
-                                *last = pos;
-                                if old >= 0 {
-                                    res_read_track(format!(
-                                        "fd_read: fd={} pos=0x{:x}->0x{:x} ({})",
-                                        fd, old, pos, link
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        }
-    });
-    set_hook_status("res.fd_watcher", "started");
-}
-
-/// ★ v3.24.59: SAFE subset — NEVER touch sqlite3_open_v2 / sqlite3_key
-/// (Hachimi owns them; a failed double-hook corrupts the function body).
 unsafe fn install_sqlcipher_safe_hooks() {
     if SQLCIPHER_KEY_HOOK_DONE {
         return;
@@ -10783,99 +9127,6 @@ unsafe fn install_sqlcipher_safe_hooks() {
     );
 }
 
-unsafe fn install_sqlcipher_key_hook() {
-    if SQLCIPHER_KEY_HOOK_DONE {
-        return;
-    }
-    SQLCIPHER_KEY_HOOK_DONE = true;
-    if API.is_null() || (*API).interceptor == 0 {
-        set_hook_status("meta.key", "failed: no_interceptor");
-        return;
-    }
-    let a0 = resolve_module_symbol("libnative.so", "sqlite3_open_v2");
-    let a0b = resolve_module_symbol("libnative.so", "sqlite3_open");
-    if a0b != 0 {
-        let ok = interceptor_hook(a0b, sqlite3_open_hook as usize);
-        set_hook_status(
-            "meta.open_v1",
-            if ok {
-                "hooked"
-            } else {
-                "failed: interceptor_hook"
-            },
-        );
-    } else {
-        set_hook_status("meta.open_v1", "failed: resolve");
-    }
-    let a1 = resolve_module_symbol("libnative.so", "sqlite3_key");
-    let a2 = resolve_module_symbol("libnative.so", "sqlite3_key_v2");
-    let a3 = resolve_module_symbol("libnative.so", "sqlite3mc_config");
-    if a0 != 0 {
-        let ok = interceptor_hook(a0, sqlite3_open_v2_hook as usize);
-        set_hook_status(
-            "meta.open_v2",
-            if ok {
-                "hooked"
-            } else {
-                "failed: interceptor_hook"
-            },
-        );
-    } else {
-        set_hook_status("meta.open_v2", "failed: resolve");
-    }
-    if a3 != 0 {
-        let ok = interceptor_hook(a3, sqlite3mc_config_hook as usize);
-        set_hook_status(
-            "meta.mc_config",
-            if ok {
-                "hooked"
-            } else {
-                "failed: interceptor_hook"
-            },
-        );
-    } else {
-        set_hook_status("meta.mc_config", "failed: resolve");
-    }
-    let mut any = false;
-    if a1 != 0 {
-        let ok = interceptor_hook(a1, sqlcipher_key_hook as usize);
-        set_hook_status(
-            "meta.key_v1",
-            if ok {
-                "hooked"
-            } else {
-                "failed: interceptor_hook"
-            },
-        );
-        any |= ok;
-    } else {
-        set_hook_status("meta.key_v1", "failed: resolve");
-    }
-    if a2 != 0 {
-        let ok = interceptor_hook(a2, sqlcipher_key_v2_hook as usize);
-        set_hook_status(
-            "meta.key_v2",
-            if ok {
-                "hooked"
-            } else {
-                "failed: interceptor_hook"
-            },
-        );
-        any |= ok;
-    } else {
-        set_hook_status("meta.key_v2", "failed: resolve");
-    }
-    ura_log(
-        3,
-        &format!(
-            "sqlcipher key hook install: v1=0x{:x} v2=0x{:x} any={}",
-            a1, a2, any
-        ),
-    );
-}
-
-/// ★ v3.24.40: fuzzy variant — first method whose name CONTAINS `substr`.
-/// Self-heals when Cygames renames methods (e.g. CompressRequest_v2).
 unsafe fn find_method_fuzzy(class: *mut c_void, substr: &str) -> usize {
     if class.is_null() {
         return 0;
@@ -12899,933 +11150,6 @@ unsafe fn read_breeders_team() -> String {
     )
 }
 
-unsafe fn debug_breeders_team() -> String {
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let wdm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkDataManager").as_ptr(),
-    );
-    if wdm_class.is_null() {
-        return r#"{"error":"wdm_class_null"}"#.to_string();
-    }
-    let wdm_inst = get_singleton(wdm_class);
-    if wdm_inst.is_null() {
-        return r#"{"error":"wdm_no_singleton"}"#.to_string();
-    }
-
-    let sm_data_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
-    if sm_data_obj.is_null() {
-        return r#"{"error":"sm_data_null"}"#.to_string();
-    }
-
-    let chara_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeCharaData").as_ptr(),
-    );
-    let chara_obj = call_getter_ref(
-        find_class(
-            image,
-            to_cstr("Gallop").as_ptr(),
-            to_cstr("WorkSingleModeData").as_ptr(),
-        ),
-        sm_data_obj,
-        "get_Character",
-    );
-    if chara_obj.is_null() {
-        return r#"{"error":"chara_null"}"#.to_string();
-    }
-
-    let sid = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
-
-    // ★ Support both Breeders(13) and Ramen(14)
-    let scenario_class_name = match sid {
-        13 => "WorkSingleModeScenarioBreeders",
-        14 => "WorkSingleModeScenarioRamen",
-        _ => return format!(r#"{{"error":"not_supported","scenario_id":{}}}"#, sid),
-    };
-    let dataset_class_name = match sid {
-        13 => "WorkSingleModeScenarioBreedersDataSet",
-        14 => "WorkSingleModeScenarioRamenDataSet",
-        _ => "Unknown",
-    };
-
-    let scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
-
-    // ★ Auto-enumerate scenario-related classes
-    let class_names: Vec<&str> = match sid {
-        13 => vec![
-            "WorkSingleModeScenarioBreeders",
-            "WorkSingleModeScenarioBreedersDataSet",
-            "ObscuredSingleModeBreedersMemberInfo",
-            "SingleModeBreedersMemberInfo",
-            "ObscuredSingleModeBreedersUnitInfo",
-            "SingleModeBreedersUnitInfo",
-            "ObscuredSingleModeBreedersEnhanceGroup",
-            "ObscuredSingleModeBreedersCommandInfo",
-            "ObscuredSingleModeBreedersTeamSpTrainingInfo",
-            "WorkSingleModeChangeParameterInfoScenarioBreeders",
-            "SingleModeBreedersPartnerInfo",
-            "SingleModeBreedersMemberInfoData",
-            "SingleModeBreedersTeamMemberInfo",
-            "ObscuredSingleModeBreedersTeamMemberInfo",
-        ],
-        14 => vec![
-            "WorkSingleModeScenarioRamen",
-            "WorkSingleModeScenarioRamenDataSet",
-            "ObscuredSingleModeRamenMemberInfo",
-            "ObscuredSingleModeRamenCommandInfo",
-            "WorkSingleModeChangeParameterInfoScenarioRamen",
-        ],
-        _ => vec![],
-    };
-
-    let mut class_details = Vec::new();
-    for &cn in &class_names {
-        let cls = find_class_by_short_name(image, cn);
-        if cls.is_null() {
-            class_details.push(format!(r#"{{"name":"{}","found":false}}"#, cn));
-        } else {
-            let methods = enumerate_class_methods(cls);
-            let fields = enumerate_class_fields(cls);
-            class_details.push(format!(
-                r#"{{"name":"{}","found":true,"methods":{},"fields":{}}}"#,
-                cn, methods, fields
-            ));
-        }
-    }
-
-    // ★ Try to read CharaData scenario getter
-    let getter_names_map: &[&str] = match sid {
-        13 => &[
-            "get_ScenarioBreeders",
-            "get_WorkScenarioBreeders",
-            "get_Breeders",
-        ],
-        14 => &["get_ScenarioRamen", "get_WorkScenarioRamen", "get_Ramen"],
-        _ => &[],
-    };
-    let mut getter_results = Vec::new();
-    if !chara_class.is_null() && !chara_obj.is_null() {
-        for &gn in getter_names_map {
-            let result = call_getter_ref(chara_class, chara_obj, gn);
-            getter_results.push(format!(
-                r#"{{"name":"{}","found":{}}}"#,
-                gn,
-                !result.is_null()
-            ));
-        }
-    }
-
-    let team_data = if sid == 13 {
-        read_breeders_team()
-    } else {
-        r#"{"skip":"not_breeders"}"#.to_string()
-    };
-
-    // ★ Runtime member class discovery: read actual class name from TeamMemberInfoArray elements
-    let mut member_class_detail = String::new();
-    {
-        let sc_class = find_class_by_short_name(image, scenario_class_name);
-        if !sc_class.is_null() && !scenario_obj.is_null() {
-            let ds_obj = call_getter_on_instance(sc_class, scenario_obj, "get_DataSet");
-            if !ds_obj.is_null() {
-                let ds_cls = find_class_by_short_name(image, dataset_class_name);
-                if !ds_cls.is_null() {
-                    let arr = call_getter_on_instance(ds_cls, ds_obj, "get_TeamMemberInfoArray");
-                    if !arr.is_null() {
-                        let ab = arr as *const u8;
-                        let al = std::ptr::read_unaligned::<usize>(
-                            ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize
-                        );
-                        if al > 0 {
-                            let first_ep = std::ptr::read_unaligned::<*mut c_void>(
-                                ab.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void,
-                            );
-                            if !first_ep.is_null() {
-                                let disc_name = get_object_class_name(first_ep);
-                                if !disc_name.is_empty() {
-                                    // Found the real class name! Enumerate its methods and fields
-                                    let disc_class = find_class_by_short_name(image, &disc_name);
-                                    if !disc_class.is_null() {
-                                        let methods = enumerate_class_methods(disc_class);
-                                        let fields = enumerate_class_fields(disc_class);
-                                        member_class_detail = format!(
-                                            r#","member_class_runtime":{{"name":"{}","found":true,"methods":{},"fields":{}}}"#,
-                                            disc_name, methods, fields
-                                        );
-                                    } else {
-                                        member_class_detail = format!(
-                                            r#","member_class_runtime":{{"name":"{}","found_but_cannot_locate":true}}"#,
-                                            disc_name
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    format!(
-        r#"{{"scenario_id":{},"team_data":{},"class_details":[{}],"chara_getters":[{}]{} }}"#,
-        sid,
-        team_data,
-        class_details.join(","),
-        getter_results.join(","),
-        member_class_detail
-    )
-}
-
-/// Search for IL2CPP classes containing a keyword
-unsafe fn search_classes(_keyword: &str) -> String {
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"[{"error":"image_null"}]"#.to_string(),
-    };
-
-    let class_names = [
-        "WorkSingleModeScenarioBreeders",
-        "WorkSingleModeScenarioBreedersDataSet",
-        "ObscuredSingleModeBreedersMemberInfo",
-        "SingleModeBreedersMemberInfo",
-        "ObscuredSingleModeBreedersUnitInfo",
-        "SingleModeBreedersUnitInfo",
-        "ObscuredSingleModeBreedersEnhanceGroup",
-        "ObscuredSingleModeBreedersCommandInfo",
-    ];
-
-    let mut found = Vec::new();
-    for &cn in &class_names {
-        let cls = find_class_by_short_name(image, cn);
-        if !cls.is_null() {
-            found.push(format!(r#"{{"name":"{}","found":true}}"#, cn));
-        } else {
-            found.push(format!(r#"{{"name":"{}","found":false}}"#, cn));
-        }
-    }
-
-    format!("[{}]", found.join(","))
-}
-
-// ============================================================
-// ★ v3.16.1: /carddb & /skilldata — Read MasterDB via bundled rusqlite
-// ============================================================
-
-/// Find MasterDB file on the device filesystem
-/// v3.24.34: locate the game's downloaded resource index and hash store.
-/// The scan is bounded (depth <= 4, directories <= 512), does not descend into
-/// `dat`, does not follow symlinks, and never writes game files.
-#[derive(Clone)]
-struct PrivateFileEntry {
-    id: usize,
-    relative_path: String,
-    absolute_path: String,
-    size: u64,
-    kind: &'static str,
-}
-
-fn private_app_root() -> Result<std::path::PathBuf, String> {
-    let bytes = std::fs::read("/proc/self/cmdline").map_err(|_| "cmdline_unavailable")?;
-    let pkg = bytes
-        .split(|&b| b == 0)
-        .find(|s| !s.is_empty())
-        .and_then(|s| std::str::from_utf8(s).ok())
-        .ok_or("package_unknown")?;
-    let pkg = pkg.split(':').next().unwrap_or(pkg);
-    if pkg.is_empty()
-        || !pkg
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
-    {
-        return Err("invalid_package_name".to_string());
-    }
-    for root in [
-        format!("/data/user/0/{}", pkg),
-        format!("/data/data/{}", pkg),
-    ] {
-        let path = std::path::PathBuf::from(root);
-        if path.is_dir() {
-            return Ok(path);
-        }
-    }
-    Err("private_app_root_not_found".to_string())
-}
-
-fn classify_private_file(path: &std::path::Path) -> &'static str {
-    let name = path
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if name == "meta" || name.starts_with("meta-") {
-        "resource_index"
-    } else if name.ends_with(".db") || name.ends_with(".sqlite") || name.ends_with(".mdb") {
-        "database"
-    } else if name.ends_with(".xml") {
-        "xml"
-    } else if name.ends_with(".json") {
-        "json"
-    } else if name.ends_with(".log") || name.ends_with(".txt") {
-        "text"
-    } else if name.ends_with(".apk") {
-        "apk"
-    } else if name.ends_with(".so") {
-        "native_library"
-    } else {
-        "binary"
-    }
-}
-
-/// Build a deterministic, bounded snapshot of private files. `dat` is skipped
-/// because its hash objects are already available through resource_file_dl.
-fn private_file_inventory() -> Result<Vec<PrivateFileEntry>, String> {
-    use std::collections::VecDeque;
-    let root = private_app_root()?;
-    let mut queue = VecDeque::from([(root.clone(), 0usize)]);
-    let mut rows: Vec<(String, String, u64, &'static str)> = Vec::new();
-    let mut visited_dirs = 0usize;
-    while let Some((dir, depth)) = queue.pop_front() {
-        visited_dirs += 1;
-        if visited_dirs > 4096 || rows.len() >= 20000 {
-            break;
-        }
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let ty = match entry.file_type() {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if ty.is_symlink() {
-                continue;
-            }
-            let path = entry.path();
-            if ty.is_dir() {
-                if depth < 10 && entry.file_name() != "dat" {
-                    queue.push_back((path, depth + 1));
-                }
-                continue;
-            }
-            if !ty.is_file() {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(&root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .into_owned();
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            let kind = classify_private_file(&path);
-            rows.push((relative, path.to_string_lossy().into_owned(), size, kind));
-            if rows.len() >= 20000 {
-                break;
-            }
-        }
-    }
-    rows.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(rows
-        .into_iter()
-        .enumerate()
-        .map(
-            |(id, (relative_path, absolute_path, size, kind))| PrivateFileEntry {
-                id,
-                relative_path,
-                absolute_path,
-                size,
-                kind,
-            },
-        )
-        .collect())
-}
-
-fn debug_private_file_inventory(full_uri: &str) -> String {
-    if parse_query(full_uri, "confirm") != "1" {
-        return r#"{"ok":false,"error":"explicit_confirmation_required","warning":"private files may contain account session cookie or device identifiers","retry":"/debug/private_file_inventory?confirm=1&offset=0&limit=200"}"#.to_string();
-    }
-    let offset = parse_query(full_uri, "offset")
-        .parse::<usize>()
-        .unwrap_or(0);
-    let limit = parse_query(full_uri, "limit")
-        .parse::<usize>()
-        .unwrap_or(200)
-        .clamp(1, 500);
-    match private_file_inventory() {
-        Ok(entries) => {
-            let total = entries.len();
-            let rows: Vec<String> = entries.iter().skip(offset).take(limit).map(|e| format!(
-                r#"{{"id":{},"path":"{}","size":{},"kind":"{}","download":"/debug/private_file_dl?confirm=1&id={}"}}"#,
-                e.id, json_escape(&e.relative_path), e.size, e.kind, e.id)).collect();
-            format!(
-                r#"{{"ok":true,"snapshot_rebuilt_each_request":true,"dat_skipped":true,"max_depth":10,"max_files":20000,"total":{},"offset":{},"limit":{},"files":[{}]}}"#,
-                total,
-                offset,
-                limit,
-                rows.join(",")
-            )
-        }
-        Err(e) => format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
-    }
-}
-
-fn download_private_file_by_id(stream: &mut std::net::TcpStream, full_uri: &str) {
-    if parse_query(full_uri, "confirm") != "1" {
-        stream_private_file(
-            stream,
-            "/__explicit_confirmation_required__",
-            "confirmation_required",
-        );
-        return;
-    }
-    let id = match parse_query(full_uri, "id").parse::<usize>() {
-        Ok(v) => v,
-        Err(_) => {
-            stream_private_file(stream, "/__invalid_private_file_id__", "invalid");
-            return;
-        }
-    };
-    match private_file_inventory()
-        .ok()
-        .and_then(|v| v.into_iter().find(|e| e.id == id))
-    {
-        Some(entry) => {
-            let name = std::path::Path::new(&entry.relative_path)
-                .file_name()
-                .and_then(|v| v.to_str())
-                .unwrap_or("private_file.bin");
-            stream_private_file(stream, &entry.absolute_path, name);
-        }
-        None => stream_private_file(stream, "/__private_file_not_found__", "not_found"),
-    }
-}
-
-fn find_resource_storage() -> Result<(String, String), String> {
-    use std::collections::{HashSet, VecDeque};
-    use std::path::{Path, PathBuf};
-
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(bytes) = std::fs::read("/proc/self/cmdline") {
-        if let Some(pkg) = bytes
-            .split(|&b| b == 0)
-            .find(|s| !s.is_empty())
-            .and_then(|s| std::str::from_utf8(s).ok())
-        {
-            let pkg = pkg.split(':').next().unwrap_or(pkg);
-            if !pkg.is_empty()
-                && pkg
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
-            {
-                roots.push(PathBuf::from(format!("/data/user/0/{}/files", pkg)));
-                roots.push(PathBuf::from(format!("/data/data/{}/files", pkg)));
-                roots.push(PathBuf::from(format!(
-                    "/storage/emulated/0/Android/data/{}/files",
-                    pkg
-                )));
-            }
-        }
-    }
-    if let Some(mdb) = find_mdb_path() {
-        if let Some(files) = Path::new(&mdb).parent().and_then(|p| p.parent()) {
-            roots.push(files.to_path_buf());
-        }
-    }
-
-    let mut seen = HashSet::new();
-    let mut queue = VecDeque::new();
-    for root in roots {
-        if root.is_dir() && seen.insert(root.clone()) {
-            queue.push_back((root, 0usize));
-        }
-    }
-    let mut visited = 0usize;
-    while let Some((dir, depth)) = queue.pop_front() {
-        visited += 1;
-        if visited > 512 {
-            return Err("scan_limit_reached".to_string());
-        }
-        let meta = dir.join("meta");
-        let dat = dir.join("dat");
-        if meta.is_file() && dat.is_dir() {
-            return Ok((
-                meta.to_string_lossy().into_owned(),
-                dat.to_string_lossy().into_owned(),
-            ));
-        }
-        if depth >= 4 {
-            continue;
-        }
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let file_type = match entry.file_type() {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if !file_type.is_dir() || file_type.is_symlink() {
-                continue;
-            }
-            let name = entry.file_name();
-            if name == "dat" {
-                continue;
-            }
-            let child = entry.path();
-            if seen.insert(child.clone()) {
-                queue.push_back((child, depth + 1));
-            }
-        }
-    }
-    Err("resource_storage_not_found".to_string())
-}
-
-/// Inspect the downloaded resource index in place. This is strictly read-only,
-/// returns bounded schema data and a small set of rows containing "story".
-
-/// Return bounded binary diagnostics for non-SQLite resource indexes.
-
-/// Enumerate already-loaded SQLite/codec symbols without invoking them.
-/// Uses RTLD_NOLOAD for individual modules and never opens a database or reads keys.
-fn debug_resource_crypto_symbols() -> String {
-    use std::collections::{BTreeMap, BTreeSet};
-    let maps = match std::fs::read_to_string("/proc/self/maps") {
-        Ok(v) => v,
-        Err(e) => {
-            return format!(
-                r#"{{"ok":false,"error":"maps_read_failed","detail":"{}"}}"#,
-                json_escape(&e.to_string())
-            )
-        }
-    };
-    let mut ranges: Vec<(usize, usize, String)> = Vec::new();
-    let mut modules = BTreeSet::new();
-    for line in maps.lines() {
-        let mut parts = line.split_whitespace();
-        let range = match parts.next() {
-            Some(v) => v,
-            None => continue,
-        };
-        let _perms = parts.next();
-        let _offset = parts.next();
-        let _dev = parts.next();
-        let _inode = parts.next();
-        let path = match parts.next() {
-            Some(v) if v.starts_with('/') => v.to_string(),
-            _ => continue,
-        };
-        let mut bounds = range.split('-');
-        let start = usize::from_str_radix(bounds.next().unwrap_or(""), 16).unwrap_or(0);
-        let end = usize::from_str_radix(bounds.next().unwrap_or(""), 16).unwrap_or(0);
-        if start != 0 && end > start {
-            ranges.push((start, end, path.clone()));
-        }
-        let lower = path.to_ascii_lowercase();
-        if lower.contains("sqlite")
-            || lower.contains("native")
-            || lower.contains("cipher")
-            || lower.contains("sql")
-        {
-            modules.insert(path);
-        }
-    }
-    let targets = [
-        "sqlite3_open",
-        "sqlite3_open_v2",
-        "sqlite3_close",
-        "sqlite3_prepare_v2",
-        "sqlite3_step",
-        "sqlite3_exec",
-        "sqlite3_key",
-        "sqlite3_key_v2",
-        "sqlite3_rekey",
-        "sqlite3_rekey_v2",
-        "sqlite3mc_config",
-        "sqlite3mc_config_cipher",
-        "sqlite3_activate_see",
-        "sqlite3CodecAttach",
-        "sqlite3PagerSetCodec",
-        "sqlite3_column_text",
-        "sqlite3_bind_text",
-    ];
-    let owner_for = |addr: usize| -> String {
-        ranges
-            .iter()
-            .find(|(s, e, _)| addr >= *s && addr < *e)
-            .map(|(_, _, p)| p.clone())
-            .unwrap_or_default()
-    };
-    let mut found: BTreeMap<String, (usize, String, String)> = BTreeMap::new();
-    unsafe {
-        let global = libc::dlopen(std::ptr::null(), libc::RTLD_NOW);
-        if !global.is_null() {
-            for name in targets.iter() {
-                if let Ok(cname) = CString::new(*name) {
-                    let ptr = libc::dlsym(global, cname.as_ptr());
-                    if !ptr.is_null() {
-                        let addr = ptr as usize;
-                        found.insert(
-                            (*name).to_string(),
-                            (addr, owner_for(addr), "global".to_string()),
-                        );
-                    }
-                }
-            }
-            libc::dlclose(global);
-        }
-        const RTLD_NOLOAD_ANDROID: i32 = 4;
-        for module in modules.iter() {
-            let cpath = match CString::new(module.as_str()) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let handle = libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | RTLD_NOLOAD_ANDROID);
-            if handle.is_null() {
-                continue;
-            }
-            for name in targets.iter() {
-                if found.contains_key(*name) {
-                    continue;
-                }
-                if let Ok(cname) = CString::new(*name) {
-                    let ptr = libc::dlsym(handle, cname.as_ptr());
-                    if !ptr.is_null() {
-                        let addr = ptr as usize;
-                        found.insert((*name).to_string(), (addr, owner_for(addr), module.clone()));
-                    }
-                }
-            }
-            libc::dlclose(handle);
-        }
-    }
-    let module_json: Vec<String> = modules
-        .iter()
-        .take(64)
-        .map(|p| format!(r#""{}""#, json_escape(p)))
-        .collect();
-    let symbols_json: Vec<String> = targets
-        .iter()
-        .map(|name| match found.get(*name) {
-            Some((addr, owner, lookup)) => format!(
-                r#"{{"name":"{}","found":true,"address":"0x{:x}","owner":"{}","lookup":"{}"}}"#,
-                name,
-                addr,
-                json_escape(owner),
-                json_escape(lookup)
-            ),
-            None => format!(r#"{{"name":"{}","found":false}}"#, name),
-        })
-        .collect();
-    format!(
-        r#"{{"ok":true,"read_only":true,"invoked":false,"hooked":false,"module_limit":64,"candidate_modules":[{}],"symbols":[{}]}}"#,
-        module_json.join(","),
-        symbols_json.join(",")
-    )
-}
-fn debug_resource_meta_probe() -> String {
-    use std::io::{Read, Seek, SeekFrom};
-    let (meta, _) = match find_resource_storage() {
-        Ok(v) => v,
-        Err(e) => return format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
-    };
-    let mut file = match std::fs::File::open(&meta) {
-        Ok(v) => v,
-        Err(e) => {
-            return format!(
-                r#"{{"ok":false,"error":"open_failed","detail":"{}"}}"#,
-                json_escape(&e.to_string())
-            )
-        }
-    };
-    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
-    let mut head = vec![0u8; 65536.min(size as usize)];
-    let head_read = file.read(&mut head).unwrap_or(0);
-    head.truncate(head_read);
-    let tail_len = 65536.min(size as usize);
-    let mut tail = vec![0u8; tail_len];
-    if tail_len > 0 {
-        let _ = file.seek(SeekFrom::Start(size.saturating_sub(tail_len as u64)));
-        let n = file.read(&mut tail).unwrap_or(0);
-        tail.truncate(n);
-    }
-    let hex = |data: &[u8]| -> String {
-        data.iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .join("")
-    };
-    let ascii = |data: &[u8]| -> String {
-        data.iter()
-            .map(|b| {
-                if (0x20..=0x7e).contains(b) {
-                    *b as char
-                } else {
-                    '.'
-                }
-            })
-            .collect()
-    };
-    let strings = |data: &[u8], base: u64| -> Vec<String> {
-        let mut out = Vec::new();
-        let mut start = 0usize;
-        while start < data.len() && out.len() < 80 {
-            while start < data.len() && !(0x20..=0x7e).contains(&data[start]) {
-                start += 1;
-            }
-            let mut end = start;
-            while end < data.len() && (0x20..=0x7e).contains(&data[end]) {
-                end += 1;
-            }
-            if end.saturating_sub(start) >= 4 {
-                let value: String = data[start..end]
-                    .iter()
-                    .map(|b| *b as char)
-                    .take(300)
-                    .collect();
-                out.push(format!(
-                    r#"{{"offset":{},"value":"{}"}}"#,
-                    base + start as u64,
-                    json_escape(&value)
-                ));
-            }
-            start = end.saturating_add(1);
-        }
-        out
-    };
-    let mut samples = strings(&head, 0);
-    samples.extend(strings(&tail, size.saturating_sub(tail.len() as u64)));
-    format!(
-        r#"{{"ok":true,"read_only":true,"path":"{}","size":{},"sqlite_header":{},"head_hex":"{}","head_ascii":"{}","tail_hex":"{}","printable_samples":[{}]}}"#,
-        json_escape(&meta),
-        size,
-        head.starts_with(b"SQLite format 3\0"),
-        hex(&head[..head.len().min(256)]),
-        json_escape(&ascii(&head[..head.len().min(256)])),
-        hex(&tail[tail.len().saturating_sub(128)..]),
-        samples.join(",")
-    )
-}
-fn debug_resource_meta_schema() -> String {
-    let (meta, _) = match find_resource_storage() {
-        Ok(v) => v,
-        Err(e) => return format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
-    };
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let conn = match Connection::open_with_flags(&meta, flags) {
-        Ok(v) => v,
-        Err(e) => {
-            return format!(
-                r#"{{"ok":false,"error":"meta_open_failed","detail":"{}"}}"#,
-                json_escape(&e.to_string())
-            )
-        }
-    };
-    let mut master = match conn.prepare(
-        "SELECT name, type, COALESCE(sql,'') FROM sqlite_master \
-         WHERE type IN ('table','view') ORDER BY type, name LIMIT 128",
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            return format!(
-                r#"{{"ok":false,"error":"schema_query_failed","detail":"{}"}}"#,
-                json_escape(&e.to_string())
-            )
-        }
-    };
-    let objects: Vec<(String, String, String)> =
-        match master.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))) {
-            Ok(rows) => rows.filter_map(Result::ok).collect(),
-            Err(e) => {
-                return format!(
-                    r#"{{"ok":false,"error":"schema_read_failed","detail":"{}"}}"#,
-                    json_escape(&e.to_string())
-                )
-            }
-        };
-
-    let quote_ident = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-    let mut object_json = Vec::new();
-    let mut story_samples = Vec::new();
-    for (name, kind, sql) in objects.iter() {
-        let pragma = format!("PRAGMA table_info({})", quote_ident(name));
-        let columns: Vec<(String, String)> = conn
-            .prepare(&pragma)
-            .ok()
-            .and_then(|mut stmt| {
-                stmt.query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2).unwrap_or_default(),
-                    ))
-                })
-                .ok()
-                .map(|rows| rows.filter_map(Result::ok).take(64).collect())
-            })
-            .unwrap_or_default();
-        let cols_json: Vec<String> = columns
-            .iter()
-            .map(|(n, t)| {
-                format!(
-                    r#"{{"name":"{}","type":"{}"}}"#,
-                    json_escape(n),
-                    json_escape(t)
-                )
-            })
-            .collect();
-        let sql_short: String = sql.chars().take(1000).collect();
-        object_json.push(format!(
-            r#"{{"name":"{}","type":"{}","sql":"{}","columns":[{}]}}"#,
-            json_escape(name),
-            json_escape(kind),
-            json_escape(&sql_short),
-            cols_json.join(",")
-        ));
-
-        if kind != "table" || columns.is_empty() || story_samples.len() >= 40 {
-            continue;
-        }
-        let selected: Vec<&(String, String)> = columns.iter().take(16).collect();
-        let predicates: Vec<String> = selected
-            .iter()
-            .map(|(c, _)| format!("CAST({} AS TEXT) LIKE '%story%'", quote_ident(c)))
-            .collect();
-        let query = format!(
-            "SELECT {} FROM {} WHERE {} LIMIT {}",
-            selected
-                .iter()
-                .map(|(c, _)| quote_ident(c))
-                .collect::<Vec<_>>()
-                .join(","),
-            quote_ident(name),
-            predicates.join(" OR "),
-            40usize.saturating_sub(story_samples.len())
-        );
-        if let Ok(mut stmt) = conn.prepare(&query) {
-            let col_count = selected.len();
-            if let Ok(mut rows) = stmt.query([]) {
-                while story_samples.len() < 40 {
-                    let row = match rows.next() {
-                        Ok(Some(v)) => v,
-                        _ => break,
-                    };
-                    let mut values = Vec::new();
-                    for i in 0..col_count {
-                        let text = match row.get_ref(i) {
-                            Ok(rusqlite::types::ValueRef::Null) => "null".to_string(),
-                            Ok(rusqlite::types::ValueRef::Integer(v)) => v.to_string(),
-                            Ok(rusqlite::types::ValueRef::Real(v)) => v.to_string(),
-                            Ok(rusqlite::types::ValueRef::Text(v)) => {
-                                String::from_utf8_lossy(v).chars().take(500).collect()
-                            }
-                            Ok(rusqlite::types::ValueRef::Blob(v)) => {
-                                format!("<blob:{} bytes>", v.len())
-                            }
-                            Err(_) => "<read_error>".to_string(),
-                        };
-                        values.push(format!(
-                            r#""{}":"{}""#,
-                            json_escape(&selected[i].0),
-                            json_escape(&text)
-                        ));
-                    }
-                    story_samples.push(format!(
-                        r#"{{"table":"{}","row":{{{}}}}}"#,
-                        json_escape(name),
-                        values.join(",")
-                    ));
-                }
-            }
-        }
-    }
-    format!(
-        r#"{{"ok":true,"read_only":true,"meta_path":"{}","meta_size":{},"object_limit":128,"column_limit":64,"story_sample_limit":40,"objects":[{}],"story_samples":[{}]}}"#,
-        json_escape(&meta),
-        std::fs::metadata(&meta).map(|m| m.len()).unwrap_or(0),
-        object_json.join(","),
-        story_samples.join(",")
-    )
-}
-fn debug_resource_storage() -> String {
-    match find_resource_storage() {
-        Ok((meta, dat)) => {
-            let meta_size = std::fs::metadata(&meta).map(|m| m.len()).unwrap_or(0);
-            let journal = format!("{}-journal", meta);
-            let wal = format!("{}-wal", meta);
-            let shm = format!("{}-shm", meta);
-            format!(
-                r#"{{"ok":true,"read_only":true,"scan_max_depth":4,"scan_max_directories":512,"meta":{{"path":"{}","size":{}}},"dat":{{"path":"{}"}},"sidecars":{{"journal":{},"wal":{},"shm":{}}},"downloads":{{"meta":"/debug/resource_meta_dl","resource":"/debug/resource_file_dl?hash=HEX_HASH"}}}}"#,
-                json_escape(&meta),
-                meta_size,
-                json_escape(&dat),
-                std::path::Path::new(&journal).is_file(),
-                std::path::Path::new(&wal).is_file(),
-                std::path::Path::new(&shm).is_file()
-            )
-        }
-        Err(error) => format!(
-            r#"{{"ok":false,"error":"{}","read_only":true}}"#,
-            json_escape(&error)
-        ),
-    }
-}
-
-fn valid_resource_hash(hash: &str) -> bool {
-    (8..=128).contains(&hash.len()) && hash.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Stream a private game file without loading it into memory.
-fn stream_private_file(stream: &mut std::net::TcpStream, path: &str, filename: &str) {
-    use std::io::{Read, Write};
-    let mut file = match std::fs::File::open(path) {
-        Ok(v) => v,
-        Err(e) => {
-            let body = format!(
-                r#"{{"error":"file_open_failed","detail":"{}"}}"#,
-                json_escape(&e.to_string())
-            );
-            let response = format!("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
-            let _ = stream.write_all(response.as_bytes());
-            return;
-        }
-    };
-    let size = match file.metadata() {
-        Ok(v) if v.is_file() => v.len(),
-        _ => 0,
-    };
-    let safe_name: String = filename
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
-        .take(140)
-        .collect();
-    let header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        if safe_name.is_empty() { "download.bin" } else { &safe_name }, size
-    );
-    if stream.write_all(header.as_bytes()).is_err() {
-        return;
-    }
-    let mut buffer = [0u8; 65536];
-    loop {
-        let count = match file.read(&mut buffer) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => n,
-        };
-        if stream.write_all(&buffer[..count]).is_err() {
-            break;
-        }
-    }
-    let _ = stream.flush();
-}
-
 fn find_mdb_path() -> Option<String> {
     let paths = [
         "/data/data/jp.pokemon.pokeuma/files/master/master.mdb",
@@ -13925,140 +11249,6 @@ fn parse_query(full_uri: &str, key: &str) -> String {
 /// /tables - List all tables in MasterDB for discovery
 /// /debug/unique_skills - Explore mdb tables related to unique skill unlock conditions
 /// Dumps table names matching "unique"/"acquisition"/"condition" and their first few rows
-fn debug_unique_skills() -> String {
-    let mdb_path = match find_mdb_path() {
-        Some(p) => p,
-        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
-    };
-    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c,
-        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
-    };
-
-    // Step 1: Find all tables that might relate to unique skills
-    let all_tables: Vec<String> =
-        match conn.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name") {
-            Ok(mut stmt) => stmt
-                .query_map([], |row| Ok(row.get::<_, String>(0).unwrap_or_default()))
-                .unwrap()
-                .filter_map(|r| r.ok())
-                .collect(),
-            Err(e) => return format!(r#"{{"error":"table_list_failed","detail":"{}"}}"#, e),
-        };
-
-    let keywords = [
-        "unique",
-        "acquisition",
-        "skill_cond",
-        "skill_unlock",
-        "support_card_skill",
-        "skill_learn",
-        "unique_effect",
-    ];
-    let matched_tables: Vec<String> = all_tables
-        .iter()
-        .filter(|t| {
-            let tl = t.to_lowercase();
-            keywords.iter().any(|k| tl.contains(k))
-        })
-        .cloned()
-        .collect();
-
-    // Step 2: For each matched table, dump schema + first 3 rows as raw text
-    let mut results: Vec<String> = Vec::new();
-    for table_name in &matched_tables {
-        let safe_name = table_name.replace("]", "]]");
-
-        // Get column names
-        let col_names: Vec<String> =
-            match conn.prepare(&format!("PRAGMA table_info([{}])", safe_name)) {
-                Ok(mut stmt) => stmt
-                    .query_map([], |row| Ok(row.get::<_, String>(1).unwrap_or_default()))
-                    .unwrap()
-                    .filter_map(|r| r.ok())
-                    .collect(),
-                Err(_) => Vec::new(),
-            };
-
-        // Get first 3 rows as raw tab-separated text (avoid JSON nesting issues)
-        let sample_rows: Vec<String> =
-            match conn.prepare(&format!("SELECT * FROM [{}] LIMIT 3", safe_name)) {
-                Ok(mut stmt) => stmt
-                    .query_map([], |row| {
-                        let col_count = col_names.len();
-                        let mut pairs: Vec<String> = Vec::new();
-                        for ci in 0..col_count {
-                            let cn = col_names.get(ci).unwrap_or(&String::new()).clone();
-                            // Try string first, then integer, then null
-                            let val_str: String = row
-                                .get::<_, Option<String>>(ci)
-                                .unwrap_or(None)
-                                .or_else(|| {
-                                    row.get::<_, Option<i64>>(ci)
-                                        .unwrap_or(None)
-                                        .map(|i| i.to_string())
-                                })
-                                .or_else(|| {
-                                    row.get::<_, Option<f64>>(ci)
-                                        .unwrap_or(None)
-                                        .map(|f| format!("{:.4}", f))
-                                })
-                                .unwrap_or_else(|| "NULL".to_string());
-                            pairs.push(format!("{}={}", cn, val_str));
-                        }
-                        Ok(pairs.join("|"))
-                    })
-                    .unwrap()
-                    .filter_map(|r| r.ok())
-                    .collect(),
-                Err(_) => Vec::new(),
-            };
-
-        results.push(format!(
-            r#"{{"table":"{}","columns":[{}],"rows":[{}]}}"#,
-            json_escape(table_name),
-            col_names
-                .iter()
-                .map(|c| format!(r#""{}""#, json_escape(c)))
-                .collect::<Vec<_>>()
-                .join(","),
-            sample_rows
-                .iter()
-                .map(|r| format!(r#""{}""#, json_escape(r)))
-                .collect::<Vec<_>>()
-                .join(",")
-        ));
-    }
-
-    // Step 3: support_card_data columns
-    let sc_columns: Vec<String> = match conn.prepare("PRAGMA table_info(support_card_data)") {
-        Ok(mut stmt) => stmt
-            .query_map([], |row| {
-                let name: String = row.get::<_, String>(1).unwrap_or_default();
-                let typ: String = row.get::<_, String>(2).unwrap_or_default();
-                Ok(format!(
-                    r#"{{"name":"{}","type":"{}"}}"#,
-                    json_escape(&name),
-                    json_escape(&typ)
-                ))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-
-    drop(conn);
-
-    format!(
-        r#"{{"ok":true,"version":"3.22.91","matched_tables":{},"table_details":[{}],"support_card_data_columns":[{}]}}"#,
-        matched_tables.len(),
-        results.join(","),
-        sc_columns.join(",")
-    )
-}
-
-/// /debug/table?name=<table_name>&limit=<N>&offset=<M> - Query any mdb table by name
 fn debug_table_query(table_name: &str, limit: usize, offset: usize) -> String {
     if table_name.is_empty() {
         return r#"{"ok":false,"error":"missing_name"}"#.to_string();
@@ -14573,494 +11763,6 @@ fn debug_download_table(table_name: &str, batch: usize) -> String {
         Ok(content) => content,
         Err(e) => format!(r#"{{"ok":false,"error":"read_failed","detail":"{}"}}"#, e),
     }
-}
-
-fn debug_unique_detail() -> String {
-    let mdb_path = match find_mdb_path() {
-        Some(p) => p,
-        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
-    };
-    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c,
-        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
-    };
-
-    // 1. Get all support_card_data rows with unique_effect_id > 0
-    let mut cards: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT id, chara_id, rarity, command_id, unique_effect_id, support_card_type \
-         FROM support_card_data WHERE unique_effect_id > 0 ORDER BY id",
-    ) {
-        cards = stmt
-            .query_map([], |row| {
-                let id: i64 = row.get(0).unwrap_or(0);
-                let cid: i64 = row.get(1).unwrap_or(0);
-                let rar: i64 = row.get(2).unwrap_or(0);
-                let cmd: i64 = row.get(3).unwrap_or(0);
-                let ueid: i64 = row.get(4).unwrap_or(0);
-                let sct: i64 = row.get(5).unwrap_or(0);
-                Ok(format!(
-                    r#"{{"id":{},"chara":{},"rarity":{},"cmd":{},"ueid":{},"sct":{}}}"#,
-                    id, cid, rar, cmd, ueid, sct
-                ))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
-    }
-
-    // 2. Get all unique_effect rows, grouped by id
-    let mut effects: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT id, lv, type_0, value_0, value_0_1, value_0_2, value_0_3, value_0_4, type_1, value_1, value_1_1, value_1_2, value_1_3, value_1_4, idle_mode_sub_rate FROM support_card_unique_effect ORDER BY id, lv"
-    ) {
-        effects = stmt.query_map([], |row| {
-            let id: i64 = row.get(0).unwrap_or(0);
-            let lv: i64 = row.get(1).unwrap_or(0);
-            let t0: i64 = row.get(2).unwrap_or(0);
-            let v0: i64 = row.get(3).unwrap_or(0);
-            let v0_1: i64 = row.get(4).unwrap_or(0);
-            let v0_2: i64 = row.get(5).unwrap_or(0);
-            let v0_3: i64 = row.get(6).unwrap_or(0);
-            let v0_4: i64 = row.get(7).unwrap_or(0);
-            let t1: i64 = row.get(8).unwrap_or(0);
-            let v1: i64 = row.get(9).unwrap_or(0);
-            let v1_1: i64 = row.get(10).unwrap_or(0);
-            let v1_2: i64 = row.get(11).unwrap_or(0);
-            let v1_3: i64 = row.get(12).unwrap_or(0);
-            let v1_4: i64 = row.get(13).unwrap_or(0);
-            let idle: i64 = row.get(14).unwrap_or(0);
-            Ok(format!(
-                r#"{{"id":{},"lv":{},"t0":{},"v0":{},"v0_1":{},"v0_2":{},"v0_3":{},"v0_4":{},"t1":{},"v1":{},"v1_1":{},"v1_2":{},"v1_3":{},"v1_4":{},"idle":{}}}"#,
-                id, lv, t0, v0, v0_1, v0_2, v0_3, v0_4, t1, v1, v1_1, v1_2, v1_3, v1_4, idle
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    // 3. type_0 + type_1 combo distribution (the key to decoding)
-    let mut combo_dist: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT type_0, type_1, COUNT(*) as cnt FROM support_card_unique_effect GROUP BY type_0, type_1 ORDER BY cnt DESC"
-    ) {
-        combo_dist = stmt.query_map([], |row| {
-            let t0: i64 = row.get(0).unwrap_or(0);
-            let t1: i64 = row.get(1).unwrap_or(0);
-            let c: i64 = row.get(2).unwrap_or(0);
-            Ok(format!(r#"{{"t0":{},"t1":{},"count":{}}}"#, t0, t1, c))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    // 4. Also dump effect_filter for reference (type -> group mapping)
-    let mut filters: Vec<String> = Vec::new();
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT type, group_id, sort_id FROM support_card_effect_filter ORDER BY type")
-    {
-        filters = stmt
-            .query_map([], |row| {
-                let t: i64 = row.get(0).unwrap_or(0);
-                let g: i64 = row.get(1).unwrap_or(0);
-                let s: i64 = row.get(2).unwrap_or(0);
-                Ok(format!(r#"{{"type":{},"grp":{},"sort":{}}}"#, t, g, s))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
-    }
-
-    // 5. Sample: cards with type_0=101 (the most common "conditional effect" type)
-    // These are likely "per X skill, +Y" effects like Mejiro Top Roman
-    let mut t101_samples: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT ue.id, ue.lv, ue.type_0, ue.value_0, ue.value_0_1, ue.value_0_2, ue.value_0_3, ue.value_0_4, ue.type_1, ue.value_1, ue.value_1_1, ue.value_1_2, ue.value_1_3, ue.value_1_4, ue.idle_mode_sub_rate, sc.id as sc_id, sc.chara_id \
-         FROM support_card_unique_effect ue \
-         JOIN support_card_data sc ON ue.id = sc.unique_effect_id \
-         WHERE ue.type_0 = 101 ORDER BY sc.id LIMIT 10"
-    ) {
-        t101_samples = stmt.query_map([], |row| {
-            let eid: i64 = row.get(0).unwrap_or(0);
-            let lv: i64 = row.get(1).unwrap_or(0);
-            let t0: i64 = row.get(2).unwrap_or(0);
-            let v0: i64 = row.get(3).unwrap_or(0);
-            let v0_1: i64 = row.get(4).unwrap_or(0);
-            let v0_2: i64 = row.get(5).unwrap_or(0);
-            let v0_3: i64 = row.get(6).unwrap_or(0);
-            let v0_4: i64 = row.get(7).unwrap_or(0);
-            let t1: i64 = row.get(8).unwrap_or(0);
-            let v1: i64 = row.get(9).unwrap_or(0);
-            let v1_1: i64 = row.get(10).unwrap_or(0);
-            let v1_2: i64 = row.get(11).unwrap_or(0);
-            let v1_3: i64 = row.get(12).unwrap_or(0);
-            let v1_4: i64 = row.get(13).unwrap_or(0);
-            let idle: i64 = row.get(14).unwrap_or(0);
-            let scid: i64 = row.get(15).unwrap_or(0);
-            let chid: i64 = row.get(16).unwrap_or(0);
-            Ok(format!(
-                r#"{{"eid":{},"lv":{},"t0":{},"v0":{},"v0_1":{},"v0_2":{},"v0_3":{},"v0_4":{},"t1":{},"v1":{},"v1_1":{},"v1_2":{},"v1_3":{},"v1_4":{},"idle":{},"sc_id":{},"chara":{}}}"#,
-                eid, lv, t0, v0, v0_1, v0_2, v0_3, v0_4, t1, v1, v1_1, v1_2, v1_3, v1_4, idle, scid, chid
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    // 6. Sample: cards with type_0=116 (Mejiro Top Roman etc - "per skill count" effects)
-    let mut t116_samples: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT ue.id, ue.lv, ue.type_0, ue.value_0, ue.value_0_1, ue.value_0_2, ue.value_0_3, ue.value_0_4, ue.type_1, ue.value_1, ue.value_1_1, ue.value_1_2, ue.value_1_3, ue.value_1_4, ue.idle_mode_sub_rate, sc.id as sc_id, sc.chara_id \
-         FROM support_card_unique_effect ue \
-         JOIN support_card_data sc ON ue.id = sc.unique_effect_id \
-         WHERE ue.type_0 = 116 ORDER BY sc.id LIMIT 10"
-    ) {
-        t116_samples = stmt.query_map([], |row| {
-            let eid: i64 = row.get(0).unwrap_or(0);
-            let lv: i64 = row.get(1).unwrap_or(0);
-            let t0: i64 = row.get(2).unwrap_or(0);
-            let v0: i64 = row.get(3).unwrap_or(0);
-            let v0_1: i64 = row.get(4).unwrap_or(0);
-            let v0_2: i64 = row.get(5).unwrap_or(0);
-            let v0_3: i64 = row.get(6).unwrap_or(0);
-            let v0_4: i64 = row.get(7).unwrap_or(0);
-            let t1: i64 = row.get(8).unwrap_or(0);
-            let v1: i64 = row.get(9).unwrap_or(0);
-            let v1_1: i64 = row.get(10).unwrap_or(0);
-            let v1_2: i64 = row.get(11).unwrap_or(0);
-            let v1_3: i64 = row.get(12).unwrap_or(0);
-            let v1_4: i64 = row.get(13).unwrap_or(0);
-            let idle: i64 = row.get(14).unwrap_or(0);
-            let scid: i64 = row.get(15).unwrap_or(0);
-            let chid: i64 = row.get(16).unwrap_or(0);
-            Ok(format!(
-                r#"{{"eid":{},"lv":{},"t0":{},"v0":{},"v0_1":{},"v0_2":{},"v0_3":{},"v0_4":{},"t1":{},"v1":{},"v1_1":{},"v1_2":{},"v1_3":{},"v1_4":{},"idle":{},"sc_id":{},"chara":{}}}"#,
-                eid, lv, t0, v0, v0_1, v0_2, v0_3, v0_4, t1, v1, v1_1, v1_2, v1_3, v1_4, idle, scid, chid
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    drop(conn);
-
-    format!(
-        r#"{{"ok":true,"version":"3.22.91","cards_with_unique":[{}],"all_effects":[{}],"combo_dist":[{}],"effect_filter":[{}],"t101_samples":[{}],"t116_samples":[{}]}}"#,
-        cards.join(","),
-        effects.join(","),
-        combo_dist.join(","),
-        filters.join(","),
-        t101_samples.join(","),
-        t116_samples.join(",")
-    )
-}
-
-fn debug_sc_effect() -> String {
-    let mdb_path = match find_mdb_path() {
-        Some(p) => p,
-        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
-    };
-    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c,
-        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
-    };
-
-    // Helper: dump table schema as column names
-    fn get_columns(conn: &Connection, table: &str) -> Vec<String> {
-        let safe = table.replace("]", "]]");
-        match conn.prepare(&format!("PRAGMA table_info([{}])", safe)) {
-            Ok(mut stmt) => stmt
-                .query_map([], |row| Ok(row.get::<_, String>(1).unwrap_or_default()))
-                .unwrap()
-                .filter_map(|r| r.ok())
-                .collect(),
-            Err(_) => Vec::new(),
-        }
-    }
-
-    // Helper: dump first N rows as JSON array
-    fn get_rows(conn: &Connection, table: &str, cols: &[String], limit: usize) -> Vec<String> {
-        let safe = table.replace("]", "]]");
-        let col_list = cols
-            .iter()
-            .map(|c| format!("[{}]", c.replace("]", "]]")))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!("SELECT {} FROM [{}] LIMIT {}", col_list, safe, limit);
-        match conn.prepare(&sql) {
-            Ok(mut stmt) => {
-                let n_cols = cols.len();
-                stmt.query_map([], |row| {
-                    let mut pairs: Vec<String> = Vec::new();
-                    for ci in 0..n_cols {
-                        let cn = cols.get(ci).unwrap_or(&String::new()).clone();
-                        let val = row
-                            .get::<_, Option<i64>>(ci)
-                            .unwrap_or(None)
-                            .map(|v| v.to_string())
-                            .or_else(|| row.get::<_, Option<String>>(ci).unwrap_or(None))
-                            .unwrap_or_else(|| "null".to_string());
-                        pairs.push(format!(
-                            r#""{}":{}"#,
-                            json_escape(&cn),
-                            if val == "null" {
-                                val
-                            } else {
-                                format!(r#""{}""#, json_escape(&val))
-                            }
-                        ));
-                    }
-                    Ok(format!(r#"{{{}}}"#, pairs.join(",")))
-                })
-                .unwrap()
-                .filter_map(|r| r.ok())
-                .collect()
-            }
-            Err(_) => Vec::new(),
-        }
-    }
-
-    // 1. support_card_effect_table (4931 rows) - schema + first 5 rows + 5 rows with unique_effect_id
-    let scet_cols = get_columns(&conn, "support_card_effect_table");
-    let scet_rows = get_rows(&conn, "support_card_effect_table", &scet_cols, 5);
-    // Get rows where effect_table_id matches a known unique card
-    let mut scet_unique: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT * FROM support_card_effect_table WHERE effect_table_id IN (SELECT unique_effect_id FROM support_card_data WHERE unique_effect_id > 0 LIMIT 5) LIMIT 20"
-    ) {
-        scet_unique = stmt.query_map([], |row| {
-            let n = scet_cols.len();
-            let mut pairs: Vec<String> = Vec::new();
-            for ci in 0..n {
-                let cn = scet_cols.get(ci).unwrap_or(&String::new()).clone();
-                let val = row.get::<_, Option<i64>>(ci).unwrap_or(None)
-                    .map(|v| v.to_string())
-                    .or_else(|| row.get::<_, Option<String>>(ci).unwrap_or(None))
-                    .unwrap_or_else(|| "null".to_string());
-                pairs.push(format!(r#""{}":{}"#, json_escape(&cn), if val == "null" { val } else { format!(r#""{}""#, json_escape(&val)) }));
-            }
-            Ok(format!(r#"{{{}}}"#, pairs.join(",")))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    // 2. support_card_effect_filter (26 rows) - full dump
-    let scef_cols = get_columns(&conn, "support_card_effect_filter");
-    let scef_rows = get_rows(&conn, "support_card_effect_filter", &scef_cols, 30);
-
-    // 3. support_card_effect_filter_group (4 rows) - full dump
-    let scefg_cols = get_columns(&conn, "support_card_effect_filter_group");
-    let scefg_rows = get_rows(&conn, "support_card_effect_filter_group", &scefg_cols, 10);
-
-    // 4. support_card_unique_effect - dump more rows to see type patterns
-    let scue_cols = get_columns(&conn, "support_card_unique_effect");
-    let mut scue_dist: Vec<String> = Vec::new();
-    // type_0 distribution
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT type_0, COUNT(*) as cnt FROM support_card_unique_effect GROUP BY type_0 ORDER BY cnt DESC"
-    ) {
-        scue_dist = stmt.query_map([], |row| {
-            let t: i64 = row.get(0).unwrap_or(0);
-            let c: i64 = row.get(1).unwrap_or(0);
-            Ok(format!(r#"{{"type_0":{},"count":{}}}"#, t, c))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-    let mut scue_type1_dist: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT type_1, COUNT(*) as cnt FROM support_card_unique_effect GROUP BY type_1 ORDER BY cnt DESC"
-    ) {
-        scue_type1_dist = stmt.query_map([], |row| {
-            let t: i64 = row.get(0).unwrap_or(0);
-            let c: i64 = row.get(1).unwrap_or(0);
-            Ok(format!(r#"{{"type_1":{},"count":{}}}"#, t, c))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-    // Sample rows with type_0 or type_1 matching potential condition types
-    let mut scue_cond_rows: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT * FROM support_card_unique_effect WHERE type_0 IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20) OR type_1 IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20) LIMIT 30"
-    ) {
-        scue_cond_rows = stmt.query_map([], |row| {
-            let n = scue_cols.len();
-            let mut pairs: Vec<String> = Vec::new();
-            for ci in 0..n {
-                let cn = scue_cols.get(ci).unwrap_or(&String::new()).clone();
-                let val = row.get::<_, Option<i64>>(ci).unwrap_or(None)
-                    .map(|v| v.to_string())
-                    .or_else(|| row.get::<_, Option<String>>(ci).unwrap_or(None))
-                    .unwrap_or_else(|| "null".to_string());
-                pairs.push(format!(r#""{}":{}"#, json_escape(&cn), if val == "null" { val } else { format!(r#""{}""#, json_escape(&val)) }));
-            }
-            Ok(format!(r#"{{{}}}"#, pairs.join(",")))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    drop(conn);
-
-    let scet_col_json: Vec<String> = scet_cols
-        .iter()
-        .map(|c| format!(r#""{}""#, json_escape(c)))
-        .collect();
-    let scef_col_json: Vec<String> = scef_cols
-        .iter()
-        .map(|c| format!(r#""{}""#, json_escape(c)))
-        .collect();
-    let scefg_col_json: Vec<String> = scefg_cols
-        .iter()
-        .map(|c| format!(r#""{}""#, json_escape(c)))
-        .collect();
-    let scue_col_json: Vec<String> = scue_cols
-        .iter()
-        .map(|c| format!(r#""{}""#, json_escape(c)))
-        .collect();
-
-    format!(
-        r#"{{"ok":true,"version":"3.22.91","effect_table":{{"columns":[{}],"sample":[{}],"unique_match":[{}]}},"effect_filter":{{"columns":[{}],"rows":[{}]}},"effect_filter_group":{{"columns":[{}],"rows":[{}]}},"unique_effect":{{"columns":[{}],"type_0_dist":[{}],"type_1_dist":[{}],"cond_rows":[{}]}}}}"#,
-        scet_col_json.join(","),
-        scet_rows.join(","),
-        scet_unique.join(","),
-        scef_col_json.join(","),
-        scef_rows.join(","),
-        scefg_col_json.join(","),
-        scefg_rows.join(","),
-        scue_col_json.join(","),
-        scue_dist.join(","),
-        scue_type1_dist.join(","),
-        scue_cond_rows.join(",")
-    )
-}
-
-fn debug_hint_gain() -> String {
-    let mdb_path = match find_mdb_path() {
-        Some(p) => p,
-        None => return r#"{"error":"mdb_not_found"}"#.to_string(),
-    };
-    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c,
-        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
-    };
-
-    // 1. Dump single_mode_hint_gain: first 20 rows
-    let mut hint_rows: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT id, hint_id, support_card_id, hint_group, hint_gain_type,          hint_value_1, hint_value_2, group_id, condition_set_id, priority          FROM single_mode_hint_gain ORDER BY id LIMIT 20"
-    ) {
-        hint_rows = stmt.query_map([], |row| {
-            let id: i64 = row.get(0).unwrap_or(0);
-            let hint_id: i64 = row.get(1).unwrap_or(0);
-            let sc_id: i64 = row.get(2).unwrap_or(0);
-            let hint_group: i64 = row.get(3).unwrap_or(0);
-            let hint_gain_type: i64 = row.get(4).unwrap_or(0);
-            let hv1: i64 = row.get(5).unwrap_or(0);
-            let hv2: i64 = row.get(6).unwrap_or(0);
-            let gid: i64 = row.get(7).unwrap_or(0);
-            let csid: i64 = row.get(8).unwrap_or(-1);
-            let pri: i64 = row.get(9).unwrap_or(0);
-            Ok(format!(
-                r#"{{"id":{},"hint_id":{},"sc_id":{},"hint_grp":{},"gain_type":{},"hv1":{},"hv2":{},"grp_id":{},"cond_set_id":{},"pri":{}}}"#,
-                id, hint_id, sc_id, hint_group, hint_gain_type, hv1, hv2, gid, csid, pri
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    // 2. hint_gain_type distribution
-    let mut type_dist: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT hint_gain_type, COUNT(*) as cnt FROM single_mode_hint_gain GROUP BY hint_gain_type ORDER BY cnt DESC"
-    ) {
-        type_dist = stmt.query_map([], |row| {
-            let t: i64 = row.get(0).unwrap_or(0);
-            let c: i64 = row.get(1).unwrap_or(0);
-            Ok(format!(r#"{{"type":{},"count":{}}}"#, t, c))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    // 3. Rows with non-zero condition_set_id (these have bond/skill prerequisites)
-    let mut hint_with_cond: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT id, hint_id, support_card_id, hint_group, hint_gain_type, hint_value_1, hint_value_2, group_id, condition_set_id, priority FROM single_mode_hint_gain WHERE condition_set_id > 0 ORDER BY id LIMIT 30"
-    ) {
-        hint_with_cond = stmt.query_map([], |row| {
-            let id: i64 = row.get(0).unwrap_or(0);
-            let hint_id: i64 = row.get(1).unwrap_or(0);
-            let sc_id: i64 = row.get(2).unwrap_or(0);
-            let hint_group: i64 = row.get(3).unwrap_or(0);
-            let hint_gain_type: i64 = row.get(4).unwrap_or(0);
-            let hv1: i64 = row.get(5).unwrap_or(0);
-            let hv2: i64 = row.get(6).unwrap_or(0);
-            let gid: i64 = row.get(7).unwrap_or(0);
-            let csid: i64 = row.get(8).unwrap_or(-1);
-            let pri: i64 = row.get(9).unwrap_or(0);
-            Ok(format!(
-                r#"{{"id":{},"hint_id":{},"sc_id":{},"hint_grp":{},"gain_type":{},"hv1":{},"hv2":{},"grp_id":{},"cond_set_id":{},"pri":{}}}"#,
-                id, hint_id, sc_id, hint_group, hint_gain_type, hv1, hv2, gid, csid, pri
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    // 4. Resolve condition_set_ids from hint_gain -> single_mode_story_condition_set
-    let cs_ids: Vec<i64> = match conn.prepare(
-        "SELECT DISTINCT condition_set_id FROM single_mode_hint_gain WHERE condition_set_id > 0 ORDER BY condition_set_id LIMIT 50"
-    ) {
-        Ok(mut stmt) => stmt.query_map([], |row| {
-            Ok(row.get::<_, i64>(0).unwrap_or(0))
-        }).unwrap().filter_map(|r| r.ok()).collect(),
-        Err(_) => Vec::new(),
-    };
-
-    let mut cond_details: Vec<String> = Vec::new();
-    for csid in &cs_ids {
-        let mut entries: Vec<String> = Vec::new();
-        if let Ok(mut stmt2) = conn.prepare(
-            "SELECT id, group_id, story_id, condition_type, condition_story_id_1, gain_select_1, select_index_1, condition_story_id_2, gain_select_2, select_index_2 FROM single_mode_story_condition_set WHERE group_id = ?"
-        ) {
-            entries = stmt2.query_map([csid], |row| {
-                let id: i64 = row.get(0).unwrap_or(0);
-                let gid: i64 = row.get(1).unwrap_or(0);
-                let sid: i64 = row.get(2).unwrap_or(0);
-                let ctype: i64 = row.get(3).unwrap_or(0);
-                let cs1: i64 = row.get(4).unwrap_or(0);
-                let gs1: i64 = row.get(5).unwrap_or(0);
-                let si1: i64 = row.get(6).unwrap_or(0);
-                let cs2: i64 = row.get(7).unwrap_or(0);
-                let gs2: i64 = row.get(8).unwrap_or(0);
-                let si2: i64 = row.get(9).unwrap_or(0);
-                Ok(format!(
-                    r#"{{"id":{},"gid":{},"sid":{},"ctype":{},"cs1":{},"gs1":{},"si1":{},"cs2":{},"gs2":{},"si2":{}}}"#,
-                    id, gid, sid, ctype, cs1, gs1, si1, cs2, gs2, si2
-                ))
-            }).unwrap().filter_map(|r| r.ok()).collect();
-        }
-        cond_details.push(format!(
-            r#"{{"cond_set_id":{},"entries":[{}]}}"#,
-            csid,
-            entries.join(",")
-        ));
-    }
-
-    // 5. Also check single_mode_unique_chara which links partner_id to unique skills
-    let mut unique_chara: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT id, partner_id, scenario_id, chara_id, period, training_placement, gain_flag_id, is_support_featured_stock, gain_role_id FROM single_mode_unique_chara LIMIT 10"
-    ) {
-        unique_chara = stmt.query_map([], |row| {
-            let id: i64 = row.get(0).unwrap_or(0);
-            let pid: i64 = row.get(1).unwrap_or(0);
-            let ssid: i64 = row.get(2).unwrap_or(0);
-            let cid: i64 = row.get(3).unwrap_or(0);
-            let per: i64 = row.get(4).unwrap_or(0);
-            let tp: i64 = row.get(5).unwrap_or(0);
-            let gfi: i64 = row.get(6).unwrap_or(0);
-            let isfs: i64 = row.get(7).unwrap_or(0);
-            let grid: i64 = row.get(8).unwrap_or(0);
-            Ok(format!(
-                r#"{{"id":{},"partner":{},"scenario":{},"chara":{},"period":{},"train_place":{},"gain_flag":{},"featured":{},"gain_role":{}}}"#,
-                id, pid, ssid, cid, per, tp, gfi, isfs, grid
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect();
-    }
-
-    drop(conn);
-
-    format!(
-        r#"{{"ok":true,"version":"3.22.91","hint_gain_sample":[{}],"hint_gain_with_cond":[{}],"hint_gain_type_dist":[{}],"condition_set_resolved":[{}],"unique_chara_sample":[{}]}}"#,
-        hint_rows.join(","),
-        hint_with_cond.join(","),
-        type_dist.join(","),
-        cond_details.join(","),
-        unique_chara.join(",")
-    )
 }
 
 fn debug_mdb_all_tables() -> String {
@@ -16120,430 +12822,6 @@ fn read_skilldata() -> String {
 
 /// /saddles - Read G1 win saddle data from MasterDB for compatibility verification
 /// Returns: win saddle groups with relation_group_id (5th anniversary field)
-fn read_saddles() -> String {
-    let mdb_path = match find_mdb_path() {
-        Some(p) => p,
-        None => {
-            return r#"{"error":"mdb_not_found","hint":"MasterDB file not found on device"}"#
-                .to_string()
-        }
-    };
-
-    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c,
-        Err(e) => return format!(r#"{{"error":"open_failed","detail":"{}"}}"#, e),
-    };
-
-    // Collect G1 win saddles (win_saddle_type=3)
-    let saddles: Vec<String> = match conn.prepare(
-        "SELECT id, priority, group_id, relation_group_id, condition, win_saddle_type, race_instance_id_1, race_instance_id_2, race_instance_id_3, race_instance_id_4, race_instance_id_5, race_instance_id_6, race_instance_id_7, race_instance_id_8 FROM single_mode_wins_saddle WHERE win_saddle_type=3 ORDER BY id"
-    ) {
-        Ok(mut stmt) => stmt.query_map([], |row| {
-            Ok(format!(
-                r#"{{"id":{},"priority":{},"group_id":{},"relation_group_id":{},"condition":{},"race_ids":[{},{},{},{},{},{},{},{}]}}"#,
-                row.get::<_, i32>(0).unwrap_or(0),
-                row.get::<_, i32>(1).unwrap_or(0),
-                row.get::<_, i32>(2).unwrap_or(0),
-                row.get::<_, i32>(3).unwrap_or(0),
-                row.get::<_, i32>(4).unwrap_or(0),
-                row.get::<_, i32>(6).unwrap_or(0),
-                row.get::<_, i32>(7).unwrap_or(0),
-                row.get::<_, i32>(8).unwrap_or(0),
-                row.get::<_, i32>(9).unwrap_or(0),
-                row.get::<_, i32>(10).unwrap_or(0),
-                row.get::<_, i32>(11).unwrap_or(0),
-                row.get::<_, i32>(12).unwrap_or(0),
-                row.get::<_, i32>(13).unwrap_or(0),
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect(),
-        Err(e) => return format!(r#"{{"error":"saddle_prepare_failed","detail":"{}"}}"#, e),
-    };
-
-    // Collect chara_program (which chara runs which program_group)
-    let chara_programs: Vec<String> = match conn.prepare(
-        "SELECT chara_id, program_group, program_group_2 FROM single_mode_chara_program ORDER BY program_group, chara_id"
-    ) {
-        Ok(mut stmt) => stmt.query_map([], |row| {
-            Ok(format!(
-                r#"{{"chara_id":{},"program_group":{},"program_group_2":{}}}"#,
-                row.get::<_, i32>(0).unwrap_or(0),
-                row.get::<_, i32>(1).unwrap_or(0),
-                row.get::<_, i32>(2).unwrap_or(0),
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect(),
-        Err(e) => return format!(r#"{{"error":"program_prepare_failed","detail":"{}"}}"#, e),
-    };
-
-    // Collect program race mapping
-    let programs: Vec<String> = match conn.prepare(
-        "SELECT id, program_group, race_instance_id, month, half FROM single_mode_program ORDER BY program_group, month, half"
-    ) {
-        Ok(mut stmt) => stmt.query_map([], |row| {
-            Ok(format!(
-                r#"{{"id":{},"program_group":{},"race_instance_id":{},"month":{},"half":{}}}"#,
-                row.get::<_, i32>(0).unwrap_or(0),
-                row.get::<_, i32>(1).unwrap_or(0),
-                row.get::<_, i32>(2).unwrap_or(0),
-                row.get::<_, i32>(3).unwrap_or(0),
-                row.get::<_, i32>(4).unwrap_or(0),
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect(),
-        Err(e) => return format!(r#"{{"error":"prog_prepare_failed","detail":"{}"}}"#, e),
-    };
-
-    // Collect race names (category=32 = race name in text_data)
-    let race_names: Vec<String> = match conn.prepare(&format!(
-        "SELECT [index], text FROM text_data WHERE category={} ORDER BY [index]",
-        TEXT_DATA_CATEGORY_RACE_NAME
-    )) {
-        Ok(mut stmt) => stmt
-            .query_map([], |row| {
-                let text: String = row
-                    .get::<_, Option<String>>(1)
-                    .unwrap_or(None)
-                    .unwrap_or_default();
-                Ok(format!(
-                    r#"{{"race_id":{},"name":"{}"}}"#,
-                    row.get::<_, i32>(0).unwrap_or(0),
-                    json_escape(&text),
-                ))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect(),
-        Err(e) => return format!(r#"{{"error":"race_name_prepare_failed","detail":"{}"}}"#, e),
-    };
-
-    // Collect chara names (category=6 = chara name in text_data)
-    let chara_names: Vec<String> = match conn.prepare(&format!(
-        "SELECT [index], text FROM text_data WHERE category={} ORDER BY [index]",
-        TEXT_DATA_CATEGORY_CHARA_NAME
-    )) {
-        Ok(mut stmt) => stmt
-            .query_map([], |row| {
-                let text: String = row
-                    .get::<_, Option<String>>(1)
-                    .unwrap_or(None)
-                    .unwrap_or_default();
-                Ok(format!(
-                    r#"{{"chara_id":{},"name":"{}"}}"#,
-                    row.get::<_, i32>(0).unwrap_or(0),
-                    json_escape(&text),
-                ))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect(),
-        Err(e) => {
-            return format!(
-                r#"{{"error":"chara_name_prepare_failed","detail":"{}"}}"#,
-                e
-            )
-        }
-    };
-
-    // Collect succession_relation (fixed compatibility scores)
-    let relations: Vec<String> = match conn.prepare(
-        "SELECT relation_type, relation_point FROM succession_relation ORDER BY relation_type, relation_point"
-    ) {
-        Ok(mut stmt) => stmt.query_map([], |row| {
-            Ok(format!(
-                r#"{{"relation_type":{},"relation_point":{}}}"#,
-                row.get::<_, i32>(0).unwrap_or(0),
-                row.get::<_, i32>(1).unwrap_or(0),
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect(),
-        Err(e) => return format!(r#"{{"error":"relation_prepare_failed","detail":"{}"}}"#, e),
-    };
-
-    // Collect succession_relation_member
-    let relation_members: Vec<String> = match conn.prepare(
-        "SELECT id, relation_type, chara_id FROM succession_relation_member ORDER BY relation_type, chara_id"
-    ) {
-        Ok(mut stmt) => stmt.query_map([], |row| {
-            Ok(format!(
-                r#"{{"id":{},"relation_type":{},"chara_id":{}}}"#,
-                row.get::<_, i32>(0).unwrap_or(0),
-                row.get::<_, i32>(1).unwrap_or(0),
-                row.get::<_, i32>(2).unwrap_or(0),
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect(),
-        Err(e) => return format!(r#"{{"error":"member_prepare_failed","detail":"{}"}}"#, e),
-    };
-
-    // Collect race_instance to race_course_set mapping (for venue info)
-    let race_instances: Vec<String> = match conn.prepare(
-        "SELECT ri.id, ri.race_id, r.grade, r.course_set, cs.race_track_id, cs.distance, cs.ground FROM race_instance ri JOIN race r ON ri.race_id=r.id JOIN race_course_set cs ON r.course_set=cs.id WHERE r.grade=100 ORDER BY ri.id"
-    ) {
-        Ok(mut stmt) => stmt.query_map([], |row| {
-            Ok(format!(
-                r#"{{"id":{},"race_id":{},"grade":{},"course_set":{},"race_track_id":{},"distance":{},"ground":{}}}"#,
-                row.get::<_, i32>(0).unwrap_or(0),
-                row.get::<_, i32>(1).unwrap_or(0),
-                row.get::<_, i32>(2).unwrap_or(0),
-                row.get::<_, i32>(3).unwrap_or(0),
-                row.get::<_, i32>(4).unwrap_or(0),
-                row.get::<_, i32>(5).unwrap_or(0),
-                row.get::<_, i32>(6).unwrap_or(0),
-            ))
-        }).unwrap().filter_map(|r| r.ok()).collect(),
-        Err(e) => return format!(r#"{{"error":"race_inst_prepare_failed","detail":"{}"}}"#, e),
-    };
-
-    drop(conn);
-
-    format!(
-        r#"{{"ok":true,"version":"3.22.91","mdb":"{}","saddle_count":{},"program_chara_count":{},"program_count":{},"race_name_count":{},"chara_name_count":{},"relation_count":{},"member_count":{},"race_instance_count":{},"saddles":[{}],"chara_programs":[{}],"programs":[{}],"race_names":[{}],"chara_names":[{}],"relations":[{}],"relation_members":[{}],"race_instances":[{}]}}"#,
-        mdb_path,
-        saddles.len(),
-        chara_programs.len(),
-        programs.len(),
-        race_names.len(),
-        chara_names.len(),
-        relations.len(),
-        relation_members.len(),
-        race_instances.len(),
-        saddles.join(","),
-        chara_programs.join(","),
-        programs.join(","),
-        race_names.join(","),
-        chara_names.join(","),
-        relations.join(","),
-        relation_members.join(","),
-        race_instances.join(","),
-    )
-}
-
-/// /hall - Read 殿堂 (Hall of Fame) data via TrainedCharaData
-/// Path: WDM -> get_TrainedCharaData -> WorkTrainedCharaData -> get_List -> List<TrainedCharaData>
-/// Each TrainedCharaData has get_RankScore (評価点), get_Speed/Stamina/Power/Guts/Wiz, etc.
-/// _rankScore is the game's own calculated評価点 (gold standard for verification)
-unsafe fn read_hall_data() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    // 1. Get WDM singleton
-    let wdm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkDataManager").as_ptr(),
-    );
-    if wdm_class.is_null() {
-        return r#"{"error":"no_wdm"}"#.to_string();
-    }
-    let wdm_inst = get_singleton(wdm_class);
-    if wdm_inst.is_null() {
-        return r#"{"error":"no_wdm_inst"}"#.to_string();
-    }
-
-    // 2. Get WorkTrainedCharaData from WDM
-    let wtcd_inst = call_getter_ref(wdm_class, wdm_inst, "get_TrainedCharaData");
-    if wtcd_inst.is_null() {
-        ura_log(1, "/hall: get_TrainedCharaData returned null");
-        return r#"{"error":"no_trained_chara_data"}"#.to_string();
-    }
-    ura_log(2, "/hall: got WorkTrainedCharaData instance");
-
-    // 3. Find WorkTrainedCharaData class for calling get_List
-    let wtcd_class = find_class_by_short_name(image, "WorkTrainedCharaData");
-
-    // 4. Get List<TrainedCharaData> from WorkTrainedCharaData
-    let list_obj = call_getter_ref(wtcd_class, wtcd_inst, "get_List");
-    if list_obj.is_null() {
-        ura_log(1, "/hall: get_List returned null");
-        return r#"{"error":"no_list"}"#.to_string();
-    }
-
-    // 5. Read List<TrainedCharaData> internals
-    // List<T> IL2CPP layout (64-bit):
-    //   +0x00: Il2CppObject header (16 bytes)
-    //   +0x10: _items (Il2CppArray* pointer, 8 bytes)
-    //   +0x18: _size (int32, 4 bytes)
-    let list_base = list_obj as *const u8;
-    let items_arr = std::ptr::read_unaligned::<*mut c_void>(
-        list_base.add(IL2CPP_LIST_ARRAY_OFF) as *const *mut c_void
-    );
-    let list_size =
-        std::ptr::read_unaligned::<usize>(list_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize)
-            as i32;
-
-    if items_arr.is_null() || list_size <= 0 {
-        ura_log(1, &format!("/hall: List null or empty, size={}", list_size));
-        return format!(r#"{{"error":"empty_list","list_size":{}}}"#, list_size);
-    }
-    ura_log(2, &format!("/hall: List has {} entries", list_size));
-
-    // 6. Find TrainedCharaData class
-    let tcd_class = find_class_by_short_name(image, "TrainedCharaData");
-    if tcd_class.is_null() {
-        ura_log(1, "/hall: TrainedCharaData class not found");
-        return r#"{"error":"no_tcd_class"}"#.to_string();
-    }
-
-    // 7. Read array elements from List._items
-    // Il2CppArray layout: +0x18: max_length (usize), +0x20: data[0]
-    let arr_base = items_arr as *const u8;
-    let arr_len =
-        std::ptr::read_unaligned::<usize>(arr_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-
-    let mut entries = Vec::new();
-    let count = std::cmp::min(list_size as usize, std::cmp::min(arr_len, 200));
-
-    for i in 0..count {
-        let elem_ptr = std::ptr::read_unaligned::<*mut c_void>(
-            arr_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
-        );
-        if elem_ptr.is_null() {
-            continue;
-        }
-
-        // Read fields via getter methods
-        let card_id = call_getter_int(tcd_class, elem_ptr, "get_CardId");
-        let speed = call_getter_int(tcd_class, elem_ptr, "get_Speed");
-        let stamina = call_getter_int(tcd_class, elem_ptr, "get_Stamina");
-        let power = call_getter_int(tcd_class, elem_ptr, "get_Power");
-        let guts = call_getter_int(tcd_class, elem_ptr, "get_Guts");
-        let wiz = call_getter_int(tcd_class, elem_ptr, "get_Wiz");
-        let rank_score = call_getter_int(tcd_class, elem_ptr, "get_RankScore");
-        let rank = call_getter_int(tcd_class, elem_ptr, "get_Rank");
-        let scenario_id = call_getter_obscured_int(tcd_class, elem_ptr, "get_ScenarioId");
-        let fans = call_getter_int(tcd_class, elem_ptr, "get_Fans");
-        let rarity = call_getter_obscured_int(tcd_class, elem_ptr, "get_Rarity");
-
-        // Skip entries with no meaningful data
-        if speed <= 0 && stamina <= 0 && rank_score <= 0 {
-            continue;
-        }
-
-        entries.push(format!(
-            r#"{{"idx":{},"card_id":{},"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"rank_score":{},"rank":{},"scenario_id":{},"fans":{},"rarity":{}}}"#,
-            i, card_id, speed, stamina, power, guts, wiz, rank_score, rank, scenario_id, fans, rarity
-        ));
-    }
-
-    if entries.is_empty() {
-        return r#"{"error":"no_valid_entries"}"#.to_string();
-    }
-
-    ura_log(2, &format!("/hall: {} valid entries", entries.len()));
-    format!(
-        r#"{{"count":{},"entries":[{}]}}"#,
-        entries.len(),
-        entries.join(",")
-    )
-}
-
-/// /ranking - Ranking data is server-side (not in local IL2CPP memory)
-/// Verified: Sprint class doesn't exist (search=0 results), ranking fetched from game server API
-unsafe fn read_ranking_data() -> String {
-    r#"{"error":"server_side_data","hint":"ランキング data is fetched from game server, not stored locally"}"#.to_string()
-}
-
-// ============================================================
-// ★ v3.22.0: 4 new endpoints for training prediction, event recommendation,
-//   inheritance compatibility, and turn log
-// ============================================================
-
-unsafe fn exact_class_diagnostic(image: *const c_void, namespace: &str, name: &str) -> String {
-    let ns = to_cstr(namespace);
-    let class_name = to_cstr(name);
-    let class = find_class(image, ns.as_ptr(), class_name.as_ptr());
-    if class.is_null() {
-        return format!(
-            r#"{{"namespace":"{}","name":"{}","found":false}}"#,
-            namespace, name
-        );
-    }
-    format!(
-        r#"{{"namespace":"{}","name":"{}","found":true,"fields":{},"methods":{}}}"#,
-        namespace,
-        name,
-        enumerate_class_fields(class),
-        enumerate_class_methods(class)
-    )
-}
-
-unsafe fn debug_race_random_program_exact() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = get_image();
-    if image.is_null() {
-        return r#"{"error":"image_null"}"#.to_string();
-    }
-    let model = exact_class_diagnostic(image, "Gallop", "SingleModeRaceRandomProgram");
-    let formatter = exact_class_diagnostic(
-        image,
-        "Gallop.MsgPack.Formatters",
-        "SingleModeRaceRandomProgramFormatter",
-    );
-    format!(
-        r#"{{"exact_lookup_only":true,"global_iteration":false,"model":{},"formatter":{}}}"#,
-        model, formatter
-    )
-}
-
-/// v3.22.51: /debug/dumpclass","/debug/storydata?name=ClassName — Dump all fields of any IL2CPP class
-/// Uses il2cpp_class_get_fields (metadata only, no runtime_invoke)
-unsafe fn debug_dumpclass(class_name: &str) -> String {
-    if class_name.is_empty() {
-        return r#"{"error":"missing ?name= parameter"}"#.to_string();
-    }
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    // Try to find class by short name
-    let class = find_class_by_short_name(image, class_name);
-    if class.is_null() {
-        return format!(r#"{{"error":"class_not_found","name":"{}"}}"#, class_name);
-    }
-
-    // Get class name from IL2CPP
-    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
-    let real_name = if !get_name_fn.is_null() {
-        let get_name: FnClassGetName = std::mem::transmute(get_name_fn);
-        let name_ptr = get_name(class);
-        if !name_ptr.is_null() {
-            std::ffi::CStr::from_ptr(name_ptr as *const c_char)
-                .to_string_lossy()
-                .to_string()
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
-    };
-
-    // Enumerate all fields (including parent classes)
-    let fields_json = enumerate_class_fields(class);
-
-    // Also enumerate methods (for debugging)
-    let methods_json = enumerate_class_methods(class);
-
-    format!(
-        r#"{{"requested":"{}","found":"{}","fields":{},"methods":{}}}"#,
-        class_name, real_name, fields_json, methods_json
-    )
-}
-// ============================================================
-// v3.22.89: IL2CPP运行时值dump — 新增端点
-// /il2cpp/dump?name=X  — dump单例实例，带运行时字段值
-// /il2cpp/call?class=X&method=Y — 调用单例上的getter
-// /il2cpp/tree?name=X&depth=N — 递归dump引用类型字段
-// /il2cpp/field?class=X&field=Y — 读单个字段值
-// ============================================================
-
-// IL2CPP类型枚举（常用子集）
 const IL2CPP_TYPE_BOOLEAN: u8 = 2;
 const IL2CPP_TYPE_I1: u8 = 3;
 const IL2CPP_TYPE_U1: u8 = 4;
@@ -16752,79 +13030,6 @@ unsafe fn collect_all_fields(class: *mut c_void) -> Vec<(String, i32, *const c_v
 
 /// /il2cpp/dump?name=X — Dump单例实例，带运行时字段值
 /// 查找类→获取单例→遍历所有字段→读取运行时值
-unsafe fn il2cpp_dump_singleton(class_name: &str) -> String {
-    if class_name.is_empty() {
-        return r#"{"error":"missing ?name= parameter"}"#.to_string();
-    }
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let class = find_class_by_short_name(image, class_name);
-    if class.is_null() {
-        return format!(r#"{{"error":"class_not_found","name":"{}"}}"#, class_name);
-    }
-
-    let real_name = get_class_name_from_pointer(class);
-    let instance = get_singleton(class);
-
-    if instance.is_null() {
-        // 单例不存在，只返回字段元数据
-        let fields = collect_all_fields(class);
-        let fields_json: Vec<String> = fields
-            .iter()
-            .map(|(n, o, t)| {
-                let type_enum = il2cpp_type_get_type_enum(*t);
-                format!(
-                    r#"{{"name":"{}","offset":{},"type":{}}}"#,
-                    json_escape(n),
-                    o,
-                    type_enum
-                )
-            })
-            .collect();
-        return format!(
-            r#"{{"requested":"{}","found":"{}","instance":"null","fields":[{}]}}"#,
-            class_name,
-            real_name,
-            fields_json.join(",")
-        );
-    }
-
-    // 读取每个字段的运行时值
-    let fields = collect_all_fields(class);
-    let fields_json: Vec<String> = fields
-        .iter()
-        .map(|(n, o, t)| {
-            let type_enum = il2cpp_type_get_type_enum(*t);
-            let val = read_field_value_json(instance, *o, *t);
-            format!(
-                r#"{{"name":"{}","offset":{},"type":{},"value":{}}}"#,
-                json_escape(n),
-                o,
-                type_enum,
-                val
-            )
-        })
-        .collect();
-
-    format!(
-        r#"{{"requested":"{}","found":"{}","instance":"0x{:x}","field_count":{},"fields":[{}]}}"#,
-        class_name,
-        real_name,
-        instance as usize,
-        fields_json.len(),
-        fields_json.join(",")
-    )
-}
-
-/// /il2cpp/invoke_static?class=X&method=Y&p0=..&n=2
-/// v3.27: 基于 il2cpp_runtime_invoke 的安全 static 方法调用
-/// 不用裸函数指针, 不缺 MethodInfo*, 不崩
 unsafe fn il2cpp_invoke_static_method(
     class_name: &str,
     method_name: &str,
@@ -17175,40 +13380,6 @@ unsafe fn il2cpp_call_method(class_name: &str, method_name: &str) -> String {
 
 /// /il2cpp/tree?name=X&depth=N — 递归dump引用类型字段
 /// depth控制递归深度，防止无限循环
-unsafe fn il2cpp_tree_dump(class_name: &str, max_depth: usize) -> String {
-    if class_name.is_empty() {
-        return r#"{"error":"missing ?name= parameter"}"#.to_string();
-    }
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let class = find_class_by_short_name(image, class_name);
-    if class.is_null() {
-        return format!(r#"{{"error":"class_not_found","name":"{}"}}"#, class_name);
-    }
-
-    let instance = get_singleton(class);
-    if instance.is_null() {
-        return format!(r#"{{"error":"singleton_null","class":"{}"}}"#, class_name);
-    }
-
-    let real_name = get_class_name_from_pointer(class);
-    let depth = if max_depth == 0 { 2 } else { max_depth.min(5) }; // 最大5层
-    let visited = std::collections::HashSet::new();
-    let tree = il2cpp_dump_recursive(instance, class, depth, &visited);
-
-    format!(
-        r#"{{"requested":"{}","found":"{}","instance":"0x{:x}","max_depth":{},"tree":{}}}"#,
-        class_name, real_name, instance as usize, depth, tree
-    )
-}
-
-/// 递归dump对象字段（内部函数）
 unsafe fn il2cpp_dump_recursive(
     obj: *const c_void,
     class: *mut c_void,
@@ -18321,78 +14492,6 @@ unsafe fn enum_method_names_containing(class: *mut c_void, needle: &str) -> Vec<
 /// ★ v3.24.32: callers MUST check `active_round_turn == total_turn` before
 /// presenting the pool as currently selectable — between selection rounds
 /// the pool is stale ("leftover from the last phase"), not selectable now.
-fn ramen_derive_selectable_regions(
-    total_turn: i64,
-    all_selected: &[i32],
-) -> (Option<i64>, Option<i64>, Vec<i64>, String) {
-    let mut round_types: Vec<(i64, i64)> = Vec::new(); // (turn, region_select_type)
-    let mut pools: Vec<(i64, i64)> = Vec::new(); // (region_select_type, region_id)
-    let mdb_path = match find_mdb_path() {
-        Some(p) => p,
-        None => return (None, None, Vec::new(), "error: mdb_not_found".to_string()),
-    };
-    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(c) => c,
-        Err(e) => return (None, None, Vec::new(), format!("error: mdb_open: {}", e)),
-    };
-    if let Ok(mut stmt) = conn
-        .prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn")
-    {
-        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
-            for row in rows.flatten() {
-                round_types.push(row);
-            }
-        }
-    }
-    if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT region_select_type, region_id FROM single_mode_14_region_feeling ORDER BY region_select_type, region_id") {
-        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
-            for row in rows.flatten() { pools.push(row); }
-        }
-    }
-    if pools.is_empty() {
-        return (
-            None,
-            None,
-            Vec::new(),
-            "error: empty_region_pools".to_string(),
-        );
-    }
-    let mut active_type: Option<i64> = None;
-    let mut active_turn: Option<i64> = None;
-    for (t, ty) in &round_types {
-        if *t <= total_turn {
-            active_type = Some(*ty);
-            active_turn = Some(*t);
-        }
-    }
-    if active_type.is_none() {
-        active_type = round_types.first().map(|(_, ty)| *ty);
-        active_turn = round_types.first().map(|(t, _)| *t);
-    }
-    let candidates: Vec<i64> = match active_type {
-        Some(ty) => pools
-            .iter()
-            .filter(|(pty, _)| *pty == ty)
-            .map(|(_, rid)| *rid)
-            .filter(|rid| !all_selected.contains(&(*rid as i32)))
-            .collect(),
-        None => Vec::new(),
-    };
-    (active_type, active_turn, candidates, "ok".to_string())
-}
-
-/// ★ v3.24.30: /debug/ramen_region_select — read-only region-selection observation.
-///
-/// Runtime part: total turn, SelectedRegionIdArray, AllSelectedRegionIdArray
-/// (same getters already used by debug_ramen_planner_state; nothing else is
-/// called and no state is mutated).
-///
-/// Candidate pool: DERIVED from MDB (single_mode_14_region_select rounds +
-/// single_mode_14_region_feeling pools) minus all_selected_region_ids. The
-/// derivation is labeled explicitly; a runtime-native "selectable regions"
-/// list is NOT asserted — Region-related method names on the DataSet class
-/// are only enumerated by name so the existence of an official getter can be
-/// confirmed on-device before any future direct read.
 unsafe fn debug_ramen_region_select() -> String {
     if API.is_null() {
         return r#"{"error":"api_null"}"#.to_string();
@@ -18920,155 +15019,6 @@ fn is_readable_range(addr: usize, len: usize) -> bool {
 }
 
 /// 输出诊断对象的原始十六进制内存。地址不可读时返回空字符串。
-unsafe fn debug_hex(addr: *const u8, len: usize) -> String {
-    if addr.is_null() || !is_readable_range(addr as usize, len) {
-        return String::new();
-    }
-    let mut result = String::with_capacity(len * 2);
-    for index in 0..len {
-        let value = std::ptr::read_unaligned(addr.add(index));
-        result.push_str(&format!("{:02x}", value));
-    }
-    result
-}
-
-/// 诊断 IL2CPP 集合（可能是 Array 或 List<T>）
-unsafe fn debug_il2cpp_collection(collection: *mut c_void, max_items: usize) -> String {
-    if collection.is_null() {
-        return r#"{"error":"null_collection"}"#.to_string();
-    }
-
-    let collection_class = get_class_from_object(collection);
-    let collection_class_name = get_class_name_from_pointer(collection_class);
-
-    let is_list =
-        collection_class_name.contains("List`1") || collection_class_name.starts_with("List<");
-
-    let (count, array) = if is_list {
-        let count = std::ptr::read_unaligned::<i32>(
-            (collection as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const i32,
-        );
-        let array = read_ptr_at(collection, IL2CPP_LIST_ARRAY_OFF as i32);
-        (count as i64, array)
-    } else {
-        let count = std::ptr::read_unaligned::<usize>(
-            (collection as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const usize,
-        );
-        (count as i64, collection)
-    };
-
-    if count > 10000 || count < 0 {
-        return format!(
-            r#"{{"collection_class":"{}","storage":"{}","length":{},"error":"invalid_count"}}"#,
-            json_escape(&collection_class_name),
-            if is_list { "list" } else { "array" },
-            count
-        );
-    }
-
-    if array.is_null() {
-        return format!(
-            r#"{{"collection_class":"{}","storage":"{}","length":{},"error":"null_array"}}"#,
-            json_escape(&collection_class_name),
-            if is_list { "list" } else { "array" },
-            count
-        );
-    }
-
-    // 获取元素类型
-    let get_element_class_fn = resolve_il2cpp_symbol("il2cpp_class_get_element_class");
-    let is_valuetype_fn = resolve_il2cpp_symbol("il2cpp_class_is_valuetype");
-    let value_size_fn = resolve_il2cpp_symbol("il2cpp_class_value_size");
-
-    let array_class = get_class_from_object(array);
-    let element_class = if !get_element_class_fn.is_null() && !array_class.is_null() {
-        let f: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
-            std::mem::transmute(get_element_class_fn);
-        f(array_class)
-    } else {
-        ptr::null_mut()
-    };
-
-    let element_class_name = if !element_class.is_null() {
-        get_class_name_from_pointer(element_class)
-    } else {
-        String::new()
-    };
-
-    let element_is_value_type = if !is_valuetype_fn.is_null() && !element_class.is_null() {
-        let f: unsafe extern "C" fn(*mut c_void) -> bool = std::mem::transmute(is_valuetype_fn);
-        f(element_class)
-    } else {
-        false
-    };
-
-    let element_size = if !value_size_fn.is_null() && !element_class.is_null() {
-        let f: unsafe extern "C" fn(*mut c_void) -> i32 = std::mem::transmute(value_size_fn);
-        f(element_class) as usize
-    } else {
-        8 // 默认指针大小
-    };
-
-    // 遍历元素
-    let limit = (count as usize).min(max_items);
-    let mut items: Vec<String> = Vec::new();
-
-    for index in 0..limit {
-        if element_is_value_type {
-            // 值类型：直接读内存
-            let element_address = (array as *const u8).add(0x20 + index * element_size);
-            let raw = debug_hex(element_address, element_size.min(0x40));
-            items.push(format!(
-                r#"{{"index":{},"storage":"inline_value","address":"0x{:x}","size":{},"raw_hex":"{}"}}"#,
-                index, element_address as usize, element_size, raw
-            ));
-        } else {
-            // 引用类型：读指针
-            let slot = (array as *const u8).add(0x20 + index * 8);
-            let object = std::ptr::read_unaligned::<*mut c_void>(slot as *const *mut c_void);
-
-            if object.is_null() {
-                items.push(format!(
-                    r#"{{"index":{},"storage":"reference","ptr":"null","status":"null"}}"#,
-                    index
-                ));
-                continue;
-            }
-
-            if !is_readable_range(object as usize, 0x10) {
-                items.push(format!(
-                    r#"{{"index":{},"storage":"reference","ptr":"0x{:x}","status":"unreadable_target"}}"#,
-                    index, object as usize
-                ));
-                continue;
-            }
-
-            let runtime_class = get_class_from_object(object);
-            let runtime_name = get_class_name_from_pointer(runtime_class);
-            let raw = debug_hex(object as *const u8, 0x60);
-
-            items.push(format!(
-                r#"{{"index":{},"storage":"reference","ptr":"0x{:x}","runtime_class":"{}","raw_hex":"{}"}}"#,
-                index, object as usize, json_escape(&runtime_name), raw
-            ));
-        }
-    }
-
-    format!(
-        r#"{{"collection_class":"{}","storage":"{}","length":{},"element_class":"{}","element_is_value_type":{},"element_size":{},"items":[{}]}}"#,
-        json_escape(&collection_class_name),
-        if is_list { "list" } else { "array" },
-        count,
-        json_escape(&element_class_name),
-        element_is_value_type,
-        element_size,
-        items.join(",")
-    )
-}
-
-/// Snapshot the final training-partner arrays and classify only by the equipped
-/// support-card position roster. Non-matches remain unknown_nondeck; this
-/// endpoint does not infer that every non-deck participant is a scenario NPC.
 unsafe fn debug_ramen_participants_inner() -> String {
     if API.is_null() {
         return r#"{"error":"api_null"}"#.to_string();
@@ -19214,249 +15164,6 @@ fn debug_ramen_participants() -> String {
 }
 
 /// 诊断训练伙伴 — 只读，不修改 /summary 或评分
-unsafe fn debug_training_partners_inner() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let wdm_class = find_class_by_short_name(image, "WorkDataManager");
-    if wdm_class.is_null() {
-        return r#"{"error":"wdm_class_null"}"#.to_string();
-    }
-    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
-    let home_class = find_class_by_short_name(image, "WorkSingleModeHomeInfoData");
-    let chara_class = find_class_by_short_name(image, "WorkSingleModeCharaData");
-
-    let wdm = get_singleton(wdm_class);
-    if wdm.is_null() {
-        return r#"{"error":"wdm_null"}"#.to_string();
-    }
-
-    let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
-    if sm.is_null() {
-        return r#"{"error":"sm_null"}"#.to_string();
-    }
-
-    let home = call_getter_on_instance(sm_class, sm, "get_HomeInfoData");
-    let chara = call_getter_ref(sm_class, sm, "get_Character");
-
-    // CommandInfoArray
-    let commands = read_field_value(home_class, home, "CommandInfoArray");
-    let commands_diag = if !commands.is_null() {
-        debug_il2cpp_collection(commands, 16)
-    } else {
-        r#"{"error":"null"}"#.to_string()
-    };
-
-    // 遍历每个训练项
-    let command_count = if !commands.is_null() {
-        std::ptr::read_unaligned::<usize>((commands as *const u8).add(0x18) as *const usize)
-    } else {
-        0
-    };
-
-    let mut cmd_parts: Vec<String> = Vec::new();
-    let cmd_limit = command_count.min(16);
-    for index in 0..cmd_limit {
-        let command_slot = (commands as *const u8).add(0x20 + index * 8);
-        let command = std::ptr::read_unaligned::<*mut c_void>(command_slot as *const *mut c_void);
-        if command.is_null() {
-            cmd_parts.push(format!(r#"{{"index":{},"error":"null_command"}}"#, index));
-            continue;
-        }
-
-        let command_id = read_obscured_int_at(command, 36);
-        let command_class = get_class_from_object(command);
-        let command_class_name = get_class_name_from_pointer(command_class);
-        let command_raw = debug_hex(command as *const u8, 0x70);
-
-        let training_partners = read_ptr_at(command, 80);
-        let tips_event_partners = read_ptr_at(command, 88);
-
-        let tp_diag = if !training_partners.is_null() {
-            debug_il2cpp_collection(training_partners, 16)
-        } else {
-            r#"{"error":"null"}"#.to_string()
-        };
-
-        let tips_diag = if !tips_event_partners.is_null() {
-            debug_il2cpp_collection(tips_event_partners, 16)
-        } else {
-            r#"{"error":"null"}"#.to_string()
-        };
-
-        cmd_parts.push(format!(
-            r#"{{"index":{},"command_id":{},"command_ptr":"0x{:x}","command_class":"{}","command_raw_hex":"{}","training_partners":{},"tips_event_partners":{}}}"#,
-            index, command_id, command as usize,
-            json_escape(&command_class_name), command_raw,
-            tp_diag, tips_diag
-        ));
-    }
-
-    // 支援卡
-    let support_cards = call_getter_on_instance(chara_class, chara, "get_EquipSupportCardArray");
-    let sc_diag = if !support_cards.is_null() {
-        debug_il2cpp_collection(support_cards, 16)
-    } else {
-        r#"{"error":"null"}"#.to_string()
-    };
-
-    // 羁绊列表
-    let evaluation_list = read_ptr_at(chara, 1016);
-    let eval_diag = if !evaluation_list.is_null() {
-        debug_il2cpp_collection(evaluation_list, 100)
-    } else {
-        r#"{"error":"null"}"#.to_string()
-    };
-
-    format!(
-        r#"{{"ok":true,"diagnostic_version":1,"read_only":true,"notes":["No partner identity or bond gain is inferred in this stage","shining is not inferred from TipsEventPartnerArray"],"commands_collection":{},"commands":[{}],"support_cards":{},"evaluation_list":{}}}"#,
-        commands_diag,
-        cmd_parts.join(","),
-        sc_diag,
-        eval_diag
-    )
-}
-
-/// 崩溃保护包装
-fn debug_training_partners() -> String {
-    let _lock = READ_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
-    let jump_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
-    if jump_result != 0 {
-        SIGSEGV_RECOVERY.store(false, Ordering::Relaxed);
-        return r#"{"error":"sigsegv_recovered","hint":"training partner diagnostic hit an invalid runtime pointer; game was protected"}"#.to_string();
-    }
-    SIGSEGV_RECOVERY.store(true, Ordering::Relaxed);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        debug_training_partners_inner()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"panic_caught"}"#.to_string());
-    SIGSEGV_RECOVERY.store(false, Ordering::Relaxed);
-    result
-}
-
-/// /debug/cmdinfo — Dump command element class info WITHOUT runtime_invoke on command elements
-/// Reads class from object header (offset 0), enumerates fields + methods + hex dump
-/// Safe: only uses il2cpp_class_get_fields / il2cpp_class_get_methods (no runtime_invoke on cmd elements)
-unsafe fn debug_cmdinfo() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    let wdm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkDataManager").as_ptr(),
-    );
-    if wdm_class.is_null() {
-        return r#"{"error":"no_wdm"}"#.to_string();
-    }
-    let wdm_inst = get_singleton(wdm_class);
-    if wdm_inst.is_null() {
-        return r#"{"error":"no_wdm_inst"}"#.to_string();
-    }
-    log_predict_step("P:wdm");
-
-    let sm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeData").as_ptr(),
-    );
-    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
-    if sm_obj.is_null() {
-        return r#"{"error":"no_sm"}"#.to_string();
-    }
-
-    let home_info_obj = call_getter_on_instance(sm_class, sm_obj, "get_HomeInfoData");
-    if home_info_obj.is_null() {
-        return r#"{"error":"no_home_info"}"#.to_string();
-    }
-    log_predict_step("got home_info");
-    let hi_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeHomeInfoData").as_ptr(),
-    );
-    if hi_class.is_null() {
-        return r#"{"error":"no_home_info_class"}"#.to_string();
-    }
-
-    let cmd_arr = read_field_value(hi_class, home_info_obj, "CommandInfoArray");
-    if cmd_arr.is_null() {
-        return r#"{"error":"no_cmd_arr"}"#.to_string();
-    }
-
-    let cmd_base = cmd_arr as *const u8;
-    let cmd_len =
-        std::ptr::read_unaligned::<usize>(cmd_base.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if cmd_len == 0 {
-        return r#"{"error":"empty_cmd_arr"}"#.to_string();
-    }
-
-    // Read first element
-    let ep = std::ptr::read_unaligned::<*mut c_void>(
-        cmd_base.add(IL2CPP_LIST_ITEMS_OFF) as *const *mut c_void
-    );
-    if ep.is_null() {
-        return r#"{"error":"null_elem"}"#.to_string();
-    }
-
-    // Read class from object header (offset 0 = Il2CppClass*)
-    let elem_class = std::ptr::read_unaligned::<*mut c_void>(ep as *const *mut c_void);
-    let class_name = get_class_name_from_pointer(elem_class);
-
-    // Enumerate fields and methods on this class
-    let fields_json = enumerate_class_fields(elem_class);
-    let methods_json = enumerate_class_methods(elem_class);
-
-    // Hex dump first 0x80 bytes (32 x i32 values)
-    let ep_base = ep as *const u8;
-    let mut hex_parts: Vec<String> = Vec::new();
-    for off in (0..0x80).step_by(4) {
-        let val = std::ptr::read_unaligned::<i32>(ep_base.add(off) as *const i32);
-        hex_parts.push(format!(r#""0x{:02x}":{}"#, off, val));
-    }
-
-    // Also check 2nd element class name (verify all elements are same type)
-    let ep2_class_name = if cmd_len > 1 {
-        let ep2 = std::ptr::read_unaligned::<*mut c_void>(
-            cmd_base.add(IL2CPP_LIST_ITEMS_OFF + IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
-        );
-        if !ep2.is_null() {
-            let ep2_class = std::ptr::read_unaligned::<*mut c_void>(ep2 as *const *mut c_void);
-            get_class_name_from_pointer(ep2_class)
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
-    };
-
-    format!(
-        r#"{{"cmd_len":{},"elem0_class":"{}","elem1_class":"{}","fields":{},"methods":{},"hex":{{{}}}}}"#,
-        cmd_len,
-        class_name,
-        ep2_class_name,
-        fields_json,
-        methods_json,
-        hex_parts.join(",")
-    )
-}
-
-/// /training/predict — Detailed training prediction with NPC partner breakdown
-/// Returns per-command: gains, partner details (support card vs NPC), buffs, failure risk
-/// Key data sources:
-///   - WorkSingleModeData -> get_HomeInfoData -> CommandInfoArray (training layout + partners)
-///   - WorkSingleModeCharaData -> CharaEffectBuffArray (active buffs)
-///   - WorkSingleModeScenarioRamenDataSet (ramen-specific data, scenario_id==14)
 unsafe fn read_ramen_info() -> String {
     if API.is_null() {
         return r#"{"error":"api_null"}"#.to_string();
@@ -19757,339 +15464,6 @@ unsafe fn read_inherit_compat() -> String {
 /// cross-references with MDB to map each G1 win to its relation_group_id,
 /// then outputs which relation groups (compatibility bonuses) the chara has earned.
 /// Also reads parent candidates' win saddles for cross-comparison.
-unsafe fn read_win_saddle_analysis() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let api = &*API;
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    // 1. Get WorkSingleModeData
-    let wdm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkDataManager").as_ptr(),
-    );
-    if wdm_class.is_null() {
-        return r#"{"error":"wdm_class_null"}"#.to_string();
-    }
-    let get_instance = match api.il2cpp_get_singleton_like_instance_fn {
-        Some(f) => f,
-        None => return r#"{"error":"no_singleton_fn"}"#.to_string(),
-    };
-    let wdm = get_instance(wdm_class as *mut c_void);
-    if wdm.is_null() {
-        return r#"{"error":"wdm_null"}"#.to_string();
-    }
-
-    // get_WorkSingleModeData
-    let wsm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeData").as_ptr(),
-    );
-    if wsm_class.is_null() {
-        return r#"{"error":"wsm_class_null"}"#.to_string();
-    }
-    let wsm = call_getter_ref(wdm_class, wdm, "get_WorkSingleModeData");
-    if wsm.is_null() {
-        return r#"{"error":"wsm_null"}"#.to_string();
-    }
-
-    // 2. Read total_race_count and win_count
-    let total_races = call_getter_int(wsm_class, wsm, "get_TotalRaceCount");
-    let win_count = call_getter_int(wsm_class, wsm, "get_WinCount");
-
-    // 3. Read WinSaddleArray — List<SingleModeWinsSaddle>
-    let saddle_arr = call_getter_on_instance(wsm_class, wsm, "get_WinSaddleArray");
-    let mut saddle_count = 0i32;
-    let mut saddle_entries: Vec<String> = Vec::new();
-    if !saddle_arr.is_null() {
-        let ab = saddle_arr as *const u8;
-        // IL2CPP List<T>: _items (T[] at +0x10), _size (int at +0x18)
-        let items_ptr = std::ptr::read_unaligned::<usize>(ab.add(0x10) as *const usize);
-        saddle_count = std::ptr::read_unaligned::<i32>(ab.add(0x18) as *const i32);
-
-        // Find SingleModeWinsSaddle class for method calls
-        let saddle_class = find_class(
-            image,
-            to_cstr("Gallop").as_ptr(),
-            to_cstr("SingleModeWinsSaddle").as_ptr(),
-        );
-
-        for i in 0..saddle_count {
-            let elem_ptr = std::ptr::read_unaligned::<usize>(
-                (items_ptr + (i as usize) * std::mem::size_of::<usize>()) as *const usize,
-            );
-            if elem_ptr == 0 {
-                continue;
-            }
-
-            // Call get_Name on the saddle object
-            let name = if !saddle_class.is_null() {
-                let n = call_getter_string(saddle_class, elem_ptr as *mut c_void, "get_Name");
-                if n.is_null() {
-                    String::new()
-                } else {
-                    read_il2cpp_string(n)
-                }
-            } else {
-                String::new()
-            };
-
-            // Call get_Type
-            let stype = if !saddle_class.is_null() {
-                call_getter_int(saddle_class, elem_ptr as *mut c_void, "get_Type")
-            } else {
-                -1
-            };
-
-            // Call IsRelationBonusWinSaddle (returns bool)
-            let is_relation_bonus = if !saddle_class.is_null() {
-                let get_method_fn = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-                let invoke_fn = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-                if !get_method_fn.is_null() && !invoke_fn.is_null() {
-                    type FnGetMethod =
-                        unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *mut c_void;
-                    type FnInvoke = unsafe extern "C" fn(
-                        *mut c_void,
-                        *mut c_void,
-                        *mut c_void,
-                        *mut c_void,
-                    ) -> *mut c_void;
-                    let f: FnGetMethod = std::mem::transmute(get_method_fn);
-                    let inv: FnInvoke = std::mem::transmute(invoke_fn);
-                    let m = f(
-                        saddle_class,
-                        to_cstr("IsRelationBonusWinSaddle").as_ptr(),
-                        0,
-                    );
-                    if !m.is_null() {
-                        let ret = inv(
-                            m,
-                            elem_ptr as *mut c_void,
-                            std::ptr::null_mut(),
-                            std::ptr::null_mut(),
-                        );
-                        ret as i32 != 0
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-
-            // Call GetRelationPoint
-            let relation_point = if !saddle_class.is_null() {
-                let get_method_fn = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
-                let invoke_fn = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
-                if !get_method_fn.is_null() && !invoke_fn.is_null() {
-                    type FnGetMethod =
-                        unsafe extern "C" fn(*mut c_void, *const c_char, i32) -> *mut c_void;
-                    type FnInvoke = unsafe extern "C" fn(
-                        *mut c_void,
-                        *mut c_void,
-                        *mut c_void,
-                        *mut c_void,
-                    ) -> *mut c_void;
-                    let f: FnGetMethod = std::mem::transmute(get_method_fn);
-                    let inv: FnInvoke = std::mem::transmute(invoke_fn);
-                    let m = f(saddle_class, to_cstr("GetRelationPoint").as_ptr(), 0);
-                    if !m.is_null() {
-                        let ret = inv(
-                            m,
-                            elem_ptr as *mut c_void,
-                            std::ptr::null_mut(),
-                            std::ptr::null_mut(),
-                        );
-                        if !ret.is_null() {
-                            std::ptr::read_unaligned::<i32>(ret as *const i32)
-                        } else {
-                            0
-                        }
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            } else {
-                0
-            };
-
-            saddle_entries.push(format!(
-                r#"{{"index":{},"name":"{}","type":{},"is_relation_bonus":{},"relation_point":{}}}"#,
-                i,
-                json_escape(&name),
-                stype,
-                is_relation_bonus,
-                relation_point,
-            ));
-        }
-    }
-
-    // 4. Read parent candidates' WinSaddleArray via SuccessionCharaData
-    // Get WorkSingleModeCharaData → SuccessionTrainedCharaInfo
-    let chara_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeCharaData").as_ptr(),
-    );
-    let chara_obj = if !chara_class.is_null() {
-        call_getter_ref(wdm_class, wdm, "get_WorkSingleModeCharaData")
-    } else {
-        std::ptr::null_mut()
-    };
-
-    let mut parent_saddles_json: Vec<String> = Vec::new();
-    if !chara_obj.is_null() && !chara_class.is_null() {
-        let sci_class = find_class(
-            image,
-            to_cstr("Gallop").as_ptr(),
-            to_cstr("SuccessionCharaInfo").as_ptr(),
-        );
-
-        for (label, getter_name) in [
-            ("parent1", "get_SuccessionTrainedCharaInfoFirst"),
-            ("parent2", "get_SuccessionTrainedCharaInfoSecond"),
-        ] {
-            let sci = call_getter_ref(chara_class, chara_obj, getter_name);
-            if sci.is_null() {
-                continue;
-            }
-
-            let chara_id = if !sci_class.is_null() {
-                call_getter_int(sci_class, sci, "get_TrainedCharaId")
-            } else {
-                0
-            };
-
-            // Try to get WinSaddleArray from SuccessionCharaInfo
-            let p_saddles = call_getter_on_instance(sci_class, sci, "get_WinSaddleArray");
-            let mut p_count = 0i32;
-            let mut p_entries: Vec<String> = Vec::new();
-
-            if !p_saddles.is_null() {
-                let pb = p_saddles as *const u8;
-                let p_items = std::ptr::read_unaligned::<usize>(pb.add(0x10) as *const usize);
-                p_count = std::ptr::read_unaligned::<i32>(pb.add(0x18) as *const i32);
-
-                let saddle_class = find_class(
-                    image,
-                    to_cstr("Gallop").as_ptr(),
-                    to_cstr("SingleModeWinsSaddle").as_ptr(),
-                );
-
-                for i in 0..p_count.min(30) {
-                    let elem_ptr = std::ptr::read_unaligned::<usize>(
-                        (p_items + (i as usize) * std::mem::size_of::<usize>()) as *const usize,
-                    );
-                    if elem_ptr == 0 {
-                        continue;
-                    }
-                    let name = if !saddle_class.is_null() {
-                        let n =
-                            call_getter_string(saddle_class, elem_ptr as *mut c_void, "get_Name");
-                        if n.is_null() {
-                            String::new()
-                        } else {
-                            read_il2cpp_string(n)
-                        }
-                    } else {
-                        String::new()
-                    };
-                    let stype = if !saddle_class.is_null() {
-                        call_getter_int(saddle_class, elem_ptr as *mut c_void, "get_Type")
-                    } else {
-                        -1
-                    };
-                    p_entries.push(format!(
-                        r#"{{"name":"{}","type":{}}}"#,
-                        json_escape(&name),
-                        stype,
-                    ));
-                }
-            }
-
-            parent_saddles_json.push(format!(
-                r#"{{"label":"{}","chara_id":{},"saddle_count":{},"saddles":[{}]}}"#,
-                label,
-                chara_id,
-                p_count,
-                p_entries.join(","),
-            ));
-        }
-    }
-
-    // 5. Cross-reference with MDB for relation_group_id mapping
-    let mut mdb_saddle_map_json: Vec<String> = Vec::new();
-    let mut relation_groups_json: Vec<String> = Vec::new();
-
-    if let Some(mdb_path) = find_mdb_path() {
-        if let Ok(conn) = Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-            // Map: win_saddle entries from MDB with their relation_group_id
-            if let Ok(mut stmt) = conn.prepare(
-                "SELECT id, relation_group_id, condition, win_saddle_type, race_instance_id_1, race_instance_id_2 FROM single_mode_wins_saddle WHERE win_saddle_type=3 AND relation_group_id > 0 ORDER BY relation_group_id"
-            ) {
-                let rows: Vec<String> = stmt.query_map([], |row| {
-                    Ok(format!(
-                        r#"{{"id":{},"rel_group":{},"cond":{},"type":{},"race1":{},"race2":{}}}"#,
-                        row.get::<_, i32>(0).unwrap_or(0),
-                        row.get::<_, i32>(1).unwrap_or(0),
-                        row.get::<_, i32>(2).unwrap_or(0),
-                        row.get::<_, i32>(3).unwrap_or(0),
-                        row.get::<_, i32>(4).unwrap_or(0),
-                        row.get::<_, i32>(5).unwrap_or(0),
-                    ))
-                }).unwrap().filter_map(|r| r.ok()).collect();
-                mdb_saddle_map_json = rows;
-            }
-
-            // succession_relation: check which relation_types give points
-            // The G1 win groups are type 1-34 (1pt each)
-            if let Ok(mut stmt) = conn.prepare(
-                "SELECT relation_type, relation_point FROM succession_relation WHERE relation_type BETWEEN 1 AND 200 ORDER BY relation_type"
-            ) {
-                let rows: Vec<String> = stmt.query_map([], |row| {
-                    Ok(format!(
-                        r#"{{"type":{},"point":{}}}"#,
-                        row.get::<_, i32>(0).unwrap_or(0),
-                        row.get::<_, i32>(1).unwrap_or(0),
-                    ))
-                }).unwrap().filter_map(|r| r.ok()).collect();
-                relation_groups_json = rows;
-            }
-
-            // Get race names for G1 race_instance_ids
-            // race_instance_id 100301 → race_id → text_data category=32
-        }
-    }
-
-    // 6. Build output
-    format!(
-        r#"{{"ok":true,"total_races":{},"win_count":{},"saddle_count":{},"win_saddles":[{}],"parent_saddles":[{}],"mdb_saddle_map":[{}],"relation_groups":[{}]}}"#,
-        total_races,
-        win_count,
-        saddle_count,
-        saddle_entries.join(","),
-        parent_saddles_json.join(","),
-        mdb_saddle_map_json.join(","),
-        relation_groups_json.join(","),
-    )
-}
-
-/// Returns current turn info + history from training log
-/// Data sources:
-///   - WorkSingleModeData: Month, Half, Turn
-///   - WorkSingleModeCharaData: all stats, motivation
-///   - SingleModeTurn (mdb): turn config (year, period, training set)
-///   - Training log snapshots
 unsafe fn read_turn_log() -> String {
     if API.is_null() {
         return r#"{"error":"api_null"}"#.to_string();
@@ -20663,293 +16037,6 @@ unsafe fn debug_storydata_inner() -> String {
 /// ★ v3.22.35: /debug/all — Aggregate summary + scenario + storydata + cmdinfo + rameninfo in one call
 /// IMPORTANT: Must acquire READ_MUTEX + sigsetjmp ONCE here, then call _inner functions directly
 /// to avoid deadlock (read_summary and debug_storydata both try to lock READ_MUTEX internally)
-unsafe fn debug_all() -> String {
-    let mut parts: Vec<String> = Vec::new();
-
-    // ★ Acquire READ_MUTEX once for the entire aggregation
-    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-
-    // ★ Set up sigsetjmp recovery once for the entire call
-    let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
-    if jmp_result != 0 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        SIGSEGV_COOLDOWN_UNTIL.store(now + 60, std::sync::atomic::Ordering::Relaxed);
-        SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
-        return r#"{"error":"sigsegv_recovered_in_debug_all"}"#.to_string();
-    }
-    SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
-
-    // 1. summary — call _inner directly (skip its own mutex + sigsetjmp)
-    let summary = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        read_summary_inner()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"summary_panic"}"#.to_string());
-    parts.push(format!(r#""summary":{}"#, summary));
-
-    // 2. scenario
-    let scenario = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        read_scenario_detail()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"scenario_panic"}"#.to_string());
-    parts.push(format!(r#""scenario":{}"#, scenario));
-
-    // 3. storydata — call _inner directly (skip its own mutex + sigsetjmp)
-    let storydata = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        debug_storydata_inner()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"storydata_panic"}"#.to_string());
-    parts.push(format!(r#""storydata":{}"#, storydata));
-
-    // 4. cmdinfo
-    let cmdinfo =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_cmdinfo() }))
-            .unwrap_or_else(|_| r#"{"error":"cmdinfo_panic"}"#.to_string());
-    parts.push(format!(r#""cmdinfo":{}"#, cmdinfo));
-
-    // 5. rameninfo
-    let rameninfo = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        read_ramen_info()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"rameninfo_panic"}"#.to_string());
-    parts.push(format!(r#""rameninfo":{}"#, rameninfo));
-
-    // ★ Clear recovery flag
-    SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
-
-    format!("{{{}}}", parts.join(","))
-}
-
-/// ★ v3.22.39: /debug/gauge — MINIMAL SAFE VERSION
-/// Only reads element class names + count. NO dict hex, NO GetGainCount.
-/// Will incrementally add features after confirming this doesn't crash.
-unsafe fn debug_gauge() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-    let wdm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkDataManager").as_ptr(),
-    );
-    if wdm_class.is_null() {
-        return r#"{"error":"no_wdm"}"#.to_string();
-    }
-    let wdm_inst = get_singleton(wdm_class);
-    if wdm_inst.is_null() {
-        return r#"{"error":"no_wdm_inst"}"#.to_string();
-    }
-    let sm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeData").as_ptr(),
-    );
-    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
-    if sm_obj.is_null() {
-        return r#"{"error":"no_sm"}"#.to_string();
-    }
-    let chara_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeCharaData").as_ptr(),
-    );
-    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
-    if chara_obj.is_null() {
-        return r#"{"error":"no_chara"}"#.to_string();
-    }
-
-    let scenario_id = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
-    if scenario_id != 14 {
-        return format!(r#"{{"error":"not_ramen","sid":{}}}"#, scenario_id);
-    }
-
-    let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
-    if ramen_sc_obj.is_null() {
-        return r#"{"error":"no_ramen_sc_obj"}"#.to_string();
-    }
-    let sc_class = get_class_from_object(ramen_sc_obj);
-    let ds_obj = call_getter_ref(sc_class, ramen_sc_obj, "get_DataSet");
-    if ds_obj.is_null() {
-        return r#"{"error":"no_ds"}"#.to_string();
-    }
-    let ds_class = get_class_from_object(ds_obj);
-
-    // Read CommandFeelingInfoArray
-    let cf_off = cached_find_field_offset(ds_class, "CommandFeelingInfoArray");
-    if cf_off < 0 {
-        return r#"{"error":"no_CommandFeelingInfoArray_field"}"#.to_string();
-    }
-    let list_obj = read_ptr_at(ds_obj, cf_off);
-    if list_obj.is_null() {
-        return r#"{"error":"list_null"}"#.to_string();
-    }
-    let lb = list_obj as *const u8;
-    let llen = std::ptr::read_unaligned::<usize>(lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-    if llen == 0 || llen > 100 {
-        return format!(r#"{{"error":"bad_len","len":{}}}"#, llen);
-    }
-
-    let mut elems: Vec<String> = Vec::new();
-    for i in 0..llen {
-        let ep = std::ptr::read_unaligned::<*mut c_void>(
-            lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
-        );
-        if ep.is_null() {
-            elems.push(format!(r#"{{"idx":{},"error":"null"}}"#, i));
-            continue;
-        }
-        // ★ MINIMAL: only read class name + check _gaugeGainCountDict pointer
-        let ep_class = get_class_from_object(ep);
-        let ep_class_name = get_class_name_from_pointer(ep_class);
-
-        // Read _gaugeGainCountDict pointer at offset 16 (only if TrainingFeelingEntity)
-        let dict_info = if ep_class_name == "TrainingFeelingEntity" {
-            let dict_ptr = read_ptr_at(ep, 16); // _gaugeGainCountDict at offset 16
-            if dict_ptr.is_null() {
-                "dict:null".to_string()
-            } else {
-                // Read dict _count field safely (Dictionary has count at a known offset)
-                // DON'T read hex — just report pointer value
-                format!("dict:ptr({:p})", dict_ptr)
-            }
-        } else {
-            format!("not_tfe({})", ep_class_name)
-        };
-
-        elems.push(format!(
-            r#"{{"idx":{},"class":"{}","dict_info":"{}"}}"#,
-            i, ep_class_name, dict_info
-        ));
-    }
-
-    format!(
-        r#"{{"version":"3.22.91","count":{},"elements":[{}]}}"#,
-        llen,
-        elems.join(",")
-    )
-}
-
-/// v3.22.39: /debug/gauge2 - Scan ALL DataSet array fields for element class names
-/// Purpose: find which array contains TrainingFeelingEntity
-unsafe fn debug_gauge2() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-    let wdm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkDataManager").as_ptr(),
-    );
-    if wdm_class.is_null() {
-        return r#"{"error":"no_wdm"}"#.to_string();
-    }
-    let wdm_inst = get_singleton(wdm_class);
-    if wdm_inst.is_null() {
-        return r#"{"error":"no_wdm_inst"}"#.to_string();
-    }
-    let sm_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeData").as_ptr(),
-    );
-    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
-    if sm_obj.is_null() {
-        return r#"{"error":"no_sm"}"#.to_string();
-    }
-    let chara_class = find_class(
-        image,
-        to_cstr("Gallop").as_ptr(),
-        to_cstr("WorkSingleModeCharaData").as_ptr(),
-    );
-    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
-    if chara_obj.is_null() {
-        return r#"{"error":"no_chara"}"#.to_string();
-    }
-    let scenario_id = call_getter_int(chara_class, chara_obj, "get_ScenarioId");
-    if scenario_id != 14 {
-        return format!(r#"{{"error":"not_ramen","sid":{}}}"#, scenario_id);
-    }
-    let ramen_sc_obj = try_get_scenario_obj(chara_class, chara_obj, 14);
-    if ramen_sc_obj.is_null() {
-        return r#"{"error":"no_ramen_sc_obj"}"#.to_string();
-    }
-    let sc_class = get_class_from_object(ramen_sc_obj);
-    let ds_obj = call_getter_ref(sc_class, ramen_sc_obj, "get_DataSet");
-    if ds_obj.is_null() {
-        return r#"{"error":"no_ds"}"#.to_string();
-    }
-    let ds_class = get_class_from_object(ds_obj);
-
-    let array_fields: &[(&str, i32)] = &[
-        ("CommandInfoArray", 16),
-        ("FeelingReduceTurnInfoArray", 32),
-        ("FeelingTurnInfoArray", 40),
-        ("FeelingInfoArray", 48),
-        ("CommandFeelingInfoArray", 96),
-        ("TrainingExecInfoArray", 104),
-        ("CheckPointInfoArray", 168),
-    ];
-
-    let mut results: Vec<String> = Vec::new();
-    for &(fname, foff) in array_fields {
-        let list_obj = read_ptr_at(ds_obj, foff);
-        if list_obj.is_null() {
-            results.push(format!(r#"{{"field":"{}","status":"null"}}"#, fname));
-            continue;
-        }
-        let lb = list_obj as *const u8;
-        let llen = std::ptr::read_unaligned::<usize>(lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
-        if llen > 1000 {
-            results.push(format!(
-                r#"{{"field":"{}","status":"bad_len","len":{}}}"#,
-                fname, llen
-            ));
-            continue;
-        }
-        let max_read = if llen < 3 { llen } else { 3 };
-        let mut classes: Vec<String> = Vec::new();
-        for i in 0..max_read {
-            let ep = std::ptr::read_unaligned::<*mut c_void>(
-                lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
-            );
-            if ep.is_null() {
-                classes.push("null".to_string());
-            } else {
-                let ep_class = get_class_from_object(ep);
-                classes.push(get_class_name_from_pointer(ep_class));
-            }
-        }
-        let sample_str = {
-            let mut quoted: Vec<String> = Vec::new();
-            for c in &classes {
-                quoted.push(format!("\"{}\"", c));
-            }
-            quoted.join(",")
-        };
-        results.push(format!(
-            r#"{{"field":"{}","count":{},"sample_classes":[{}]}}"#,
-            fname, llen, sample_str
-        ));
-    }
-
-    format!(
-        r#"{{"version":"3.22.91","arrays":[{}]}}"#,
-        results.join(",")
-    )
-}
-
-/// v3.22.40: /debug/paramsincdec - Read DataSet CommandInfoArray[0].ParamsIncDecInfoArray
-/// Purpose: find element class name inside ParamsIncDecInfoArray to locate gauge data
 unsafe fn debug_paramsincdec() -> String {
     if API.is_null() {
         return r#"{"error":"api_null"}"#.to_string();
@@ -21099,42 +16186,6 @@ unsafe fn debug_paramsincdec() -> String {
 
 /// 一键查找训练种子：WorkDataManager → WorkSingleModeData → _fixedTurnCharaSeed
 /// 自动完成 /singletons + read_mem(offset 96) + read_mem(offset 408) 的手动3步流程
-unsafe fn debug_training_seed() -> String {
-    if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
-    }
-    let image = get_image();
-    if image.is_null() {
-        return r#"{"error":"image_null"}"#.to_string();
-    }
-    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
-    if wdm_cls.is_null() {
-        return r#"{"error":"wdm_class_not_found"}"#.to_string();
-    }
-    let wdm_inst = get_singleton(wdm_cls);
-    if wdm_inst.is_null() {
-        return r#"{"error":"wdm_null","hint":"game_not_loaded"}"#.to_string();
-    }
-    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
-    if sm_ptr == 0 {
-        return r#"{"error":"single_mode_null","hint":"not_in_training_scene"}"#.to_string();
-    }
-    let value = read_obscured_int_at(sm_ptr as *const c_void, 408);
-    format!(
-        r#"{{"ok":true,"field":"WorkSingleModeData._fixedTurnCharaSeed","offset":408,"type":"CodeStage.AntiCheat.ObscuredTypes.ObscuredInt","fixed_turn_chara_seed":{},"is_complete_prng_state":false}}"#,
-        value
-    )
-}
-// ★ v3.22.98: ExecTraining hook — intercept before training to read seed + predict
-static mut EXEC_TRAINING_HOOK_INSTALLED: bool = false;
-static mut ORIG_EXEC_TRAINING_PROLOGUE: [u8; 16] = [0; 16];
-static mut EXEC_TRAINING_ADDR: usize = 0;
-// ExecTraining hook is retained only to preserve existing hook behavior; no RNG observations are captured.
-static mut LAST_FAILURE_RATE: i32 = -1;
-static mut FAILURE_RATE_HOOK_INSTALLED: bool = false;
-static mut ORIG_FAILURE_RATE_PROLOGUE: [u8; 16] = [0; 16];
-static mut FAILURE_RATE_ADDR: usize = 0;
-
 extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let trampoline = interceptor_get_trampoline(exec_training_hook as usize);
@@ -21147,86 +16198,6 @@ extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
         original(param1, param2);
     }));
 }
-unsafe fn read_training_context_inner() -> (i32, i32) {
-    if API.is_null() {
-        return (-1, -1);
-    }
-    let image = get_image();
-    if image.is_null() {
-        return (-1, -1);
-    }
-    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
-    if wdm_cls.is_null() {
-        return (-1, -1);
-    }
-    let wdm_inst = get_singleton(wdm_cls);
-    if wdm_inst.is_null() {
-        return (-1, -1);
-    }
-    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
-    if sm_ptr == 0 {
-        return (-1, -1);
-    }
-    // WorkSingleModeData._totalTurnNum is an ObscuredInt, not a plain i32.
-    let turn = read_obscured_int_at(sm_ptr as *const c_void, 68);
-    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
-    if sm_class.is_null() {
-        return (turn, -1);
-    }
-    let chara = call_getter_on_instance(sm_class, sm_ptr as *const c_void, "get_Character");
-    let scenario_id = if chara.is_null() {
-        -1
-    } else {
-        read_obscured_int_at(chara, 568)
-    };
-    (turn, scenario_id)
-}
-
-// Read motivation (干劲) from character data, same path as read_seed_inner
-// Returns 1-5 (Worst/Bad/Normal/Good/Best), -1 on error
-unsafe fn read_motivation_inner() -> i32 {
-    if API.is_null() {
-        return -1;
-    }
-    let image = get_image();
-    if image.is_null() {
-        return -1;
-    }
-
-    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
-    if wdm_cls.is_null() {
-        return -1;
-    }
-    let wdm_inst = get_singleton(wdm_cls);
-    if wdm_inst.is_null() {
-        return -1;
-    }
-
-    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
-    if sm_ptr == 0 {
-        return -1;
-    }
-
-    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
-    if sm_class.is_null() {
-        return -1;
-    }
-
-    let chara_obj = call_getter_on_instance(sm_class, sm_ptr as *const c_void, "get_Character");
-    if chara_obj.is_null() {
-        return -1;
-    }
-
-    let chara_class = find_class_by_short_name(image, "WorkSingleModeCharaData");
-    if chara_class.is_null() {
-        return -1;
-    }
-
-    call_getter_int(chara_class, chara_obj, "get_Motivation")
-}
-
-// Hook SingleModeTrainingFailureRateService.GetTrainingFailureRateIgnoreCharaEffect
-// Captures the last failure rate (0-10000 = 0%-100%) for use in training log
 extern "C" fn failure_rate_hook(param1: *mut c_void, param2: *mut c_void) -> i32 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let trampoline = interceptor_get_trampoline(failure_rate_hook as usize);
@@ -22334,1426 +17305,497 @@ fn search_methods_page() -> String {
 /// v3.22.89: /il2cpp/search_methods?keyword=X — 跨类搜索方法名
 /// 遍历所有IL2CPP类的方法表，按方法名关键词过滤，返回匹配的类名+方法名
 /// 用于定位やる気系数等散落在各类中的计算方法
-unsafe fn il2cpp_search_methods(keyword: &str, letter: &str) -> String {
-    if keyword.is_empty() {
-        return r#"{"error":"missing ?keyword= parameter"}"#.to_string();
-    }
-    let image = get_image();
-    if image.is_null() {
-        return r#"{"error":"image_null"}"#.to_string();
-    }
 
-    // 解析IL2CPP API函数指针
-    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
-    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
-    if get_count_fn.is_null() || get_class_fn.is_null() {
-        return r#"{"error":"class_enum_api_not_found"}"#.to_string();
-    }
-    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
-    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
 
-    // 方法遍历API
-    let get_methods_fn: Option<
-        unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void,
-    > = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_param_count_fn: Option<unsafe extern "C" fn(*const c_void) -> u32> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_param_count");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_return_type_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_return_type");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_flags_fn: Option<unsafe extern "C" fn(*const c_void, *mut u32) -> u32> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_flags");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
+// ===== slim: restored protected infrastructure (from HEAD) =====
+static PUSH_INTERVAL_SECS: u64 = 1;
 
-    if get_methods_fn.is_none() || method_get_name_fn.is_none() {
-        return r#"{"error":"method_enum_api_not_found"}"#.to_string();
-    }
-
-    // 类名/命名空间读取
-    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
-    let get_namespace_fn = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
-
-    let total = get_count(image);
-    let search_lower = keyword.to_lowercase();
-    let mut matched_methods: Vec<String> = Vec::new();
-    let mut classes_with_hits: i32 = 0;
-    let max_results = 200; // 限制最多200个方法结果
-
-    for i in 0..total {
-        let cls = get_class(image, i);
-        if cls.is_null() {
-            continue;
-        }
-
-        // 读取类名
-        let class_name = if !get_name_fn.is_null() {
-            let name_fn: FnClassGetName = std::mem::transmute(get_name_fn);
-            let cstr = name_fn(cls);
-            if cstr.is_null() {
-                continue;
-            }
-            std::ffi::CStr::from_ptr(cstr)
-                .to_string_lossy()
-                .into_owned()
-        } else {
-            continue;
-        };
-
-        // 读取命名空间
-        let namespace = if !get_namespace_fn.is_null() {
-            let ns_fn: FnClassGetName = std::mem::transmute(get_namespace_fn);
-            let cstr = ns_fn(cls);
-            if cstr.is_null() {
-                String::new()
-            } else {
-                std::ffi::CStr::from_ptr(cstr)
-                    .to_string_lossy()
-                    .into_owned()
-            }
-        } else {
-            String::new()
-        };
-
-        // 按类名首字母过滤（letter参数，A-Z分组下载对策）
-        if !letter.is_empty() {
-            let first = class_name
-                .chars()
-                .next()
-                .unwrap_or('_')
-                .to_ascii_uppercase();
-            let target = letter.chars().next().unwrap_or('_').to_ascii_uppercase();
-            if first != target {
-                continue;
-            }
-        }
-
-        // 遍历该类的所有方法
-        let mut iter: *mut c_void = ptr::null_mut();
-        let mut class_hit = false;
-        loop {
-            let method_info = get_methods_fn.unwrap()(cls, &mut iter);
-            if method_info.is_null() {
-                break;
-            }
-
-            let method_name = {
-                let name_ptr = method_get_name_fn.unwrap()(method_info);
-                if name_ptr.is_null() {
-                    "(null)".to_string()
-                } else {
-                    let cstr = CStr::from_ptr(name_ptr);
-                    cstr.to_string_lossy().into_owned()
-                }
-            };
-
-            // 跳过构造函数
-            if method_name.starts_with('.') {
-                continue;
-            }
-
-            // 关键词过滤（不区分大小写）
-            if !method_name.to_lowercase().contains(&search_lower) {
-                continue;
-            }
-
-            // 补充信息：参数数、返回类型、是否静态
-            let param_count = method_get_param_count_fn
-                .map(|f| f(method_info))
-                .unwrap_or(0);
-            let return_type_str = method_get_return_type_fn
-                .map(|f| {
-                    let rt = f(method_info);
-                    if rt.is_null() {
-                        "void".to_string()
-                    } else {
-                        let te = il2cpp_type_get_type_enum(rt);
-                        type_enum_to_name(te)
-                    }
-                })
-                .unwrap_or_else(|| "?".to_string());
-            let is_static = method_get_flags_fn
-                .map(|f| {
-                    let mut iflags: u32 = 0;
-                    let flags = f(method_info, &mut iflags);
-                    (flags & 0x0010) != 0
-                })
-                .unwrap_or(false);
-
-            matched_methods.push(format!(
-                r#"{{"class":"{}","ns":"{}","method":"{}","params":{},"return_type":"{}","static":{}}}"#,
-                class_name, namespace, json_escape(&method_name),
-                param_count, return_type_str, is_static
-            ));
-            class_hit = true;
-
-            if matched_methods.len() >= max_results {
-                break;
-            }
-        }
-        if class_hit {
-            classes_with_hits += 1;
-        }
-        if matched_methods.len() >= max_results {
-            break;
-        }
-    }
-
-    format!(
-        r#"{{"ok":true,"total_classes":{},"keyword":"{}","classes_with_hits":{},"method_hits":{},"methods":[{}]}}"#,
-        total,
-        json_escape(keyword),
-        classes_with_hits,
-        matched_methods.len(),
-        matched_methods.join(",")
-    )
+// ★ Config (v3.11.0): runtime config updated via POST /config from App
+// No file editing needed — App settings page sends config to plugin HTTP endpoint
+#[derive(Clone)]
+struct PluginConfig {
+    push_host: String,       // default: "127.0.0.1"
+    push_port: u16,          // default: 18766
+    http_port: u16,          // default: 18765
+    push_interval_secs: u64, // default: 1
+    push_enabled: bool,      // default: true
+    http_enabled: bool,      // default: true
 }
 
-unsafe fn il2cpp_search_float(value_str: &str) -> String {
-    let value: f64 = match value_str.parse::<f64>() {
-        Ok(v) => v,
-        Err(_) => {
-            return format!(
-                r#"{{"error":"invalid_float","input":"{}"}}"#,
-                json_escape(value_str)
-            )
+impl PluginConfig {
+    fn defaults() -> Self {
+        Self {
+            push_host: "127.0.0.1".to_string(),
+            push_port: 18766,
+            http_port: 18765,
+            push_interval_secs: 5,
+            push_enabled: true,
+            http_enabled: true,
         }
-    };
+    }
 
-    // 获取umamusume.dll基址和大小
-    // 通过il2cpp_get_assembly_image获取的image指针，再通过dlsym找到模块基址
-    // 更可靠的方式：扫描/proc/self/maps找到umamusume.dll
-    let mut base_addr: usize = 0;
-    let mut text_size: usize = 0;
+    fn push_addr(&self) -> String {
+        format!("{}:{}", self.push_host, self.push_port)
+    }
 
-    // 读取/proc/self/maps找到umamusume.dll的内存映射
-    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-        for line in maps.lines() {
-            if line.contains("umamusume") && line.contains("r-xp") {
-                // 格式: start-end r-xp ... path
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.is_empty() {
-                    continue;
-                }
-                let addr_parts: Vec<&str> = parts[0].split('-').collect();
-                if addr_parts.len() != 2 {
-                    continue;
-                }
-                if let Ok(start) = usize::from_str_radix(addr_parts[0], 16) {
-                    if let Ok(end) = usize::from_str_radix(addr_parts[1], 16) {
-                        // 取第一个可执行段作为代码段
-                        if base_addr == 0 {
-                            base_addr = start;
-                            text_size = end - start;
+    // Parse JSON config from POST /config body (simple manual parse, no serde)
+    fn from_json(data: &str) -> Option<Self> {
+        let mut cfg = Self::defaults();
+        let mut changed = false;
+        // Extract key-value pairs from JSON
+        for line in data.lines() {
+            let l = line.trim().trim_end_matches(',');
+            if l.is_empty() || l == "{" || l == "}" {
+                continue;
+            }
+            if let Some((k, v)) = l.split_once(':') {
+                let k = k.trim().trim_matches('"');
+                let v = v.trim().trim_matches('"');
+                match k {
+                    "push_host" => {
+                        cfg.push_host = v.to_string();
+                        changed = true;
+                    }
+                    "push_port" => {
+                        if let Ok(n) = v.parse::<u16>() {
+                            cfg.push_port = n;
+                            changed = true;
                         }
                     }
-                }
-            }
-        }
-    }
-
-    if base_addr == 0 || text_size == 0 {
-        return r#"{"error":"cannot_find_umamusume_text_section"}"#.to_string();
-    }
-
-    // 限制搜索范围，避免越界（最大32MB代码段）
-    if text_size > 32 * 1024 * 1024 {
-        text_size = 32 * 1024 * 1024;
-    }
-
-    let base_ptr = base_addr as *const u8;
-    let f32_bytes = value as f32; // 同时搜索f32和f64编码
-    let f32_bits = f32_bytes.to_bits().to_le_bytes();
-    let f64_bits = value.to_bits().to_le_bytes();
-
-    let mut f32_matches = Vec::new();
-    let mut f64_matches = Vec::new();
-
-    // 搜索f32（4字节对齐）
-    for off in (0..text_size.saturating_sub(4)).step_by(4) {
-        let ptr = base_ptr.add(off);
-        // 安全检查
-        if (ptr as usize) < base_addr || (ptr as usize) >= base_addr + text_size {
-            continue;
-        }
-        let b0 = std::ptr::read_unaligned::<u8>(ptr);
-        let b1 = std::ptr::read_unaligned::<u8>(ptr.add(1));
-        let b2 = std::ptr::read_unaligned::<u8>(ptr.add(2));
-        let b3 = std::ptr::read_unaligned::<u8>(ptr.add(3));
-        if b0 == f32_bits[0] && b1 == f32_bits[1] && b2 == f32_bits[2] && b3 == f32_bits[3] {
-            f32_matches.push(off);
-        }
-    }
-
-    // 搜索f64（8字节对齐）
-    for off in (0..text_size.saturating_sub(8)).step_by(4) {
-        let ptr = base_ptr.add(off);
-        if (ptr as usize) < base_addr || (ptr as usize) >= base_addr + text_size {
-            continue;
-        }
-        let b0 = std::ptr::read_unaligned::<u8>(ptr);
-        let b1 = std::ptr::read_unaligned::<u8>(ptr.add(1));
-        let b2 = std::ptr::read_unaligned::<u8>(ptr.add(2));
-        let b3 = std::ptr::read_unaligned::<u8>(ptr.add(3));
-        let b4 = std::ptr::read_unaligned::<u8>(ptr.add(4));
-        let b5 = std::ptr::read_unaligned::<u8>(ptr.add(5));
-        let b6 = std::ptr::read_unaligned::<u8>(ptr.add(6));
-        let b7 = std::ptr::read_unaligned::<u8>(ptr.add(7));
-        if b0 == f64_bits[0]
-            && b1 == f64_bits[1]
-            && b2 == f64_bits[2]
-            && b3 == f64_bits[3]
-            && b4 == f64_bits[4]
-            && b5 == f64_bits[5]
-            && b6 == f64_bits[6]
-            && b7 == f64_bits[7]
-        {
-            f64_matches.push(off);
-        }
-    }
-
-    // 限制输出数量
-    let max_results = 50;
-    f32_matches.truncate(max_results);
-    f64_matches.truncate(max_results);
-
-    let f32_json: Vec<String> = f32_matches
-        .iter()
-        .map(|&off| {
-            format!(
-                r#"{{"offset":"0x{:x}","abs_addr":"0x{:x}"}}"#,
-                off,
-                base_addr + off
-            )
-        })
-        .collect();
-    let f64_json: Vec<String> = f64_matches
-        .iter()
-        .map(|&off| {
-            format!(
-                r#"{{"offset":"0x{:x}","abs_addr":"0x{:x}"}}"#,
-                off,
-                base_addr + off
-            )
-        })
-        .collect();
-
-    format!(
-        r#"{{"ok":true,"search_value":{},"f32_encoded":"0x{:08x}","f64_encoded":"0x{:016x}","base_addr":"0x{:x}","text_size":{},"f32_hits":{},"f64_hits":{},"f32_matches":[{}],"f64_matches":[{}]}}"#,
-        value,
-        (value as f32).to_bits(),
-        value.to_bits(),
-        base_addr,
-        text_size,
-        f32_json.len(),
-        f64_json.len(),
-        f32_json.join(","),
-        f64_json.join(",")
-    )
-}
-
-/// ★ v3.22.89: /il2cpp/search_int?values=800,900,1000,1100,1200
-/// 在umamusume所有内存段（代码+只读数据+数据）中搜索整数千分比
-/// 心情系数极可能是整数千分比（1200=1.2倍），硬编码在数据表或指令立即数中
-/// 搜索所有umamusume段（含r-- data段，不只r-x代码段）
-unsafe fn il2cpp_search_int(values_str: &str) -> String {
-    // 解析逗号分隔的整数列表
-    let values: Vec<u32> = values_str
-        .split(',')
-        .filter_map(|s| s.trim().parse::<u32>().ok())
-        .collect();
-    if values.is_empty() {
-        return format!(
-            r#"{{"error":"no_valid_integers","input":"{}"}}"#,
-            json_escape(values_str)
-        );
-    }
-    if values.len() > 20 {
-        return r#"{"error":"too_many_values","max":20}"#.to_string();
-    }
-
-    let mut total_segments = 0usize;
-    let mut total_scanned = 0usize;
-    let mut all_matches: Vec<String> = Vec::new();
-
-    // 读取/proc/self/maps，搜索所有umamusume段
-    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-        for line in maps.lines() {
-            if !line.contains("umamusume") {
-                continue;
-            }
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() < 5 {
-                continue;
-            }
-            let addr_parts: Vec<&str> = parts[0].split('-').collect();
-            if addr_parts.len() != 2 {
-                continue;
-            }
-            let start = match usize::from_str_radix(addr_parts[0], 16) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let end = match usize::from_str_radix(addr_parts[1], 16) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let size = end - start;
-            let perms = parts[1];
-            let mapping = parts.last().unwrap_or(&"");
-
-            if size == 0 {
-                continue;
-            }
-            total_segments += 1;
-            total_scanned += size;
-
-            // 限制单段最大扫描（避免超大段超时）
-            let scan_size = if size > 256 * 1024 * 1024 {
-                256 * 1024 * 1024
-            } else {
-                size
-            };
-            let base_ptr = start as *const u8;
-            let mut matches_in_segment: Vec<String> = Vec::new();
-
-            for &val in &values {
-                if val == 0 {
-                    continue;
-                } // 跳过0，避免过多匹配
-                let le_bytes = val.to_le_bytes();
-                let mut found_in_seg = 0usize;
-
-                for off in (0..scan_size.saturating_sub(4)).step_by(4) {
-                    let ptr = unsafe { base_ptr.add(off) };
-                    let addr = start + off;
-                    if addr >= start + scan_size {
-                        break;
-                    }
-                    // 逐字节比对
-                    let b0 = unsafe { std::ptr::read_unaligned::<u8>(ptr) };
-                    if b0 != le_bytes[0] {
-                        continue;
-                    }
-                    let b1 = unsafe { std::ptr::read_unaligned::<u8>(ptr.add(1)) };
-                    if b1 != le_bytes[1] {
-                        continue;
-                    }
-                    let b2 = unsafe { std::ptr::read_unaligned::<u8>(ptr.add(2)) };
-                    if b2 != le_bytes[2] {
-                        continue;
-                    }
-                    let b3 = unsafe { std::ptr::read_unaligned::<u8>(ptr.add(3)) };
-                    if b3 != le_bytes[3] {
-                        continue;
-                    }
-
-                    found_in_seg += 1;
-                    if found_in_seg > 100 {
-                        break;
-                    } // 每段每值最多100个匹配
-                    matches_in_segment.push(format!(
-                        r#"{{"value":{},"addr":"0x{:x}","offset":"0x{:x}"}}"#,
-                        val, addr, off
-                    ));
-                }
-            }
-
-            if !matches_in_segment.is_empty() {
-                all_matches.push(format!(
-                    r#"{{"seg_start":"0x{:x}","seg_end":"0x{:x}","size":{},"perms":"{}","mapping":"{}","hits":{},"matches":[{}]}}"#,
-                    start, end, size, perms, mapping,
-                    matches_in_segment.len(),
-                    matches_in_segment.join(",")
-                ));
-            }
-        }
-    }
-
-    if total_segments == 0 {
-        return r#"{"error":"cannot_find_umamusume_mapping"}"#.to_string();
-    }
-
-    let values_json: Vec<String> = values.iter().map(|v| v.to_string()).collect();
-    format!(
-        r#"{{"ok":true,"search_values":[{}],"total_segments":{},"total_scanned":{},"segments_with_hits":{},"segments":[{}]}}"#,
-        values_json.join(","),
-        total_segments,
-        total_scanned,
-        all_matches.len(),
-        all_matches.join(",")
-    )
-}
-
-/// ★ v3.22.91: /il2cpp/read_mem?addr=0x...&size=4096 (safe /proc/self/mem)
-/// 读取任意映射内存地址的原始字节，返回hex dump+ASCII
-/// 安全措施：验证地址在/proc/self/maps映射区域内，限制最大65536字节
-fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
-    let raw_addr = match usize::from_str_radix(
-        addr_str.trim_start_matches("0x").trim_start_matches("0X"),
-        16,
-    ) {
-        Ok(a) => a,
-        Err(_) => {
-            return format!(
-                r#"{{"error":"invalid_addr","input":"{}"}}"#,
-                json_escape(addr_str)
-            )
-        }
-    };
-    let size = size_str.parse::<usize>().unwrap_or(4096);
-    if size == 0 || size > 65536 {
-        return format!(r#"{{"error":"invalid_size","size":{},"max":65536}}"#, size);
-    }
-    // ★ v3.22.91: 自动检测偏移量模式。如果addr < 0x1000000，当作SO内偏移
-    let mut addr = raw_addr;
-    if raw_addr < 0x1000000 {
-        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-            for line in maps.lines() {
-                if line.contains("umamusume") && line.contains("r-xp") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if !parts.is_empty() {
-                        let ap: Vec<&str> = parts[0].split('-').collect();
-                        if ap.len() == 2 {
-                            if let Ok(start) = usize::from_str_radix(ap[0], 16) {
-                                addr = start + raw_addr;
-                                break;
-                            }
+                    "http_port" => {
+                        if let Ok(n) = v.parse::<u16>() {
+                            cfg.http_port = n;
+                            changed = true;
                         }
                     }
+                    "push_interval_secs" => {
+                        if let Ok(n) = v.parse::<u64>() {
+                            cfg.push_interval_secs = n.max(1);
+                            changed = true;
+                        }
+                    }
+                    "push_enabled" => {
+                        cfg.push_enabled = v == "true";
+                        changed = true;
+                    }
+                    "http_enabled" => {
+                        cfg.http_enabled = v == "true";
+                        changed = true;
+                    }
+                    _ => {}
                 }
             }
         }
-    }
-    // 验证地址范围在映射区域内
-    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-        let mut in_mapped = false;
-        let mut seg_name = "";
-        for line in maps.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() < 5 {
-                continue;
-            }
-            let ap: Vec<&str> = parts[0].split('-').collect();
-            if ap.len() != 2 {
-                continue;
-            }
-            let seg_start = match usize::from_str_radix(ap[0], 16) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let seg_end = match usize::from_str_radix(ap[1], 16) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if addr >= seg_start && (addr + size) <= seg_end {
-                in_mapped = true;
-                seg_name = parts.last().unwrap_or(&"");
-                break;
-            }
+        if changed {
+            Some(cfg)
+        } else {
+            None
         }
-        if !in_mapped {
-            return format!(
-                r#"{{"error":"addr_not_mapped","addr":"0x{:x}","size":{}}}"#,
-                addr, size
-            );
-        }
-        let _ = seg_name;
-    } else {
-        return r#"{"error":"cannot_read_maps"}"#.to_string();
     }
 
-    // v3.22.91: 使用pipe+write系统调用安全读取内存
-    // 内核copy_from_user在遇到不可读页时返回EFAULT，不会SIGSEGV
-    let mut pipe_fds = [-1i32; 2];
-    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
-        return r#"{"error":"pipe_failed"}"#.to_string();
+    fn to_json(&self) -> String {
+        format!(
+            r#"{{"push_host":"{}","push_port":{},"http_port":{},"push_interval_secs":{},"push_enabled":{},"http_enabled":{}}}"#,
+            self.push_host,
+            self.push_port,
+            self.http_port,
+            self.push_interval_secs,
+            self.push_enabled,
+            self.http_enabled
+        )
     }
-    let mut buf = vec![0u8; size];
-    let mut total_read = 0usize;
-    let page_size = 4096;
-    for chunk_start in (0..size).step_by(page_size) {
-        let chunk_len = if chunk_start + page_size <= size {
-            page_size
-        } else {
-            size - chunk_start
-        };
-        let src = (addr + chunk_start) as *const libc::c_void;
-        let ret = unsafe { libc::write(pipe_fds[1], src, chunk_len) };
-        if ret > 0 {
-            let n = ret as usize;
-            let mut got = 0usize;
-            while got < n {
-                let r = unsafe {
-                    libc::read(
-                        pipe_fds[0],
-                        buf[total_read..].as_mut_ptr() as *mut libc::c_void,
-                        n - got,
-                    )
-                };
-                if r <= 0 {
-                    break;
-                }
-                got += r as usize;
-            }
-            total_read += n;
+}
+
+static mut PLUGIN_CONFIG: Option<PluginConfig> = None;
+
+// ★ Text edit buffers for GUI config (v3.12.0): persist across frames for egui immediate mode
+static mut GUI_HOST_BUF: [u8; 64] = [0u8; 64]; // push_host input buffer
+static mut GUI_HOST_BUF_LEN: i32 = 0;
+static mut GUI_PORT_BUF: [u8; 8] = [0u8; 8]; // push_port input buffer
+static mut GUI_PORT_BUF_LEN: i32 = 0;
+
+const CRASH_LOG_PATH: &str = "/data/data/jp.pokemon.pokeuma/files/uma_predict.log";
+
+// ★ v3.22.35: SIGSEGV recovery for push thread
+// sigsetjmp buffer: 200 bytes is enough for jmp_buf on aarch64 (typically 24 x 8 = 192 bytes)
+static mut SIGSEGV_JMP_BUF: [u8; 200] = [0u8; 200];
+
+const IL2CPP_SUPPORT_CARD_LIMIT_OFF: usize = 0x18; // SingleModeEquipSupportCard.limitBreakCount (IL2CPP /fields/ offset=24)
+
+const IL2CPP_SUPPORT_CARD_POSITION_OFF: usize = 0x10; // SingleModeEquipSupportCard.position (IL2CPP /fields/ offset=16)
+
+const IL2CPP_UNBOX_SECOND_FIELD: usize = 0x14; // Unbox() result: second field offset
+
+const RAMEN_CMD_COMMAND_TYPE_OFF: usize = 0x10; // CommandType (ObscuredInt inline, 20 bytes)
+
+const NEXT_RACE_OUTING_FACTOR: f64 = 0.3; // 下回合比赛时外出价值折扣(体力溢出) [用户规则]
+
+// Game CommandId constants (IL2CPP method identifiers)
+// 2026-07-17 修正: 102=力量(Power), 105=耐力(Stamina) — 游戏内ID与UI顺序速耐力根智相反
+// 证据: support_card_data 名卡 command_id — 小海湾SSR 30016=105, 麦昆SSR 30022/30139=105,
+// 小栗帽SSR 30024=102, 北黑SSR 30028=101, 诗歌剧SSR 30030=103
+// Ramen(剧本14)指令 601-605 经 MDB single_mode_training.base_command_id 实证: 601→101速度, 602→105耐力, 603→102力量, 604→103根性, 605→106智力
+
+const IL2CPP_LIST_ARRAY_OFF: usize = 0x10; // Il2CppList._items array pointer (offset=0x10)
+
+/// Compute current evaluation score from five stats (per-stat lookup then sum)
+/// 評価点 = STAT_EVAL_SCORE[speed] + STAT_EVAL_SCORE[stamina] + ... + STAT_EVAL_SCORE[wiz]
+
+const TEXT_DATA_CATEGORY_RACE_NAME: i32 = 32; // text_data.category=32: race name
+
+const TEXT_DATA_CATEGORY_CHARA_NAME: i32 = 6; // text_data.category=6: character name
+
+unsafe fn find_class_global(namespace: &str, class_name: &str) -> *mut c_void {
+    let domain_get = resolve_il2cpp_symbol("il2cpp_domain_get");
+    let domain_get_assemblies = resolve_il2cpp_symbol("il2cpp_domain_get_assemblies");
+    let assembly_get_image = resolve_il2cpp_symbol("il2cpp_assembly_get_image");
+    if domain_get.is_null()
+        || domain_get_assemblies.is_null()
+        || assembly_get_image.is_null()
+    {
+        return ptr::null_mut();
+    }
+
+    let get_domain: FnDomainGet = std::mem::transmute(domain_get);
+    let get_assemblies: FnDomainGetAssemblies =
+        std::mem::transmute(domain_get_assemblies);
+    let get_image: FnAssemblyGetImage = std::mem::transmute(assembly_get_image);
+    let domain = get_domain();
+    if domain.is_null() {
+        return ptr::null_mut();
+    }
+
+    let mut count = 0usize;
+    let assemblies = get_assemblies(domain, &mut count);
+    if assemblies.is_null() || count == 0 || count > 4096 {
+        return ptr::null_mut();
+    }
+
+    let namespace_c = to_cstr(namespace);
+    let class_name_c = to_cstr(class_name);
+    for index in 0..count {
+        let assembly = *assemblies.add(index);
+        if assembly.is_null() {
+            continue;
         }
-        // ret <= 0: page unreadable, skip (leave as 0x00)
+        let image = get_image(assembly);
+        if image.is_null() {
+            continue;
+        }
+        let class = find_class(image, namespace_c.as_ptr(), class_name_c.as_ptr());
+        if !class.is_null() {
+            return class;
+        }
     }
+    ptr::null_mut()
+}
+
+/// ★ Get class name directly from an Il2CppClass pointer (no iteration needed)
+
+unsafe fn call_getter_int_with_arg(
+    class: *mut c_void,
+    instance: *const c_void,
+    method_name: &str,
+    int_arg: i32,
+) -> i32 {
+    if class.is_null() || instance.is_null() {
+        return -1;
+    }
+    let get_method_ptr = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+    let invoke_ptr = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+    if get_method_ptr.is_null() || invoke_ptr.is_null() {
+        return -1;
+    }
+    let get_method: FnClassGetMethodFromName = std::mem::transmute(get_method_ptr);
+    let invoke: FnRuntimeInvoke = std::mem::transmute(invoke_ptr);
+    let method_info = get_method(class, to_cstr(method_name).as_ptr(), 1);
+    if method_info.is_null() {
+        ura_log(4, &format!("call_int_with_arg: '{}' not found", method_name));
+        return -1;
+    }
+
+    // il2cpp_runtime_invoke expects argv entries to point to unboxed value data.
+    let mut arg = int_arg;
+    let mut args = [&mut arg as *mut i32 as *mut c_void];
+    let mut exc: *mut c_void = ptr::null_mut();
+    let result = invoke(
+        method_info,
+        instance as *mut c_void,
+        args.as_mut_ptr(),
+        &mut exc,
+    );
+    if !exc.is_null() || result.is_null() {
+        return -1;
+    }
+    std::ptr::read_unaligned::<i32>((result as *const u8).add(16) as *const i32)
+}
+
+
+/// ★ ObscuredInt getter: The C# property returns ObscuredInt struct,
+/// but il2cpp_runtime_invoke boxes it. We need to call the implicit
+/// conversion operator to get a plain int.
+/// ObscuredInt has an implicit operator that converts to int.
+/// Alternative: ObscuredInt struct has fields we can read directly.
+/// ObscuredInt layout (from dump.cs struct, 0x20 bytes on 64-bit):
+///   offset 0x10: int currentValue (the decrypted value if no crypto)
+///   offset 0x14: int fakeValue
+///   offset 0x18: int fakeValueActive  
+///   offset 0x1C: byte cryptoKey
+/// Actually, the getter method get_SkillPoint() returns ObscuredInt,
+/// but the C# property SkillPoint has type ObscuredInt.
+/// When il2cpp_runtime_invoke calls it, the result is boxed ObscuredInt.
+/// We need to read the ObscuredInt struct fields from the boxed result.
+///
+/// From dump.cs line 1166804:
+/// public struct ObscuredInt : IFormattable, IEquatable`1, IComparable`1
+/// It has: implicit operator int, explicit operator int
+/// The boxed result will have the ObscuredInt data starting at offset 0x10
+///
+/// Looking at ObscuredInt implementation (Anti-Cheat Toolkit):
+/// struct ObscuredInt {
+///     int currentValue;   // offset 0x10 in boxed form (after header)
+///     int fakeValue;      // offset 0x14
+///     int fakeValueActive; // offset 0x18
+///     byte cryptoKey;     // offset 0x1C
+/// }
+/// currentValue = encrypted_value ^ cryptoKey
+/// Decrypted = currentValue ^ cryptoKey
+///
+/// BUT: When we call get_SkillPoint() via il2cpp_runtime_invoke,
+/// the return type is ObscuredInt (value type), so it gets boxed.
+/// We read the boxed ObscuredInt fields and decrypt manually.
+///
+/// HOWEVER: There's a simpler approach! The C# property wrapper
+/// actually calls the internal get method which returns ObscuredInt.
+/// We can try calling the implicit conversion operator instead.
+///
+/// Simplest approach: Read ObscuredInt fields from boxed result and decrypt.
+
+fn hex_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len() / 2);
+    let v = |c: u8| -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => 0,
+        }
+    };
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push((v(b[i]) << 4) | v(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn safe_hex(s: &str) -> Option<Vec<u8>> {
+    if s.is_empty() || s.len() > 128 || s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i+2], 16).ok()).collect()
+}
+
+unsafe fn debug_hex(addr: *const u8, len: usize) -> String {
+    if addr.is_null() || !is_readable_range(addr as usize, len) {
+        return String::new();
+    }
+    let mut result = String::with_capacity(len * 2);
+    for index in 0..len {
+        let value = std::ptr::read_unaligned(addr.add(index));
+        result.push_str(&format!("{:02x}", value));
+    }
+    result
+}
+
+/// 诊断 IL2CPP 集合（可能是 Array 或 List<T>）
+
+fn clear_predict_log() {
+    PREDICT_STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+    LAST_STEP_LEN.store(0, std::sync::atomic::Ordering::Relaxed);
+    let path1 = b"/data/data/jp.pokemon.pokeuma/files/uma_predict.log\0";
+    let path2 = b"/data/local/tmp/uma_predict.log\0";
     unsafe {
-        libc::close(pipe_fds[0]);
-        libc::close(pipe_fds[1]);
-    }
-    if total_read == 0 {
-        return format!(
-            r#"{{"error":"read_failed","addr":"0x{:x}","size":{},"bytes_read":0}}"#,
-            addr, size
-        );
-    }
-    let mut hex_lines: Vec<String> = Vec::new();
-    for off in (0..total_read).step_by(16) {
-        let remaining = total_read - off;
-        let line_size = if remaining >= 16 { 16 } else { remaining };
-        let mut hex = String::new();
-        let mut ascii = String::new();
-        for i in 0..line_size {
-            let b = buf[off + i];
-            hex.push_str(&format!("{:02x} ", b));
-            ascii.push(if b >= 0x20 && b < 0x7f {
-                b as char
-            } else {
-                '.'
-            });
+        let fd = sys_open(path1.as_ptr() as *const i8, 1 | 64 | 512, 0o644);
+        if fd >= 0 {
+            sys_close(fd);
         }
-        for _ in line_size..16 {
-            hex.push_str("   ");
+        let fd2 = sys_open(path2.as_ptr() as *const i8, 1 | 64 | 512, 0o644);
+        if fd2 >= 0 {
+            sys_close(fd2);
         }
-        hex_lines.push(format!("0x{:08x}:  {} {}", off, hex, ascii));
     }
-    format!(
-        "addr: 0x{:x}\nsize: {}\nbytes_read: {}\n\n{}",
-        addr,
-        size,
-        total_read,
-        hex_lines.join("\n")
-    )
 }
 
-/// D: /il2cpp/disassemble?class=XXX&method=YYY&bytes=2048
-/// 反汇编IL2CPP方法的ARM64指令体，返回hex dump + 浮点常量扫描
-/// 安全措施：验证methodPointer在umamusume.dll代码段内、4字节对齐检查、限制最大4096字节
-unsafe fn il2cpp_disassemble(class_name: &str, method_name: &str, bytes_limit: usize) -> String {
-    // 参数验证
-    if class_name.is_empty() || method_name.is_empty() {
-        return r#"{"error":"missing class or method parameter"}"#.to_string();
-    }
-    // 限制最大读取字节数防止闪退（最大4096字节，默认2048）
-    let max_bytes: usize = 4096;
-    let bytes_limit = if bytes_limit == 0 || bytes_limit > max_bytes {
-        2048
-    } else {
-        bytes_limit
-    };
-
+unsafe fn read_motivation_inner() -> i32 {
     if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
+        return -1;
     }
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return r#"{"error":"image_null"}"#.to_string(),
-    };
-
-    // 找到目标类
-    let class = find_class_by_short_name(image, class_name);
-    if class.is_null() {
-        return format!(r#"{{"error":"class_not_found","name":"{}"}}"#, class_name);
-    }
-    let real_class = get_class_name_from_pointer(class);
-
-    // 解析IL2CPP API函数
-    let get_methods_fn: Option<
-        unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void,
-    > = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-
-    if get_methods_fn.is_none() || method_get_name_fn.is_none() {
-        return r#"{"error":"missing_il2cpp_api"}"#.to_string();
-    }
-
-    // 遍历类方法，找到目标方法
-    let mut target_method_info: *const c_void = ptr::null();
-    let mut iter: *mut c_void = ptr::null_mut();
-    loop {
-        let mi = get_methods_fn.unwrap()(class, &mut iter);
-        if mi.is_null() {
-            break;
-        }
-        let name_ptr = method_get_name_fn.unwrap()(mi);
-        if !name_ptr.is_null() {
-            let name = CStr::from_ptr(name_ptr).to_string_lossy();
-            if name == method_name {
-                target_method_info = mi;
-                break;
-            }
-        }
-    }
-
-    if target_method_info.is_null() {
-        return format!(
-            r#"{{"error":"method_not_found","class":"{}","method":"{}"}}"#,
-            json_escape(class_name),
-            json_escape(method_name)
-        );
-    }
-
-    // 读取methodPointer（MethodInfo结构体，methodPointer在offset 0）
-    // IL2CPP MethodInfo布局：offset 0 = methodPointer (8字节指针，64位)
-    let method_ptr =
-        std::ptr::read_unaligned::<*const c_void>(target_method_info as *const *const c_void);
-
-    if method_ptr.is_null() {
-        return format!(
-            r#"{{"error":"method_pointer_null","class":"{}","method":"{}"}}"#,
-            json_escape(class_name),
-            json_escape(method_name)
-        );
-    }
-
-    let method_addr = method_ptr as usize;
-
-    // 4字节对齐检查（ARM64指令必须是4字节对齐的）
-    if method_addr % 4 != 0 {
-        return format!(
-            r#"{{"error":"pointer_not_aligned","method_addr":"0x{:x}"}}"#,
-            method_addr
-        );
-    }
-
-    // 安全校验：读取/proc/self/maps确认指针在umamusume.dll代码段内
-    let mut code_start: usize = 0;
-    let mut code_end: usize = 0;
-    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-        for line in maps.lines() {
-            if line.contains("umamusume") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.is_empty() {
-                    continue;
-                }
-                let addr_parts: Vec<&str> = parts[0].split('-').collect();
-                if addr_parts.len() != 2 {
-                    continue;
-                }
-                if let Ok(start) = usize::from_str_radix(addr_parts[0], 16) {
-                    if let Ok(end) = usize::from_str_radix(addr_parts[1], 16) {
-                        // 合并所有umamusume段（代码段+只读数据段+literal pool）
-                        if code_start == 0 || start < code_start {
-                            code_start = start;
-                        }
-                        if end > code_end {
-                            code_end = end;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if code_start == 0 || method_addr < code_start || method_addr >= code_end {
-        return format!(
-            r#"{{"error":"pointer_outside_code_section","method_addr":"0x{:x}","code_start":"0x{:x}","code_end":"0x{:x}"}}"#,
-            method_addr, code_start, code_end
-        );
-    }
-
-    // 计算安全读取字节数（不超出代码段边界，4字节对齐）
-    let available_bytes = code_end - method_addr;
-    let safe_bytes = available_bytes.min(bytes_limit) & !3;
-    if safe_bytes < 16 {
-        return format!(
-            r#"{{"error":"insufficient_code_bytes","available":{},"method_addr":"0x{:x}"}}"#,
-            available_bytes, method_addr
-        );
-    }
-
-    // 读取方法字节（逐字节read_unaligned，安全检查每个地址）
-    let mut bytes = Vec::with_capacity(safe_bytes);
-    let mut read_ok = true;
-    for i in 0..safe_bytes {
-        let byte_ptr = method_ptr as *const u8;
-        let addr = byte_ptr as usize + i;
-        // 每个字节都检查在代码段内
-        if addr < code_start || addr >= code_end {
-            read_ok = false;
-            break;
-        }
-        let b = std::ptr::read_unaligned::<u8>(byte_ptr.add(i));
-        bytes.push(b);
-    }
-
-    if !read_ok || bytes.len() < 16 {
-        return r#"{"error":"read_failed"}"#.to_string();
-    }
-
-    let bytes_read = bytes.len();
-
-    // 生成hex dump（每16字节一行，适合ARM64分析）
-    let mut hex_lines = Vec::new();
-    for (i, chunk) in bytes.chunks(16).enumerate() {
-        let offset = i * 16;
-        let hex: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
-        hex_lines.push(format!("{:04x}: {}", offset, hex.join(" ")));
-    }
-
-    // 扫描已知浮点常量（やる気系数候选值 + 常见训练系数）
-    let known_floats: Vec<(&str, f32)> = vec![
-        ("0.6", 0.6),
-        ("0.75", 0.75),
-        ("0.8", 0.8),
-        ("0.9", 0.9),
-        ("1.0", 1.0),
-        ("1.1", 1.1),
-        ("1.2", 1.2),
-        ("1.3", 1.3),
-        ("1.4", 1.4),
-        ("1.5", 1.5),
-        ("0.5", 0.5),
-        ("2.0", 2.0),
-        ("0.7", 0.7),
-        ("1.05", 1.05),
-        ("1.15", 1.15),
-        ("1.25", 1.25),
-    ];
-
-    let mut found_constants = Vec::new();
-
-    for (name, val) in &known_floats {
-        let f32_bits = val.to_bits().to_le_bytes();
-        let f64_val = *val as f64;
-        let f64_bits = f64_val.to_bits().to_le_bytes();
-
-        // 搜索f32字节模式（4字节步进，避免误报ARM64指令编码）
-        for off in (0..bytes_read.saturating_sub(4)).step_by(4) {
-            if bytes[off] == f32_bits[0]
-                && bytes[off + 1] == f32_bits[1]
-                && bytes[off + 2] == f32_bits[2]
-                && bytes[off + 3] == f32_bits[3]
-            {
-                found_constants.push(format!(
-                    r#"{{"name":"{}","type":"f32","offset":{},"hex":"{:02x}{:02x}{:02x}{:02x}"}}"#,
-                    name, off, f32_bits[0], f32_bits[1], f32_bits[2], f32_bits[3]
-                ));
-            }
-        }
-
-        // 搜索f64字节模式（8字节，4字节步进）
-        if bytes_read >= 8 {
-            for off in (0..bytes_read.saturating_sub(8)).step_by(4) {
-                if bytes[off..off + 8] == f64_bits[..] {
-                    found_constants.push(format!(
-                        r#"{{"name":"{}","type":"f64","offset":{},"hex":"{}"}}"#,
-                        name,
-                        off,
-                        f64_bits
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<String>()
-                    ));
-                }
-            }
-        }
-    }
-
-    // 搜索RET指令（0xD65F03C0）标记函数边界
-    let ret_bytes: [u8; 4] = [0xC0, 0x03, 0x5F, 0xD6]; // RET的little-endian编码
-    let mut ret_offsets = Vec::new();
-    for off in (0..bytes_read.saturating_sub(4)).step_by(4) {
-        if bytes[off] == ret_bytes[0]
-            && bytes[off + 1] == ret_bytes[1]
-            && bytes[off + 2] == ret_bytes[2]
-            && bytes[off + 3] == ret_bytes[3]
-        {
-            ret_offsets.push(off);
-        }
-    }
-
-    let ret_json: Vec<String> = ret_offsets.iter().map(|&off| format!("{}", off)).collect();
-
-    format!(
-        r#"{{"ok":true,"class":"{}","real_class":"{}","method":"{}","method_addr":"0x{:x}","bytes_read":{},"code_section":"0x{:x}-0x{:x}","hex_dump":{},"ret_offsets":[{}],"found_constants":[{}]}}"#,
-        json_escape(class_name),
-        json_escape(&real_class),
-        json_escape(method_name),
-        method_addr,
-        bytes_read,
-        code_start,
-        code_end,
-        json_escape(&hex_lines.join("\n")),
-        ret_json.join(","),
-        found_constants.join(",")
-    )
-}
-
-// v3.22.89: 按地址反汇编ARM64指令体（用于分析ExecTraining等方法的子函数调用目标）
-// 安全措施：地址必须在umamusume.dll代码段内+4字节对齐+逐字节地址验证+大小限制+RET标记+浮点常量扫描
-unsafe fn il2cpp_disassemble_addr(addr_str: &str, bytes_limit: usize) -> String {
-    // ★ 先尝试作为绝对地址，失败则尝试作为偏移（base_addr + offset）
-    let trimmed = addr_str.trim_start_matches("0x").trim_start_matches("0X");
-    let addr_val = match usize::from_str_radix(trimmed, 16) {
-        Ok(v) => v,
-        Err(_) => {
-            return format!(
-                r#"{{"error":"invalid_addr_format","received":"{}","hint":"use hex like 0x7336296890"}}"#,
-                addr_str
-            )
-        }
-    };
-
-    if addr_val == 0 {
-        return r#"{"error":"addr_zero"}"#.to_string();
-    }
-
-    // ★ v3.22.91: 自动检测偏移量模式。如果addr < 0x1000000（16MB），当作SO内偏移，需先读取base_addr
-    // 注意：search_float返回的abs_addr是绝对地址，不需要此转换；但用户手动传offset时走此路径
-    let mut working_addr = addr_val;
-    if addr_val < 0x1000000 {
-        // 从/proc/self/maps获取umamusume的base_addr
-        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-            for line in maps.lines() {
-                if line.contains("umamusume") && line.contains("r-xp") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if !parts.is_empty() {
-                        let addr_parts: Vec<&str> = parts[0].split('-').collect();
-                        if addr_parts.len() == 2 {
-                            if let Ok(start) = usize::from_str_radix(addr_parts[0], 16) {
-                                working_addr = start + addr_val;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 限制最大读取字节数防止闪退（最大4096字节，默认2048）
-    let max_bytes: usize = 4096;
-    let bytes_limit = if bytes_limit == 0 || bytes_limit > max_bytes {
-        2048
-    } else {
-        bytes_limit
-    };
-
-    // 4字节对齐检查（ARM64指令必须是4字节对齐的）
-    if working_addr % 4 != 0 {
-        return format!(
-            r#"{{"error":"addr_not_aligned","addr":"0x{:x}"}}"#,
-            working_addr
-        );
-    }
-
-    // 安全校验：读取/proc/self/maps确认地址在umamusume.dll代码段内
-    let mut code_start: usize = 0;
-    let mut code_end: usize = 0;
-    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-        for line in maps.lines() {
-            if line.contains("umamusume") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.is_empty() {
-                    continue;
-                }
-                let addr_parts: Vec<&str> = parts[0].split('-').collect();
-                if addr_parts.len() != 2 {
-                    continue;
-                }
-                if let Ok(start) = usize::from_str_radix(addr_parts[0], 16) {
-                    if let Ok(end) = usize::from_str_radix(addr_parts[1], 16) {
-                        // 合并所有umamusume段
-                        if code_start == 0 || start < code_start {
-                            code_start = start;
-                        }
-                        if end > code_end {
-                            code_end = end;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if code_start == 0 || working_addr < code_start || working_addr >= code_end {
-        return format!(
-            r#"{{"error":"addr_outside_code_section","addr":"0x{:x}","code_start":"0x{:x}","code_end":"0x{:x}"}}"#,
-            working_addr, code_start, code_end
-        );
-    }
-
-    // 计算安全读取字节数（不超出代码段边界，4字节对齐）
-    let available_bytes = code_end - working_addr;
-    let safe_bytes = available_bytes.min(bytes_limit) & !3;
-    if safe_bytes < 16 {
-        return format!(
-            r#"{{"error":"insufficient_code_bytes","available":{},"addr":"0x{:x}"}}"#,
-            available_bytes, working_addr
-        );
-    }
-
-    // 读取指令字节（逐字节read_unaligned，安全检查每个地址）
-    let src_ptr = working_addr as *const u8;
-    let mut bytes = Vec::with_capacity(safe_bytes);
-    let mut read_ok = true;
-    for i in 0..safe_bytes {
-        let byte_addr = working_addr + i;
-        // 每个字节都检查在代码段内
-        if byte_addr < code_start || byte_addr >= code_end {
-            read_ok = false;
-            break;
-        }
-        let b = std::ptr::read_unaligned::<u8>(src_ptr.add(i));
-        bytes.push(b);
-    }
-
-    if !read_ok || bytes.len() < 16 {
-        return r#"{"error":"read_failed"}"#.to_string();
-    }
-
-    let bytes_read = bytes.len();
-
-    // 生成hex dump（每16字节一行）
-    let mut hex_lines = Vec::new();
-    for (i, chunk) in bytes.chunks(16).enumerate() {
-        let offset = i * 16;
-        let hex: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
-        hex_lines.push(format!("{:04x}: {}", offset, hex.join(" ")));
-    }
-
-    // 扫描已知浮点常量（やる気系数候选值 + 常见训练系数）
-    let known_floats: Vec<(&str, f32)> = vec![
-        ("0.6", 0.6),
-        ("0.75", 0.75),
-        ("0.8", 0.8),
-        ("0.9", 0.9),
-        ("1.0", 1.0),
-        ("1.1", 1.1),
-        ("1.2", 1.2),
-        ("1.3", 1.3),
-        ("1.4", 1.4),
-        ("1.5", 1.5),
-        ("0.5", 0.5),
-        ("2.0", 2.0),
-        ("0.7", 0.7),
-        ("1.05", 1.05),
-        ("1.15", 1.15),
-        ("1.25", 1.25),
-        // 新增やる気系数相关整数（80/90/100/110/120的整数表示）
-        ("80.0", 80.0),
-        ("90.0", 90.0),
-        ("100.0", 100.0),
-        ("110.0", 110.0),
-        ("120.0", 120.0),
-    ];
-
-    let mut found_constants = Vec::new();
-
-    for (name, val) in &known_floats {
-        let f32_bits = val.to_bits().to_le_bytes();
-        let f64_val = *val as f64;
-        let f64_bits = f64_val.to_bits().to_le_bytes();
-
-        // 搜索f32字节模式（4字节步进）
-        for off in (0..bytes_read.saturating_sub(4)).step_by(4) {
-            if bytes[off] == f32_bits[0]
-                && bytes[off + 1] == f32_bits[1]
-                && bytes[off + 2] == f32_bits[2]
-                && bytes[off + 3] == f32_bits[3]
-            {
-                found_constants.push(format!(
-                    r#"{{"name":"{}","type":"f32","offset":{},"hex":"{:02x}{:02x}{:02x}{:02x}"}}"#,
-                    name, off, f32_bits[0], f32_bits[1], f32_bits[2], f32_bits[3]
-                ));
-            }
-        }
-
-        // 搜索f64字节模式（8字节，4字节步进）
-        if bytes_read >= 8 {
-            for off in (0..bytes_read.saturating_sub(8)).step_by(4) {
-                if bytes[off..off + 8] == f64_bits[..] {
-                    found_constants.push(format!(
-                        r#"{{"name":"{}","type":"f64","offset":{},"hex":"{}"}}"#,
-                        name,
-                        off,
-                        f64_bits
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<String>()
-                    ));
-                }
-            }
-        }
-    }
-
-    // 搜索RET指令（0xD65F03C0）标记函数边界
-    let ret_bytes: [u8; 4] = [0xC0, 0x03, 0x5F, 0xD6];
-    let mut ret_offsets = Vec::new();
-    for off in (0..bytes_read.saturating_sub(4)).step_by(4) {
-        if bytes[off] == ret_bytes[0]
-            && bytes[off + 1] == ret_bytes[1]
-            && bytes[off + 2] == ret_bytes[2]
-            && bytes[off + 3] == ret_bytes[3]
-        {
-            ret_offsets.push(off);
-        }
-    }
-
-    // 搜索BL指令（ARM64相对跳转），提取调用目标地址
-    let mut bl_targets = Vec::new();
-    for off in (0..bytes_read.saturating_sub(4)).step_by(4) {
-        let insn = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
-        // BL指令格式：100101xx xxxxxxxx xxxxxxxx xxxxxxxx (bit31-26=100101)
-        if (insn >> 26) == 0b100101 {
-            // 解码26位有符号偏移（单位：4字节）
-            let imm26 = insn & 0x03FFFFFF;
-            // 符号扩展26位到i64
-            let offset = if imm26 & 0x02000000 != 0 {
-                ((imm26 | 0xFC000000) as u32) as i32 as i64
-            } else {
-                imm26 as i64
-            };
-            let target = (working_addr as i64 + (off as i64) + (offset * 4)) as usize;
-            bl_targets.push(format!(r#"{{"offset":{},"target":"0x{:x}"}}"#, off, target));
-        }
-    }
-
-    // 搜索SCVTF指令（整数转浮点）和FMUL/FDIV等浮点运算
-    let mut float_ops = Vec::new();
-    for off in (0..bytes_read.saturating_sub(4)).step_by(4) {
-        let insn = u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
-        // SCVTF: 0001_1110_xxx0_0010_1100_0010_0000_0000 (多格式)
-        let is_scvtf = (insn & 0x7F3FFC00) == 0x1E220000
-            || (insn & 0x7F3FFC00) == 0x1E620000
-            || (insn & 0x5F3FFC00) == 0x4E220000
-            || (insn & 0x5F3FFC00) == 0x0E220000;
-        // FMUL: 0001_1110_xx10_0000_xxxx_xxxx_xx00_0000
-        let is_fmul = (insn & 0x7F20FC00) == 0x1E200800 || (insn & 0x7F20FC00) == 0x1E008400;
-        // FDIV: 0001_1110_xx10_0000_xxxx_xxxx_xx00_1100
-        let is_fdiv = (insn & 0x7F20FC00) == 0x1E200800 || (insn & 0x7F20FC00) == 0x1E008C00;
-        // SDIV/UDIV: 0001_1010_101x_xxxx_0000_xx_xxxx_00001 / 0001_1010_100x_xxxx_0000_xx_xxxx_00001
-        let is_sdiv = (insn & 0x7FE0FC00) == 0x1AC00C00;
-        let is_udiv = (insn & 0x7FE0FC00) == 0x1AC00800;
-
-        let op_type = if is_scvtf {
-            Some("SCVTF")
-        } else if is_fmul {
-            Some("FMUL")
-        } else if is_fdiv {
-            Some("FDIV")
-        } else if is_sdiv {
-            Some("SDIV")
-        } else if is_udiv {
-            Some("UDIV")
-        } else {
-            None
-        };
-
-        if let Some(t) = op_type {
-            float_ops.push(format!(
-                r#"{{"offset":{},"type":"{}","hex":"{:02x}{:02x}{:02x}{:02x}"}}"#,
-                off,
-                t,
-                bytes[off],
-                bytes[off + 1],
-                bytes[off + 2],
-                bytes[off + 3]
-            ));
-        }
-    }
-
-    let ret_json: Vec<String> = ret_offsets.iter().map(|&off| format!("{}", off)).collect();
-
-    format!(
-        r#"{{"ok":true,"addr":"0x{:x}","bytes_read":{},"code_section":"0x{:x}-0x{:x}","hex_dump":{},"ret_offsets":[{}],"found_constants":[{}],"bl_targets":[{}],"float_ops":[{}]}}"#,
-        working_addr,
-        bytes_read,
-        code_start,
-        code_end,
-        json_escape(&hex_lines.join("\n")),
-        ret_json.join(","),
-        found_constants.join(","),
-        bl_targets.join(","),
-        float_ops.join(",")
-    )
-}
-
-// v3.22.89: 暴力dump全部类的方法目录（类名+方法名+地址+签名+静态标记）
-// 支持letter参数按A-Z分组，避免手机端一次性下载数据过大
-unsafe fn il2cpp_dump_all_methods(letter: &str) -> String {
     let image = get_image();
     if image.is_null() {
-        return r#"{"error":"image_null"}"#.to_string();
+        return -1;
     }
 
-    // 解析IL2CPP API函数指针
-    let get_count_fn = resolve_il2cpp_symbol("il2cpp_image_get_class_count");
-    let get_class_fn = resolve_il2cpp_symbol("il2cpp_image_get_class");
-    if get_count_fn.is_null() || get_class_fn.is_null() {
-        return r#"{"error":"class_enum_api_not_found"}"#.to_string();
+    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
+    if wdm_cls.is_null() {
+        return -1;
     }
-    let get_count: FnImageGetClassCount = std::mem::transmute(get_count_fn);
-    let get_class: FnImageGetClass = std::mem::transmute(get_class_fn);
-
-    // 方法遍历API
-    let get_methods_fn: Option<
-        unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void,
-    > = {
-        let p = resolve_il2cpp_symbol("il2cpp_class_get_methods");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_name_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_char> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_name");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_param_count_fn: Option<unsafe extern "C" fn(*const c_void) -> u32> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_param_count");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_return_type_fn: Option<unsafe extern "C" fn(*const c_void) -> *const c_void> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_return_type");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-    let method_get_flags_fn: Option<unsafe extern "C" fn(*const c_void, *mut u32) -> u32> = {
-        let p = resolve_il2cpp_symbol("il2cpp_method_get_flags");
-        if p.is_null() {
-            None
-        } else {
-            Some(std::mem::transmute(p))
-        }
-    };
-
-    // 类名/命名空间读取
-    let get_name_fn = resolve_il2cpp_symbol("il2cpp_class_get_name");
-    let get_namespace_fn = resolve_il2cpp_symbol("il2cpp_class_get_namespace");
-
-    if get_methods_fn.is_none() || method_get_name_fn.is_none() {
-        return r#"{"error":"method_enum_api_not_found"}"#.to_string();
+    let wdm_inst = get_singleton(wdm_cls);
+    if wdm_inst.is_null() {
+        return -1;
     }
 
-    let total = get_count(image);
-    let mut all_classes: Vec<String> = Vec::new();
-    let mut total_methods: usize = 0;
-
-    // letter参数：只dump指定首字母的类（A-Z分组），ALL或空=全部
-    let filter_letter = letter.trim().to_uppercase();
-    let do_filter = !filter_letter.is_empty() && filter_letter != "ALL";
-
-    for i in 0..total {
-        let cls = get_class(image, i);
-        if cls.is_null() {
-            continue;
-        }
-
-        // 读取类名
-        let class_name = if !get_name_fn.is_null() {
-            let name_fn: FnClassGetName = std::mem::transmute(get_name_fn);
-            let cstr = name_fn(cls);
-            if cstr.is_null() {
-                continue;
-            }
-            std::ffi::CStr::from_ptr(cstr)
-                .to_string_lossy()
-                .into_owned()
-        } else {
-            continue;
-        };
-
-        // 读取命名空间
-        let namespace = if !get_namespace_fn.is_null() {
-            let ns_fn: FnClassGetName = std::mem::transmute(get_namespace_fn);
-            let cstr = ns_fn(cls);
-            if cstr.is_null() {
-                String::new()
-            } else {
-                std::ffi::CStr::from_ptr(cstr)
-                    .to_string_lossy()
-                    .into_owned()
-            }
-        } else {
-            String::new()
-        };
-
-        // 按首字母过滤
-        if do_filter {
-            let first = class_name
-                .chars()
-                .next()
-                .unwrap_or('_')
-                .to_ascii_uppercase();
-            let target = filter_letter
-                .chars()
-                .next()
-                .unwrap_or('_')
-                .to_ascii_uppercase();
-            if first != target {
-                continue;
-            }
-        }
-
-        // 检查是否枚举（枚举类没有有意义的方法）
-        let is_enum_fn: Option<unsafe extern "C" fn(*const c_void) -> bool> = {
-            let p = resolve_il2cpp_symbol("il2cpp_class_is_enum");
-            if p.is_null() {
-                None
-            } else {
-                Some(std::mem::transmute(p))
-            }
-        };
-        let is_enum = is_enum_fn.map(|f| f(cls)).unwrap_or(false);
-
-        // 遍历该类的所有方法
-        let mut methods_arr: Vec<String> = Vec::new();
-        let mut iter: *mut c_void = ptr::null_mut();
-        loop {
-            let method_info = get_methods_fn.unwrap()(cls, &mut iter);
-            if method_info.is_null() {
-                break;
-            }
-
-            let method_name = {
-                let name_ptr = method_get_name_fn.unwrap()(method_info);
-                if name_ptr.is_null() {
-                    "(null)".to_string()
-                } else {
-                    let cstr = CStr::from_ptr(name_ptr);
-                    cstr.to_string_lossy().into_owned()
-                }
-            };
-
-            // 跳过构造函数(.ctor/.cctor)
-            if method_name.starts_with('.') {
-                continue;
-            }
-
-            // 读取methodPointer（MethodInfo offset 0）
-            let method_ptr =
-                std::ptr::read_unaligned::<*const c_void>(method_info as *const *const c_void);
-            let method_addr = if method_ptr.is_null() {
-                0usize
-            } else {
-                method_ptr as usize
-            };
-
-            // 参数数、返回类型、是否静态
-            let param_count = method_get_param_count_fn
-                .map(|f| f(method_info))
-                .unwrap_or(0);
-            let return_type_str = method_get_return_type_fn
-                .map(|f| {
-                    let rt = f(method_info);
-                    if rt.is_null() {
-                        "void".to_string()
-                    } else {
-                        let te = il2cpp_type_get_type_enum(rt);
-                        type_enum_to_name(te)
-                    }
-                })
-                .unwrap_or_else(|| "?".to_string());
-            let is_static = method_get_flags_fn
-                .map(|f| {
-                    let mut iflags: u32 = 0;
-                    let flags = f(method_info, &mut iflags);
-                    (flags & 0x0010) != 0
-                })
-                .unwrap_or(false);
-
-            methods_arr.push(format!(
-                r#"{{"name":"{}","addr":"0x{:x}","params":{},"return_type":"{}","static":{}}}"#,
-                json_escape(&method_name),
-                method_addr,
-                param_count,
-                return_type_str,
-                is_static
-            ));
-        }
-
-        total_methods += methods_arr.len();
-
-        // 即使没有方法也记录类信息（标记is_enum）
-        if !methods_arr.is_empty() || !is_enum {
-            all_classes.push(format!(
-                r#"{{"class":"{}","ns":"{}","is_enum":{},"method_count":{},"methods":[{}]}}"#,
-                json_escape(&class_name),
-                json_escape(&namespace),
-                is_enum,
-                methods_arr.len(),
-                methods_arr.join(",")
-            ));
-        }
+    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
+    if sm_ptr == 0 {
+        return -1;
     }
 
-    format!(
-        r#"{{"ok":true,"total_classes":{},"filtered_classes":{},"total_methods":{},"letter":"{}","classes":[{}]}}"#,
-        total,
-        all_classes.len(),
-        total_methods,
-        json_escape(&filter_letter),
-        all_classes.join(",")
-    )
+    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
+    if sm_class.is_null() {
+        return -1;
+    }
+
+    let chara_obj = call_getter_on_instance(sm_class, sm_ptr as *const c_void, "get_Character");
+    if chara_obj.is_null() {
+        return -1;
+    }
+
+    let chara_class = find_class_by_short_name(image, "WorkSingleModeCharaData");
+    if chara_class.is_null() {
+        return -1;
+    }
+
+    call_getter_int(chara_class, chara_obj, "get_Motivation")
+}
+
+// Hook SingleModeTrainingFailureRateService.GetTrainingFailureRateIgnoreCharaEffect
+// Captures the last failure rate (0-10000 = 0%-100%) for use in training log
+
+unsafe fn read_training_context_inner() -> (i32, i32) {
+    if API.is_null() {
+        return (-1, -1);
+    }
+    let image = get_image();
+    if image.is_null() {
+        return (-1, -1);
+    }
+    let wdm_cls = find_class_by_short_name(image, "WorkDataManager");
+    if wdm_cls.is_null() {
+        return (-1, -1);
+    }
+    let wdm_inst = get_singleton(wdm_cls);
+    if wdm_inst.is_null() {
+        return (-1, -1);
+    }
+    let sm_ptr = std::ptr::read_unaligned::<usize>((wdm_inst as *const u8).add(96) as *const usize);
+    if sm_ptr == 0 {
+        return (-1, -1);
+    }
+    // WorkSingleModeData._totalTurnNum is an ObscuredInt, not a plain i32.
+    let turn = read_obscured_int_at(sm_ptr as *const c_void, 68);
+    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
+    if sm_class.is_null() {
+        return (turn, -1);
+    }
+    let chara = call_getter_on_instance(sm_class, sm_ptr as *const c_void, "get_Character");
+    let scenario_id = if chara.is_null() {
+        -1
+    } else {
+        read_obscured_int_at(chara, 568)
+    };
+    (turn, scenario_id)
+}
+
+// Read motivation (干劲) from character data, same path as read_seed_inner
+// Returns 1-5 (Worst/Bad/Normal/Good/Best), -1 on error
+
+fn ramen_derive_selectable_regions(
+    total_turn: i64,
+    all_selected: &[i32],
+) -> (Option<i64>, Option<i64>, Vec<i64>, String) {
+    let mut round_types: Vec<(i64, i64)> = Vec::new(); // (turn, region_select_type)
+    let mut pools: Vec<(i64, i64)> = Vec::new(); // (region_select_type, region_id)
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return (None, None, Vec::new(), "error: mdb_not_found".to_string()),
+    };
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return (None, None, Vec::new(), format!("error: mdb_open: {}", e)),
+    };
+    if let Ok(mut stmt) = conn
+        .prepare("SELECT turn, region_select_type FROM single_mode_14_region_select ORDER BY turn")
+    {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+            for row in rows.flatten() {
+                round_types.push(row);
+            }
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT region_select_type, region_id FROM single_mode_14_region_feeling ORDER BY region_select_type, region_id") {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+            for row in rows.flatten() { pools.push(row); }
+        }
+    }
+    if pools.is_empty() {
+        return (
+            None,
+            None,
+            Vec::new(),
+            "error: empty_region_pools".to_string(),
+        );
+    }
+    let mut active_type: Option<i64> = None;
+    let mut active_turn: Option<i64> = None;
+    for (t, ty) in &round_types {
+        if *t <= total_turn {
+            active_type = Some(*ty);
+            active_turn = Some(*t);
+        }
+    }
+    if active_type.is_none() {
+        active_type = round_types.first().map(|(_, ty)| *ty);
+        active_turn = round_types.first().map(|(t, _)| *t);
+    }
+    let candidates: Vec<i64> = match active_type {
+        Some(ty) => pools
+            .iter()
+            .filter(|(pty, _)| *pty == ty)
+            .map(|(_, rid)| *rid)
+            .filter(|rid| !all_selected.contains(&(*rid as i32)))
+            .collect(),
+        None => Vec::new(),
+    };
+    (active_type, active_turn, candidates, "ok".to_string())
+}
+
+/// ★ v3.24.30: /debug/ramen_region_select — read-only region-selection observation.
+///
+/// Runtime part: total turn, SelectedRegionIdArray, AllSelectedRegionIdArray
+/// (same getters already used by debug_ramen_planner_state; nothing else is
+/// called and no state is mutated).
+///
+/// Candidate pool: DERIVED from MDB (single_mode_14_region_select rounds +
+/// single_mode_14_region_feeling pools) minus all_selected_region_ids. The
+/// derivation is labeled explicitly; a runtime-native "selectable regions"
+/// list is NOT asserted — Region-related method names on the DataSet class
+/// are only enumerated by name so the existence of an official getter can be
+/// confirmed on-device before any future direct read.
+
+unsafe fn query_next_turn_race_entry(next_turn: i32) -> bool {
+    if NEXT_RACE_CACHE.0 == next_turn {
+        return NEXT_RACE_CACHE.1;
+    }
+    let entry: Option<i32> = (|| {
+        let mdb = find_mdb_path()?;
+        let conn = Connection::open_with_flags(&mdb, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        conn.query_row(
+            "SELECT race_entry_type FROM single_mode_turn WHERE turn=?1 LIMIT 1",
+            [next_turn],
+            |r| r.get::<_, i32>(0),
+        )
+        .ok()
+    })();
+    let is_race = entry == Some(1);
+    NEXT_RACE_CACHE = (next_turn, is_race);
+    is_race
 }

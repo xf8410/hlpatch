@@ -1,10 +1,21 @@
 # hlpatch
 
-**赛马娘 Android 本地运行时观测、分层协议分析、IL2CPP 逆向与游戏内发送链研究插件**
+**赛马娘 Android 本地运行时观测、分层协议分析、IL2CPP 逆向与数据服务插件**
 
-`hlpatch` 运行于 Hachimi 插件环境，在游戏进程内观测 IL2CPP 对象、育成状态、事件、剧本数据以及网络请求与响应，并通过本机 HTTP 服务提供结构化查询、原始证据、Hook 诊断、持久归档和逆向研究接口。
+> ## workbench/slim 减负分支
+>
+> 本分支（`workbench/slim`，版本 `3.27.12-slim`）是 main 的纯减法瘦身版：SO 核心职责收敛为 hook 游戏明文层数据服务，消费方为 `uma-juece` 与 Agora-Workbench。相对 main：
+>
+> - 移除逆向期探查工具端点（内存/文件/资源扫描下载、IL2CPP 全量 dump/反汇编/数值搜索等，约 57 个 route）
+> - 移除孤儿源文件（`signup_plaintext.rs`、`protocol_send_discovery.rs`、`keychain_source_observer.rs`、顶层 `src/`、`native/`）、47 个一次性 workflow、6 个候选链脚本与过期诊断文档
+> - 移除 `data/il2cpp_dump` 数据资产；事件系统、协议嗅探、诊断上传、IL2CPP 调用/写入基建全部保留
+> - 被移除模块均可从 git 历史找回（`git log -S '<符号>' origin/main`）；完整判定依据见审计报告
+>
+> main 分支保持原样，功能完整版请使用 main。
 
-它面向浏览器、`uma-juece`、Agora Workbench 与自动化研究工具。当前主动发包仍默认关闭；项目正在先识别和验证游戏原生业务 API、MessagePack、Header、压缩、发送及响应链，为后续受控的游戏内 `prepare/commit` 和无头协议客户端建立证据。
+`hlpatch` 运行于 Hachimi 插件环境，在游戏进程内观测 IL2CPP 对象、育成状态、事件、剧本数据以及网络请求与响应，并通过本机 HTTP 服务提供结构化查询、原始证据、Hook 诊断、持久归档接口。
+
+它面向浏览器、`uma-juece`、Agora Workbench 与自动化研究工具。当前主动发包仍默认关闭；发送链研究处于候选态（见下文标注），未合入本分支。
 
 核心产物：
 
@@ -25,7 +36,7 @@ libhachimi_ura.so
 ### 分层协议观测与解码
 
 - 请求路径、查询参数、请求头、响应头、Cookie 与 token
-- MessagePack 请求体和响应体的结构化解析
+- MessagePack 请求体和响应体的结构化解析（由累计生成链注入）
 - `request_plain`、`request_wire`、`response_wire`、`response_plain` 来源语义
 - 明文边界与启发式候选分级，避免将密文或重复字节冒充解密正文
 - 带前缀及 binary 字段中的嵌套 MessagePack/UTF-8 探测
@@ -34,39 +45,17 @@ libhachimi_ura.so
 
 `wire` 是来源标签，不是解析禁令。Unity 上传/下载层的数据仍可用于嵌套协议、endpoint、类名和封装层研究；启发式结果不会冒充已验证明文。
 
-### 游戏内发送链发现
+### 游戏内发送链发现（候选态，未合入本分支）
 
-- 展示已知原生链：`CompressRequest → WWWRequest.Post → UnityWebRequest → DecompressResponse`
-- 从真实游戏流量枚举路由候选和最近 request ID
-- 输出单次请求的明文捕获、发送边界、响应与风险证据
-- 标记尚未解析的业务 API、formatter 和主线程调度环节
+- 发送链发现能力（`CompressRequest → WWWRequest.Post → UnityWebRequest → DecompressResponse` 路由枚举、请求证据导出）在 main 上处于候选研究状态，对应源文件与本分支端点均已移除，可从 git 历史找回
 - 默认拒绝主动重放，不根据路径名称自动认定请求无副作用
-
-当前端点只做被动发现，不会自行发送网络请求：
-
-```text
-GET /api/protocol/send/discovery
-GET /api/protocol/send/candidates
-GET /api/protocol/send/evidence?request_id=...
-```
-
-后续路线：
-
-```text
-真实游戏调用取证
-→ 精确业务 API / formatter / 线程模型
-→ 游戏内 prepare
-→ 一次性 commit
-→ status/result
-→ 半无头与无头协议客户端研究
-```
+- 后续路线：真实游戏调用取证 → 精确业务 API / formatter / 线程模型 → 游戏内 prepare → 一次性 commit → status/result → 半无头与无头协议客户端研究
 
 ### IL2CPP 与本地数据
 
 - 类、字段、方法和嵌套类型查询
-- 静态字段与实例字段读取
-- 方法地址、反汇编和受控运行时调用
-- 进程内存、字符串、对象和资源文件读取
+- 静态字段与实例字段读取、字符串读取
+- 方法定位与受控运行时调用（调用/写入基建）
 - MDB 表、Schema、查询和原始数据导出
 - Hook 注册、安装状态、调用观测与错误诊断
 
@@ -95,8 +84,7 @@ docs/PROTOCOL_LAYERED_DECODE_CONTRACT.md
           ├─ 育成、事件和剧本 Hook
           ├─ 请求/响应明文与 Unity transport 观测
           ├─ 分层解码、嵌套探测和协议归档
-          ├─ 游戏原生发送链被动发现
-          ├─ MDB、文件、资源和内存端点
+          ├─ MDB 与表数据端点
           └─ HTTP 服务 127.0.0.1:18765
               ├─ 浏览器
               ├─ uma-juece
@@ -107,8 +95,6 @@ docs/PROTOCOL_LAYERED_DECODE_CONTRACT.md
 
 ```text
 hachimi_ura_plugin/src/lib.rs
-hachimi_ura_plugin/src/signup_plaintext.rs
-hachimi_ura_plugin/src/protocol_send_discovery.rs
 ```
 
 仓库采用累计生成和补丁脚本构建部分发布功能；修改前应同时检查对应的 `scripts/apply_*.py` 与工作流。
@@ -121,7 +107,7 @@ hachimi_ura_plugin/src/protocol_send_discovery.rs
 http://127.0.0.1:18765
 ```
 
-基础状态与诊断：
+基础状态与诊断（`/hooks/*`、`/runtime/*`、`/capture/status` 由累计生成链注入）：
 
 ```text
 GET /health
@@ -137,12 +123,8 @@ GET /capture/status
 ```text
 GET /api/sniff
 GET /api/sniff/metadata
-GET /api/sniff/signup_plaintext
 GET /api/sniff/exchanges?session_id=...
 GET /api/sniff/exchange?session_id=...&request_id=...
-GET /api/protocol/send/discovery
-GET /api/protocol/send/candidates
-GET /api/protocol/send/evidence?request_id=...
 ```
 
 完整端点索引：
@@ -154,12 +136,11 @@ hlpatch_endpoints.txt
 主要类别：
 
 - `/api/sniff/*`：请求、响应、Header、正文、明文解码和协议 Hook
-- `/api/protocol/send/*`：游戏原生发送链发现与请求证据；当前不主动发包
 - `/storage/*`：持久会话、协议文件、审计、恢复和范围读取
 - `/api/event/*`：事件选项和完成事件观测
-- `/il2cpp/*`：类、字段、方法、内存、调用和反汇编
+- `/il2cpp/*`：类、字段、方法、调用（含静态调用与字符串读取）
 - `/hooks/*`、`/runtime/*`、`/capture/*`：初始化与 Hook/capture 状态
-- `/debug/*`：运行时、Hook、MDB、资源和剧本诊断
+- `/debug/*`：运行时、Hook、MDB、事件奖励目标与剧本诊断
 - `/mdb/*`：MDB Schema、查询和原始数据
 - `/summary`、`/data`、`/scenario`、`/ramen`：育成与剧本状态
 
@@ -175,7 +156,7 @@ hlpatch_endpoints.txt
 .github/workflows/build-ura.yml
 ```
 
-专项功能还可能通过对应的 build/release 工作流先执行累计生成器和补丁脚本。输出通常包括：
+构建先执行累计生成器与补丁脚本产出发布源码，再注入 HookRegistry 校验并编译。输出通常包括：
 
 - `libhachimi_ura.so`
 - `SHA256SUMS`
@@ -189,6 +170,7 @@ hlpatch_endpoints.txt
 ```bash
 rustup target add aarch64-linux-android
 cd hachimi_ura_plugin
+python3 ../scripts/run_generated_succession_l_cumulative.py
 cargo build --locked --release --target aarch64-linux-android
 ```
 
@@ -270,8 +252,6 @@ scripts/              累计生成与功能补丁脚本
 config/               Hook 与 HTTP 配置
 docs/                 接口契约、研究记录和工作单
 reverse/              逆向索引与报告
-data/                 项目数据和辅助资料
-native/               原生实验代码
 third_party/          第三方依赖
 ```
 

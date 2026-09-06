@@ -412,7 +412,7 @@ s = s.replace(route_anchor, route + route_anchor, 1)
 
 # Integrate the strict request-line parser without depending on parse_path for query data.
 # The existing full_uri remains the routing source; new handlers decode it themselves.
-request_anchor = '    let body = if path == "/debug/global_metadata_probe" {\n'
+request_anchor = '    let body = if path == "/" || path == "/health" {\n'
 assert s.count(request_anchor) == 1, f"request parser integration anchor count={s.count(request_anchor)}"
 s = s.replace(request_anchor, '''    let _parsed_request_uri = parse_request_uri(req).unwrap_or_else(|_| full_uri.clone());
     let body = if path == "/debug/global_metadata_probe" {

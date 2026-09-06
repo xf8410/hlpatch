@@ -1,5 +1,0 @@
-HTTP 403: Resource not accessible by integration (https://api.github.com/repos/xf8410/hlpatch/releases)
-
-exit_status=1
-workflow_run=31248101019
-source_commit=07adec9d24d721b1341191f8ffa8e15bc88ab931

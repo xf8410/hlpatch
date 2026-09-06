@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - workbench/slim
       - workbench/unified-observation-endpoint-implementation-20260806
       - workbench/next-generation-so-foundation-20260808
     paths:
@@ -21,13 +22,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate exact cumulative v3.27.11 source
+      - name: Generate exact cumulative v3.27.12-slim source
         run: |
           set -euo pipefail
           python3 scripts/run_generated_succession_l_cumulative.py
-          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.11"
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.12-slim"
           grep -Fq 'name = "hachimi_ura"' hachimi_ura_plugin/Cargo.lock
-          grep -Fq 'version = "3.27.11"' hachimi_ura_plugin/Cargo.lock
+          grep -Fq 'version = "3.27.12-slim"' hachimi_ura_plugin/Cargo.lock
           grep -Fq 'Protocol archive reliability P-stage' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'Protocol multi-section event timeline O-stage' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'Hachimi TextCommon final display observer N-stage' hachimi_ura_plugin/src/lib.rs

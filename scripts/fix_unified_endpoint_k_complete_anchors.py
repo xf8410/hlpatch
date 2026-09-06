@@ -16,7 +16,12 @@ available='r#"{{\\"error\\":\\"not_found\\",\\"path\\":\\"{}\\",\\"available\\":
 assert s.count(available)==1, f"available_advertisement_anchor_count={s.count(available)}"
 s=s.replace(available,available+prefix,1)
 '''
-assert s.count(old)==1, s.count(old)
+if s.count(old)!=1:
+    import sys as _sys
+    _marker=new.split('\\n')[0][:60]
+    if _marker in s:
+        print('fixer already applied, skip'); _sys.exit(0)
+    raise AssertionError(f'fixer anchor missing and patch not applied: {s.count(old)}')
 s=s.replace(old,new,1)
 P.write_text(s,encoding='utf-8')
 print('k_complete_anchor_fix=applied')

@@ -6,14 +6,14 @@ import re
 # 本候选在累计生成源码前固定唯一发布版本；Cargo.toml与lock必须同步。
 cargo_toml = Path('hachimi_ura_plugin/Cargo.toml')
 toml_text = cargo_toml.read_text(encoding='utf-8')
-toml_text = toml_text.replace('version = "3.27.9"', 'version = "3.27.11"', 1)
+toml_text = toml_text.replace('version = "3.27.12-slim"', 'version = "3.27.12-slim"', 1)
 cargo_toml.write_text(toml_text, encoding='utf-8')
 cargo_lock = Path('hachimi_ura_plugin/Cargo.lock')
 lock_text = cargo_lock.read_text(encoding='utf-8')
-package_anchor = 'name = "hachimi_ura"\nversion = "3.27.4"'
+package_anchor = 'name = "hachimi_ura"\nversion = "3.27.12-slim"'
 if package_anchor in lock_text:
     lock_text = lock_text.replace(package_anchor, 'name = "hachimi_ura"\nversion = "3.27.11"', 1)
-elif 'name = "hachimi_ura"\nversion = "3.27.11"' not in lock_text:
+elif 'name = "hachimi_ura"\nversion = "3.27.12-slim"' not in lock_text:
     raise RuntimeError('hachimi_ura Cargo.lock package version anchor missing')
 cargo_lock.write_text(lock_text, encoding='utf-8')
 
@@ -301,8 +301,8 @@ for pass_no in (1,2):
     source=Path('hachimi_ura_plugin/src/lib.rs').read_bytes()
     Path(f'source-{pass_no}.sha').write_text(hashlib.sha256(source).hexdigest()+'\n')
 assert Path('source-1.sha').read_text()==Path('source-2.sha').read_text()
-assert 'version = "3.27.11"' in cargo_toml.read_text(encoding='utf-8')
-assert 'name = "hachimi_ura"\nversion = "3.27.11"' in cargo_lock.read_text(encoding='utf-8')
+assert 'version = "3.27.12-slim"' in cargo_toml.read_text(encoding='utf-8')
+assert 'name = "hachimi_ura"\nversion = "3.27.12-slim"' in cargo_lock.read_text(encoding='utf-8')
 assert 'Next-generation passive init and HookRegistry foundation' in Path('hachimi_ura_plugin/src/lib.rs').read_text(encoding='utf-8')
 assert 'Exact single-method IL2CPP probe B1' in Path('hachimi_ura_plugin/src/lib.rs').read_text(encoding='utf-8')
 print('generated_succession_l_cumulative=idempotent_v3.27.11_next_generation_foundation_exact_method_probe')
