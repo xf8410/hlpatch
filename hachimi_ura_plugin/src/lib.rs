@@ -7299,7 +7299,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/debug/training_log" {
         // slim 3.27.12-slim: exec_training probe hook removed; report factual static state
         format!(
-            r#"{"hooked":false,"addr":"0x0","rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#
+            r#"{{"hooked":false,"addr":"0x0","rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}}"#
         )
     } else if path == "/debug/training_log_dl" {
         // Do not re-export legacy files containing the invalid u32x4 interpretation.
