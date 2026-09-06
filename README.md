@@ -6,7 +6,7 @@
 >
 > 本分支（`workbench/slim`，版本 `3.27.12-slim`）是 main 的纯减法瘦身版：SO 核心职责收敛为 hook 游戏明文层数据服务，消费方为 `uma-juece` 与 Agora-Workbench。相对 main：
 >
-> - 移除逆向期探查工具端点（内存/文件/资源扫描下载、IL2CPP 全量 dump/反汇编/数值搜索等，约 57 个 route）
+> - 移除逆向期探查工具端点（内存/文件/资源扫描下载、IL2CPP 全量 dump/反汇编/数值搜索等，63 个 route（与 hlpatch_endpoints.txt 清单对账一致））
 > - 移除孤儿源文件（`signup_plaintext.rs`、`protocol_send_discovery.rs`、`keychain_source_observer.rs`、顶层 `src/`、`native/`）、47 个一次性 workflow、6 个候选链脚本与过期诊断文档
 > - 移除 `data/il2cpp_dump` 数据资产；事件系统、协议嗅探、诊断上传、IL2CPP 调用/写入基建全部保留
 > - 被移除模块均可从 git 历史找回（`git log -S '<符号>' origin/main`）；完整判定依据见审计报告
