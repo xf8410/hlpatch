@@ -11,10 +11,12 @@ cargo_toml.write_text(toml_text, encoding='utf-8')
 cargo_lock = Path('hachimi_ura_plugin/Cargo.lock')
 lock_text = cargo_lock.read_text(encoding='utf-8')
 package_anchor = 'name = "hachimi_ura"\nversion = "3.27.12-slim"'
-if package_anchor in lock_text:
-    lock_text = lock_text.replace(package_anchor, 'name = "hachimi_ura"\nversion = "3.27.11"', 1)
-elif 'name = "hachimi_ura"\nversion = "3.27.12-slim"' not in lock_text:
-    raise RuntimeError('hachimi_ura Cargo.lock package version anchor missing')
+if package_anchor not in lock_text:
+    # 幂等锚定：无论当前为何版本（3.27.11/3.27.12/…），一律固定为 3.27.12-slim
+    lock_text = re.sub(
+        r'(name = "hachimi_ura"\nversion = )"[^"]*"',
+        r'\g<1>"3.27.12-slim"',
+        lock_text, count=1)
 cargo_lock.write_text(lock_text, encoding='utf-8')
 
 
