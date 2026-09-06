@@ -6303,8 +6303,6 @@ fn push_loop() {
                 ura_log(3, "Push: game detected via probe (no callback)");
                 // v3.22.98: Install hooks in fallback (on_game_initialized may never fire)
                 install_training_hook();
-                install_exec_training_hook();
-                install_failure_rate_hook();
                 install_event_choice_hook();
                 // ★ v3.24.40: sniff hooks were missing here — fallback mode
                 // left /api/sniff permanently unhooked.
@@ -7299,11 +7297,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             seq, cmd_id, normalized, action, result_type
         )
     } else if path == "/debug/training_log" {
-        let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
-        let addr = unsafe { EXEC_TRAINING_ADDR };
+        // slim 3.27.12-slim: exec_training probe hook removed; report factual static state
         format!(
-            r#"{{"hooked":{},"addr":"0x{:x}","rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}}"#,
-            hooked, addr
+            r#"{"hooked":false,"addr":"0x0","rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#
         )
     } else if path == "/debug/training_log_dl" {
         // Do not re-export legacy files containing the invalid u32x4 interpretation.
@@ -7690,31 +7686,6 @@ fn handle_http(mut stream: std::net::TcpStream) {
                 let _ = stream.write_all(resp.as_bytes());
             }
         }
-    } else if path ==  {
-        // v3.22.89: 反汇编结果下载为JSON文件
-        let cn = parse_query(&full_uri, "class");
-        let mn = parse_query(&full_uri, "method");
-        let safe_name: String = format!(
-            "{}_{}",
-            cn.chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_')
-                .collect::<String>(),
-            mn.chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_')
-                .collect::<String>()
-        );
-        let fname = format!(
-            "disassemble_{}.json",
-            if safe_name.is_empty() {
-                "output"
-            } else {
-                &safe_name
-            }
-        );
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"{}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            fname, body.len(), body
-        );
     } else {
         let content_type = if body.starts_with("<!DOCTYPE") || body.starts_with("<html") {
             "text/html; charset=utf-8"
@@ -10049,8 +10020,6 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
         ura_notify("URA: Game ready!");
         // v3.22.98: Install hooks FIRST (before precache, which may panic)
         install_training_hook();
-        install_exec_training_hook();
-        install_failure_rate_hook();
         install_api_sniff_hooks();
         install_event_choice_hook();
         // v3.22.51: Pre-cache all IL2CPP metadata on game thread
@@ -16182,111 +16151,6 @@ unsafe fn debug_paramsincdec() -> String {
         cmd_details.join(","),
         is_gauge_gained
     )
-}
-
-/// 一键查找训练种子：WorkDataManager → WorkSingleModeData → _fixedTurnCharaSeed
-/// 自动完成 /singletons + read_mem(offset 96) + read_mem(offset 408) 的手动3步流程
-extern "C" fn exec_training_hook(param1: *mut c_void, param2: *mut c_void) {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let trampoline = interceptor_get_trampoline(exec_training_hook as usize);
-        if trampoline == 0 {
-            ura_log(1, "exec_training_hook: trampoline not found");
-            return;
-        }
-        type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void);
-        let original: FnType = std::mem::transmute(trampoline);
-        original(param1, param2);
-    }));
-}
-extern "C" fn failure_rate_hook(param1: *mut c_void, param2: *mut c_void) -> i32 {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let trampoline = interceptor_get_trampoline(failure_rate_hook as usize);
-        if trampoline == 0 {
-            ura_log(1, "failure_rate_hook: trampoline not found");
-            return 0;
-        }
-        type FnType = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
-        let original: FnType = std::mem::transmute(trampoline);
-        let result = original(param1, param2);
-        LAST_FAILURE_RATE = result;
-        result
-    }))
-    .unwrap_or_else(|e| {
-        unsafe {
-            ura_log(1, &format!("failure_rate_hook: panic: {:?}", e));
-        }
-        0
-    })
-}
-
-unsafe fn install_failure_rate_hook() {
-    if FAILURE_RATE_HOOK_INSTALLED {
-        return;
-    }
-    if API.is_null() {
-        return;
-    }
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return,
-    };
-
-    let class = find_class_by_short_name(image, "SingleModeTrainingFailureRateService");
-    if class.is_null() {
-        ura_log(3, "FailureRate hook: class not found");
-        return;
-    }
-
-    let method_addr = find_method_addr(class, "GetTrainingFailureRateIgnoreCharaEffect", 2);
-    if method_addr == 0 {
-        ura_log(3, "FailureRate hook: method not found");
-        return;
-    }
-
-    FAILURE_RATE_ADDR = method_addr;
-    install_hook_safe(
-        "FailureRate",
-        method_addr,
-        failure_rate_hook as usize,
-        &mut ORIG_FAILURE_RATE_PROLOGUE,
-    );
-    FAILURE_RATE_HOOK_INSTALLED = true;
-}
-
-unsafe fn install_exec_training_hook() {
-    if EXEC_TRAINING_HOOK_INSTALLED {
-        return;
-    }
-    if API.is_null() {
-        return;
-    }
-
-    let image = match get_image() {
-        img if !img.is_null() => img,
-        _ => return,
-    };
-
-    let class = find_class_by_short_name(image, "SingleModeTrainingCommandService");
-    if class.is_null() {
-        ura_log(3, "ExecTraining hook: class not found");
-        return;
-    }
-
-    let method_addr = find_method_addr(class, "ExecTraining", 2);
-    if method_addr == 0 {
-        ura_log(3, "ExecTraining hook: method not found");
-        return;
-    }
-
-    EXEC_TRAINING_ADDR = method_addr;
-    install_hook_safe(
-        "ExecTraining",
-        method_addr,
-        exec_training_hook as usize,
-        &mut ORIG_EXEC_TRAINING_PROLOGUE,
-    );
-    EXEC_TRAINING_HOOK_INSTALLED = true;
 }
 
 /// v3.22.51: 启动时自动检查更新（后台线程）
