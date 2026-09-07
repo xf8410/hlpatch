@@ -1,29 +1,40 @@
-// ===== HTTP proxy endpoint (workbench/http-proxy-endpoint-20260907) =====
+// ===== HTTP proxy endpoint v2 — curl subprocess transport =====
+// CHANGE FROM v1: v1 referenced ureq::AgentBuilder, which caused rustls+ring
+// to be linked into the cdylib for the first time (they were compiled but
+// dead-stripped before). That is the prime suspect for the boot regression.
+// v2 shells out to /system/bin/curl via the crate-root sys_system extern —
+// the exact transport the base plugin already uses for GitHub uploads — so
+// ZERO new native code is linked and load-time behavior matches the old SO.
+//
 // GET /proxy?url=<percent-encoded https URL>
-//   Fetches the URL via ureq (rustls TLS with bundled Mozilla roots — no
-//   dependency on the Android system trust store) and returns the body
-//   verbatim for text content types. Non-text bodies are wrapped as a
-//   base64 JSON envelope. Never touches game memory or il2cpp state.
+//   curl fetches the URL; text bodies are returned verbatim, non-text bodies
+//   are wrapped as a base64 JSON envelope. Never touches game memory.
 // GET /proxy/status
 //   Small JSON: active fetches, last fetch result, install marker.
 //
 // Safety model (do not widen without review):
-// - https:// only, default port 443 only, userinfo rejected, redirects <= 3
+// - https:// only (also enforced for redirects via --proto =https), port 443
+//   only, userinfo rejected
 // - loopback / RFC1918 / link-local / 0.0.0.0 / .local / .internal rejected
-// - response capped at 16 MiB; connect timeout 8 s; total timeout 20 s
-// - at most 2 concurrent fetches (AtomicU64 gate)
+// - URL shell-safety: quotes, backticks, $, ;, |, \ and control chars rejected
+//   (URL is single-quoted into the shell command)
+// - body capped at 16 MiB via curl --max-filesize; connect 8 s; total 20 s
+// - at most 1 concurrent fetch (fixed temp paths, AtomicU64 gate)
+// - temp files live in the app private files dir (same dir the base plugin
+//   already uses); removed after every request
 // - route registered in BOOT_SAFE_EXACT: usable before game init
 
-use std::io::Read;
+use std::ffi::CString;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-const CONNECT_TIMEOUT_SECS: u64 = 8;
-const TOTAL_TIMEOUT_SECS: u64 = 20;
+const FILES_DIR: &str = "/data/data/jp.pokemon.pokeuma/files";
+const BODY_PATH: &str = "/data/data/jp.pokemon.pokeuma/files/uma_proxy_body.bin";
+const META_PATH: &str = "/data/data/jp.pokemon.pokeuma/files/uma_proxy_meta.txt";
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_URL_BYTES: usize = 2048;
-const MAX_ACTIVE_FETCHES: u64 = 2;
+const MAX_ACTIVE_FETCHES: u64 = 1;
 
 static ACTIVE_FETCHES: AtomicU64 = AtomicU64::new(0);
 
@@ -58,6 +69,13 @@ fn validate_url(url: &str) -> Result<String, String> {
     }
     if url.len() > MAX_URL_BYTES {
         return Err("url_too_long".to_string());
+    }
+    // Shell-safety: the URL is embedded in a single-quoted curl argument.
+    if url
+        .chars()
+        .any(|c| matches!(c, '\'' | '`' | '$' | ';' | '|' | '\\') || (c as u32) < 0x20)
+    {
+        return Err("url_shell_unsafe".to_string());
     }
     let rest = &url["https://".len()..];
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
@@ -116,45 +134,40 @@ struct FetchOutcome {
     body: Vec<u8>,
 }
 
-fn fetch(url: &str) -> Result<FetchOutcome, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(TOTAL_TIMEOUT_SECS))
-        .redirects(3)
-        .user_agent("hlpatch-http-proxy/1.0 (local diagnostic endpoint)")
-        .build();
-    let response = match agent.get(url).call() {
-        Ok(response) => response,
-        // Non-2xx responses still carry a readable body: pass them through.
-        Err(ureq::Error::Status(_status, response)) => response,
-        Err(ureq::Error::Transport(transport)) => {
-            return Err(format!("transport: {}", transport));
-        }
+fn run_curl(url: &str) -> (i32, String) {
+    let command = format!(
+        "curl -sL --connect-timeout 8 --max-time 20 --max-redirs 3 --max-filesize {} \
+         --proto =https -A 'hlpatch-http-proxy/1.0' -o '{}' -w '%{{http_code}} %{{content_type}}' \
+         '{}' > '{}' 2>/dev/null",
+        MAX_BODY_BYTES, BODY_PATH, url, META_PATH
+    );
+    let exit_code = match CString::new(command) {
+        Ok(command_c) => unsafe { super::sys_system(command_c.as_ptr() as *const i8) },
+        Err(_) => -1,
     };
-    let status = response.status();
-    let content_type = response
-        .header("content-type")
-        .unwrap_or("")
-        .split(';')
+    let meta = std::fs::read_to_string(META_PATH).unwrap_or_default();
+    (exit_code, meta)
+}
+
+fn fetch(url: &str) -> Result<FetchOutcome, String> {
+    let (exit_code, meta) = run_curl(url);
+    let mut parts = meta.split_whitespace();
+    let status: u16 = parts
         .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    let mut reader = response.into_reader();
-    let mut body: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 16 * 1024];
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => {
-                if body.len() + n > MAX_BODY_BYTES {
-                    return Err("body_too_large".to_string());
-                }
-                body.extend_from_slice(&chunk[..n]);
-            }
-            Err(error) => return Err(format!("read_failed: {}", error)),
-        }
+        .and_then(|token| token.parse().ok())
+        .unwrap_or(0);
+    let content_type = parts.next().unwrap_or("").to_ascii_lowercase();
+    if status == 0 {
+        // curl absent (127), DNS/connect failure, timeout (28), or blocked write.
+        return Err(format!(
+            "curl_unavailable_or_failed (exit {})",
+            exit_code
+        ));
     }
+    let body = match std::fs::read(BODY_PATH) {
+        Ok(body) => body,
+        Err(_) => Vec::new(),
+    };
     Ok(FetchOutcome {
         status,
         content_type,
@@ -186,6 +199,9 @@ pub fn endpoint(full_uri: &str) -> String {
     let outcome = fetch(&url);
     let duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     ACTIVE_FETCHES.fetch_sub(1, Ordering::AcqRel);
+    // Always clean the temp files, success or failure.
+    let _ = std::fs::remove_file(BODY_PATH);
+    let _ = std::fs::remove_file(META_PATH);
     match outcome {
         Ok(data) => {
             let bytes = data.body.len() as u64;
@@ -243,7 +259,7 @@ pub fn status_endpoint() -> String {
         Err(_) => "null".to_string(),
     };
     format!(
-        r#"{{"ok":true,"feature":"http_proxy","active_fetches":{},"max_active_fetches":{},"last":{}}}"#,
+        r#"{{"ok":true,"feature":"http_proxy","transport":"curl_subprocess","active_fetches":{},"max_active_fetches":{},"last":{}}}"#,
         active, MAX_ACTIVE_FETCHES, last
     )
 }
