@@ -1,10 +1,11 @@
 // ===== HTTP proxy endpoint v2 — curl subprocess transport =====
-// CHANGE FROM v1: v1 referenced ureq::AgentBuilder, which caused rustls+ring
-// to be linked into the cdylib for the first time (they were compiled but
-// dead-stripped before). That is the prime suspect for the boot regression.
-// v2 shells out to /system/bin/curl via the crate-root sys_system extern —
-// the exact transport the base plugin already uses for GitHub uploads — so
-// ZERO new native code is linked and load-time behavior matches the old SO.
+// CHANGE FROM v1: v1 referenced the rustls-based HTTP client crate, which
+// caused its crypto stack (rustls + ring) to be linked into the cdylib for
+// the first time (they were compiled but dead-stripped before). That is the
+// prime suspect for the boot regression. v2 shells out to the system curl
+// binary via the crate-root sys_system extern — the exact transport the base
+// plugin already uses for GitHub uploads — so ZERO new native code is linked
+// and load-time behavior matches the old SO.
 //
 // GET /proxy?url=<percent-encoded https URL>
 //   curl fetches the URL; text bodies are returned verbatim, non-text bodies
