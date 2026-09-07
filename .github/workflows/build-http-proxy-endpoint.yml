@@ -40,7 +40,10 @@ jobs:
           grep -Fq 'http_proxy::status_endpoint' hachimi_ura_plugin/src/lib.rs
           grep -Fq 'validate_url' hachimi_ura_plugin/src/http_proxy.rs
           grep -Fq 'private_address_blocked' hachimi_ura_plugin/src/http_proxy.rs
-          grep -Fq 'body_too_large' hachimi_ura_plugin/src/http_proxy.rs
+          grep -Fq 'curl_subprocess' hachimi_ura_plugin/src/http_proxy.rs
+          # Regression guard: proxy must not reference ureq at all (v1 linked
+          # rustls+ring into the cdylib and that is the prime boot-crash suspect)
+          ! grep -Fq 'ureq::' hachimi_ura_plugin/src/http_proxy.rs
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
@@ -78,8 +81,10 @@ jobs:
           binary_sha256=$SHA256
           workflow_run=${GITHUB_RUN_ID}
           feature=http_proxy_endpoint
+          transport=curl_subprocess_no_new_linked_libraries
           endpoints=/proxy?url=,/proxy/status
-          safety=https_only_port_443_no_userinfo_private_net_blocked_16mib_cap_20s_timeout_max2_concurrent_boot_safe
+          safety=https_only_port_443_no_userinfo_private_net_blocked_16mib_cap_20s_timeout_max1_concurrent_boot_safe
+          regression_note=v2_removed_ureq_transport_after_boot_regression_report
           runtime_validation=pending_device_execution
           EOF
 
