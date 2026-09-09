@@ -1,3 +1,66 @@
+<div align="center">
+
+# 🧬 hlpatch
+
+**全项目的地基：IL2CPP 内存读取 SO 插件（端口 18765）**
+
+![仓库](https://img.shields.io/badge/仓库-xf8410-8B5CF6?style=flat-square) ![分支](https://img.shields.io/badge/分支-52-10B981?style=flat-square) ![版本](https://img.shields.io/badge/版本-100-F59E0B?style=flat-square) ![CI](https://img.shields.io/badge/CI-3-3B82F6?style=flat-square)
+
+</div>
+
+---
+> 📌 **一句话定位**：全项目的地基：IL2CPP 内存读取 SO 插件（端口 18765）
+
+## 🧭 项目定位
+
+<b>hlpatch</b> 是项目组所有采集/决策能力的地基：以 Hachimi 框架 SO 插件形式注入游戏进程，IL2CPP hook 实时读取内存数据，暴露 140+ HTTP 端点（/summary、/debug/ramen_planner_state、/mdb/raw、/api/proxy、/api/sniff/toggle 等），供 umawork/浮窗/采集流水线消费。生产 SO 为 hachimi_ura_plugin（Rust 单文件 2.4 万行）。
+
+## ✨ 核心功能
+- IL2CPP hook：interceptor_hook + trampoline，dlsym 查全局符号- HTTP 端点族：运行时状态/拉面杯规划器/MDB 直查/代理发包/抓帧链（eglSwapBuffers 150ms 限频）- 发包嗅探：MakeMd5 hook + Compress/Decompress/Post 三 hook 自动安装- 训练画面映射（v3.28.0+）：分屏过渡，游戏+umawork 双画面- 100 个 release 持续演进，CI 不可变资产发布
+
+## 🌿 分支导览（共 52 个分支全览）
+
+<details open>
+<summary><b>点击收起/展开全部分支用途说明</b></summary>
+
+| 分支 | 用途说明 |
+|---|---|
+| `main` | 主干：生产 SO 代码线 |
+| `workbench/slim` | 精简版 SO 线（151 个现役端点的 slim 版） |
+| `workbench/release-v3-* / publish-* / fix-*-release` | 各历史版本发布线（v3.25.2 ~ v3.27.x） |
+| `workbench/fix-md5log-* / sniff-* / makemd5-*` | 发包嗅探与 MakeMd5 hook 修复线 |
+| `workbench/ramen-* / career-skip / succession-runtime` | 拉面杯观测/生涯跳过/继承运行时等实验线 |
+| `workbench/sigsegv-guard-*` | 段错误防护三连修复线（v3.27.23） |
+| `backup/cloud-*` | 云盘散件备份分支（按提交 sha 命名） |
+| `diag/*` | 诊断分支（2026-07-12 AB 测试等） |
+| `fix/shining-command-id / fix-fallback-v3223` | 点账 command-id 修复 / v3.22.3 兜底线 |
+
+</details>
+
+## 🏷️ 版本历史
+
+v3.22.x ~ v3.28.0 共 100 个发布版本（另有云盘散件备份 release）；每个 release 附 SO 与补丁资产，版本演进见 Releases 页逐条说明。
+
+完整版本列表 ➡️ [Releases 页](../../releases)
+
+## ⚙️ CI 流水线（共 3 条）
+
+| 流水线 | 用途说明 |
+|---|---|
+| Build Hachimi URA Plugin | 主 CI：cargo build 编译 SO（本地无 cargo，语法验证靠它） |
+| Release Hachimi URA Plugin | 发版流水线：release 资产不可变发布 |
+| Validate sniff v2 release / Apply MessagePack sniff analyzer 等 | 嗅探 v2 校验、MessagePack 分析器补丁、拉面分支 lockfile 修复等辅助流水线 |
+
+
+---
+
+## 📜 历史介绍存档
+
+> 以下为仓库原有介绍，**内容未删改**，仅移入存档区（新版介绍以本页上方为准）。
+
+<details>
+<summary><b>点击展开原 README</b></summary>
+
 # hlpatch
 
 **赛马娘 Android 本地运行时观测、分层协议分析、IL2CPP 逆向与游戏内发送链研究插件**
@@ -282,3 +345,6 @@ third_party/          第三方依赖
 - `uma-data`：数据仓库
 - `uma-train`：模拟与训练项目
 - `uma-ai-context`：项目上下文归档
+
+
+</details>
