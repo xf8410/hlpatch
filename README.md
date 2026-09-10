@@ -13,12 +13,23 @@
 
 ## 🧭 项目定位
 
-<b>hlpatch</b> 是项目组所有采集/决策能力的地基：以 Hachimi 框架 SO 插件形式注入游戏进程，IL2CPP hook 实时读取内存数据，暴露 140+ HTTP 端点（/summary、/debug/ramen_planner_state、/mdb/raw、/api/proxy、/api/sniff/toggle 等），供 umawork/浮窗/采集流水线消费。生产 SO 为 hachimi_ura_plugin（Rust 单文件 2.4 万行）。
+<b>hlpatch</b> 是项目组所有采集/决策能力的地基：以 Hachimi 框架 SO 插件形式注入游戏进程，IL2CPP hook 实时读取内存数据，暴露 140+ HTTP 端点（/summary、/debug/ramen_planner_state、/mdb/raw、/api/proxy、/api/sniff/toggle 等，**本文所列端点仅为示例快照**，见下方声明），供 umawork/浮窗/采集流水线消费。生产 SO 为 hachimi_ura_plugin（Rust 单文件 2.4 万行）。
 
 ## ✨ 核心功能
 - IL2CPP hook：interceptor_hook + trampoline，dlsym 查全局符号- HTTP 端点族：运行时状态/拉面杯规划器/MDB 直查/代理发包/抓帧链（eglSwapBuffers 150ms 限频）- 发包嗅探：MakeMd5 hook + Compress/Decompress/Post 三 hook 自动安装- 训练画面映射（v3.28.0+）：分屏过渡，游戏+umawork 双画面- 100 个 release 持续演进，CI 不可变资产发布
 
-## 🌿 分支导览（共 52 个分支全览）
+## ⚠️ 风险与时效性声明（必读）
+
+| 事项 | 说明 |
+|---|---|
+| **端口/端点介绍不是唯一答案** | 本文所列端点与端口说明仅为示例快照，现役端点以当前源码与运行时自省为准，随版本演进而增减 |
+| **偏移地址可能随游戏更新变化** | IL2CPP 偏移与对象结构随游戏版本更新而变，读取结果与端点行为可能随之改变或失效 |
+| **hook 随时可能失效** | 游戏更新可能导致 hook 全部或部分失效，本文内容不构成任何可用性承诺 |
+| **用于其他操作方式，风险自己承担** | 本项目仅供学习研究；用于其他操作方式所产生的一切风险由使用者自行承担 |
+
+> 🔄 **端口介绍如何更新**：端点表随版本演进由维护者同步刷新；任何时刻，运行时返回与 `hlpatch_endpoints.txt`/当前源码都优先于本文描述。
+
+## 🌿 分支导览（共 52 个分支全览)
 
 <details open>
 <summary><b>点击收起/展开全部分支用途说明</b></summary>
