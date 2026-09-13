@@ -251,6 +251,7 @@ jobs:
           if grep -aFq 'mod training_anim_skip;' hachimi_ura_plugin/src/lib.rs; then
             echo "REGRESSION: anim_skip leaked into the v3.28.0 baseline"; exit 1
           fi
+          test -s docs/release-v3282-notes.md
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
       - uses: nttld/setup-ndk@v1
@@ -296,10 +297,4 @@ jobs:
           ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
           gh release create "v3.28.2" "$ASSET" SHA256SUMS BUILD-MANIFEST.txt hachimi_ura_plugin/release-v3282-cargo.log \
             --title "v3.28.2 崩溃日志落盘修复（基线 v3.28.0）" \
-            --notes "基线严格等于 v3.28.0（pin 到 721c086，含 cumulative 3.27.23 + SIGSEGV guard + 画面映射 A 阶段），只额外打一个补丁：崩溃日志路径。
-
-根因：插件所有崩溃落盘点写的是 /data/data/jp.pokemon.pokeuma/files/uma_predict.log，而这个包名在机上根本不存在（真实包名从 /proc/self/cmdline 读到，是 jp.co.cygames.umamusume）。open 一直失败 → crash_signal_handler 的 CRASH at step/sig、panic hook 记录、predict step、自动上传全部静默丢失，所以育成第五回合那次闪退什么都没留下。
-
-修复：崩溃日志改写 /sdcard/Android/media/<pkg>/hachimi/uma_predict.log（与 ura_boot.log 同目录，已证明可写、无需任何权限），旧路径保留为兜底；信号处理函数用的是启动时预热好的静态缓冲区，处理崩溃时不分配内存（async-signal-safe）。/debug/crashlog 现在会合并读取三个落点。
-
-不含 training_anim_skip（v3.28.1 的头号嫌疑），也不含 version_single_source —— 所以端点里的 version 字段仍会显示旧值 3.22.91，这是已知现象不是回归；认这个包请看 ura_boot.log 新增的 crash_log= 那一行。"
+            --notes-file docs/release-v3282-notes.md
