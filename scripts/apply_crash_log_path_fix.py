@@ -29,6 +29,11 @@ Legacy paths stay as fallbacks so behaviour is never worse than before, and the
 signal-handler path is pre-warmed into a static buffer so the handler itself
 allocates nothing (async-signal-safe).
 
+Anchor policy: every anchor must match at least once (fail closed otherwise);
+all matches are replaced, and the count is reported. The OpenOptions block in
+particular appears twice on purpose (panic hook + the v3.22.51 std::fs
+fallback inside log_predict_step) and both must be redirected.
+
 Idempotent: once the marker is present, re-runs print already_applied.
 """
 from pathlib import Path
@@ -122,24 +127,21 @@ fn hl_crash_log_file_cstr() -> &'static [u8] {
 
 '''
 
-# (old, new, expected_count) — applied in this order.
+# (label, old, new) — applied in this order; each must match at least once.
 REPLACEMENTS = [
-    # 0) install the helpers right before the legacy constant (kept for any
-    #    remaining readers).
     (
+        "helpers",
         'const CRASH_LOG_PATH: &str = "/data/data/jp.pokemon.pokeuma/files/uma_predict.log";',
         HELPERS
         + 'const CRASH_LOG_PATH: &str = "/data/data/jp.pokemon.pokeuma/files/uma_predict.log";',
-        1,
     ),
-    # 1) signal handler: write the crash record where it survives.
     (
+        "signal_handler_path",
         '    let path = b"/data/data/jp.pokemon.pokeuma/files/uma_predict.log\\0";',
         '    let path = hl_crash_log_file_cstr();',
-        1,
     ),
-    # 2) panic hook.
     (
+        "openoptions_sinks",
         '        let _ = std::fs::OpenOptions::new()\n'
         '            .create(true)\n'
         '            .append(true)\n'
@@ -148,32 +150,27 @@ REPLACEMENTS = [
         '            .create(true)\n'
         '            .append(true)\n'
         '            .open(hl_crash_log_file())',
-        1,
     ),
-    # 3) predict-step writer (anchored on the following line because the same
-    #    two path lines also appear in clear_predict_log).
     (
+        "predict_step_writer",
         '    let path1 = b"/data/data/jp.pokemon.pokeuma/files/uma_predict.log\\0";\n'
         '    let path2 = b"/data/local/tmp/uma_predict.log\\0";\n'
         '    let line_bytes = line.as_bytes();',
         '    let path1 = hl_crash_log_file_cstr();\n'
         '    let path2 = b"/data/local/tmp/uma_predict.log\\0";\n'
         '    let line_bytes = line.as_bytes();',
-        1,
     ),
-    # 4) predict-step truncation (now the only remaining legacy pair).
     (
+        "predict_step_truncate",
         '    let path1 = b"/data/data/jp.pokemon.pokeuma/files/uma_predict.log\\0";\n'
         '    let path2 = b"/data/local/tmp/uma_predict.log\\0";\n'
         '    unsafe {',
         '    let path1 = hl_crash_log_file_cstr();\n'
         '    let path2 = b"/data/local/tmp/uma_predict.log\\0";\n'
         '    unsafe {',
-        1,
     ),
-    # 5) reader: merge every sink so a crash is visible even if only one path
-    #    was writable at the time.
     (
+        "crash_log_reader",
         '    match std::fs::read_to_string("/data/data/jp.pokemon.pokeuma/files/uma_predict.log") {\n'
         '        Ok(s) if !s.is_empty() => s,\n'
         '        _ => match std::fs::read_to_string("/data/local/tmp/uma_predict.log") {\n'
@@ -197,21 +194,21 @@ REPLACEMENTS = [
         '        return r#"{"error":"no_crash_log"}"#.to_string();\n'
         '    }\n'
         '    parts.join("\\n--- next sink ---\\n")',
-        1,
     ),
-    # 6) pre-warm before any signal handler can fire.
     (
+        "prewarm_call",
         'fn init_crash_handler() {\n    unsafe {',
         'fn init_crash_handler() {\n    hl_crash_log_init();\n    unsafe {',
-        1,
     ),
-    # 7) boot tracer fallback directory.
     (
+        "boot_trace_fallback",
         '        .unwrap_or_else(|| "/data/data/jp.pokemon.pokeuma/files".to_string());',
         '        .unwrap_or_else(|| hl_crash_log_dir().to_string());',
-        1,
     ),
 ]
+
+# Anchors that legitimately appear more than once; anything else must be 1:1.
+MULTI_OK = {"openoptions_sinks"}
 
 
 def apply() -> str:
@@ -219,30 +216,42 @@ def apply() -> str:
     if MARK in text:
         return "already_applied"
 
-    for old, new, expected in REPLACEMENTS:
+    counts = []
+    for label, old, new in REPLACEMENTS:
         found = text.count(old)
-        if found != expected:
+        if found == 0:
+            raise RuntimeError(f"anchor MISSING ({label}): {old.strip()[:70]!r}")
+        if found > 1 and label not in MULTI_OK:
             raise RuntimeError(
-                f"anchor count={found} (expect {expected}): {old.strip()[:70]!r}"
+                f"anchor ambiguous ({label}) count={found} (expect 1): {old.strip()[:70]!r}"
             )
-        text = text.replace(old, new, 1)
+        text = text.replace(old, new)
+        counts.append(f"{label}={found}")
+
+    # Fail closed: no crash sink may still target the package that is not running.
+    if 'let path = b"/data/data/jp.pokemon.pokeuma' in text:
+        raise RuntimeError("regression: signal handler still writes to the dead path")
 
     SOURCE.write_text(text, encoding="utf-8")
 
     cargo = CARGO.read_text(encoding="utf-8")
     if f'version = "{BASE_VERSION}"' not in cargo:
         raise RuntimeError(f"Cargo.toml is not at {BASE_VERSION}, refusing to bump")
-    cargo = cargo.replace(f'version = "{BASE_VERSION}"', f'version = "{NEW_VERSION}"', 1)
+    cargo = cargo.replace(
+        f'version = "{BASE_VERSION}"', f'version = "{NEW_VERSION}"', 1
+    )
     CARGO.write_text(cargo, encoding="utf-8")
 
     lock = LOCK.read_text(encoding="utf-8")
     pair = f'name = "hachimi_ura"\nversion = "{BASE_VERSION}"'
     if pair not in lock:
         raise RuntimeError(f"Cargo.lock hachimi_ura is not at {BASE_VERSION}")
-    lock = lock.replace(pair, f'name = "hachimi_ura"\nversion = "{NEW_VERSION}"', 1)
+    lock = lock.replace(
+        pair, f'name = "hachimi_ura"\nversion = "{NEW_VERSION}"', 1
+    )
     LOCK.write_text(lock, encoding="utf-8")
 
-    return f"applied sites={len(REPLACEMENTS)} version={NEW_VERSION}"
+    return f"applied {' '.join(counts)} version={NEW_VERSION}"
 
 
 if __name__ == "__main__":
