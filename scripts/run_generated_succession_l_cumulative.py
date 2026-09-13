@@ -4,18 +4,9 @@ import hashlib
 import re
 
 # 本候选在累计生成源码前固定唯一发布版本；Cargo.toml与lock必须同步。
-cargo_toml = Path('hachimi_ura_plugin/Cargo.toml')
-toml_text = cargo_toml.read_text(encoding='utf-8')
-toml_text = toml_text.replace('version = "3.27.9"', 'version = "3.27.11"', 1)
-cargo_toml.write_text(toml_text, encoding='utf-8')
-cargo_lock = Path('hachimi_ura_plugin/Cargo.lock')
-lock_text = cargo_lock.read_text(encoding='utf-8')
-package_anchor = 'name = "hachimi_ura"\nversion = "3.27.4"'
-if package_anchor in lock_text:
-    lock_text = lock_text.replace(package_anchor, 'name = "hachimi_ura"\nversion = "3.27.11"', 1)
-elif 'name = "hachimi_ura"\nversion = "3.27.11"' not in lock_text:
-    raise RuntimeError('hachimi_ura Cargo.lock package version anchor missing')
-cargo_lock.write_text(lock_text, encoding='utf-8')
+# 版本号单源化：用幂等bump脚本从任意当前版本提升到固定基线，
+# 杜绝字面锚点漂移导致 replace 静默失效、发布被卡。
+subprocess.run(['python3', 'scripts/bump_plugin_version.py', '3.27.11'], check=True)
 
 
 def apply_next_generation_foundation() -> None:
@@ -301,8 +292,8 @@ for pass_no in (1,2):
     source=Path('hachimi_ura_plugin/src/lib.rs').read_bytes()
     Path(f'source-{pass_no}.sha').write_text(hashlib.sha256(source).hexdigest()+'\n')
 assert Path('source-1.sha').read_text()==Path('source-2.sha').read_text()
-assert 'version = "3.27.11"' in cargo_toml.read_text(encoding='utf-8')
-assert 'name = "hachimi_ura"\nversion = "3.27.11"' in cargo_lock.read_text(encoding='utf-8')
+assert 'version = "3.27.11"' in Path('hachimi_ura_plugin/Cargo.toml').read_text(encoding='utf-8')
+assert 'name = "hachimi_ura"\nversion = "3.27.11"' in Path('hachimi_ura_plugin/Cargo.lock').read_text(encoding='utf-8')
 assert 'Next-generation passive init and HookRegistry foundation' in Path('hachimi_ura_plugin/src/lib.rs').read_text(encoding='utf-8')
 assert 'Exact single-method IL2CPP probe B1' in Path('hachimi_ura_plugin/src/lib.rs').read_text(encoding='utf-8')
 print('generated_succession_l_cumulative=idempotent_v3.27.11_next_generation_foundation_exact_method_probe')
