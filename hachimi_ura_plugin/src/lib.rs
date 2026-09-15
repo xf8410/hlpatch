@@ -4233,6 +4233,86 @@ unsafe fn read_chara_skills(
     skills
 }
 
+/// ★ v3.28.3: Skill Tips (buyable skills) — read from Character object.
+/// Element layout per URA protocol dump (Gallop.SkillTips): group_id@0x10, rarity@0x14, level@0x18.
+/// Getter-name resolution first (same pattern as read_chara_skills), raw field-offset fallback second.
+/// Returns Vec<(group_id, rarity, level)>
+unsafe fn read_skill_tips(
+    chara_class: *mut c_void,
+    chara_obj: *const c_void,
+    image: *const c_void,
+) -> Vec<(i32, i32, i32)> {
+    let mut tips: Vec<(i32, i32, i32)> = Vec::new();
+
+    // tips element class: Gallop.SkillTips (reference type, fields @ 0x10/0x14/0x18)
+    let tips_elem_class = find_class_by_short_name(image, "SkillTips");
+    let read_tip = |ep: *mut c_void| -> Option<(i32, i32, i32)> {
+        if ep.is_null() {
+            return None;
+        }
+        let base = ep as *const u8;
+        // Getter path: get_GroupId / get_Rarity / get_Level on the tips element class
+        if !tips_elem_class.is_null() {
+            let gid = call_getter_int(tips_elem_class, ep, "get_GroupId");
+            let rar = call_getter_int(tips_elem_class, ep, "get_Rarity");
+            let lvl = call_getter_int(tips_elem_class, ep, "get_Level");
+            if gid > 0 || rar > 0 {
+                return Some((gid, rar, lvl));
+            }
+        }
+        // Fallback: raw field offsets (URA protocol dump: 0x10/0x14/0x18)
+        let gid = std::ptr::read_unaligned::<i32>(base.add(0x10) as *const i32);
+        let rar = std::ptr::read_unaligned::<i32>(base.add(0x14) as *const i32);
+        let lvl = std::ptr::read_unaligned::<i32>(base.add(0x18) as *const i32);
+        if gid > 0 || rar > 0 {
+            Some((gid, rar, lvl))
+        } else {
+            None
+        }
+    };
+
+    // Approach 1: get_SkillTipsList() -> List<SkillTips>
+    let list = call_getter_on_instance(chara_class, chara_obj, "get_SkillTipsList");
+    if !list.is_null() {
+        let lb = list as *const u8;
+        let count =
+            std::ptr::read_unaligned::<usize>(lb.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if count > 0 && count < 500 {
+            for i in 0..count {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(
+                    lb.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+                );
+                if let Some(t) = read_tip(ep) {
+                    tips.push(t);
+                }
+            }
+        }
+        if !tips.is_empty() {
+            return tips;
+        }
+    }
+
+    // Approach 2: skill_tips_array field direct read
+    let field_arr = read_field_value(chara_class, chara_obj, "skill_tips_array");
+    if !field_arr.is_null() {
+        let ab = field_arr as *const u8;
+        let count =
+            std::ptr::read_unaligned::<usize>(ab.add(IL2CPP_LIST_COUNT_OFF) as *const usize);
+        if count > 0 && count < 500 {
+            for i in 0..count {
+                let ep = std::ptr::read_unaligned::<*mut c_void>(
+                    ab.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+                );
+                if let Some(t) = read_tip(ep) {
+                    tips.push(t);
+                }
+            }
+        }
+    }
+
+    tips
+}
+
 /// Compute skill evaluation from learned skills using MasterDB
 /// Returns (total_skill_eval, skill_count, skills_breakdown_json)
 fn compute_skill_eval(skills: &[(i32, i32)]) -> (i32, i32, String) {
@@ -4764,6 +4844,13 @@ unsafe fn read_summary_inner_impl() -> String {
     let proper_ground_turf = read_obscured_int_at(chara_obj, 904);
     let proper_ground_dirt = read_obscured_int_at(chara_obj, 924);
 
+    // ★ v3.28.3: Running-style aptitudes via getter (ObscuredInt, same pattern as get_SkillPoint).
+    // Needed by the skill-score engine (URA ApplyProper applies style-conditioned grade modifiers).
+    let proper_style_nige = call_getter_obscured_int(chara_class, chara_obj, "get_ProperRunningStyleNige");
+    let proper_style_senko = call_getter_obscured_int(chara_class, chara_obj, "get_ProperRunningStyleSenko");
+    let proper_style_sashi = call_getter_obscured_int(chara_class, chara_obj, "get_ProperRunningStyleSashi");
+    let proper_style_oikomi = call_getter_obscured_int(chara_class, chara_obj, "get_ProperRunningStyleOikomi");
+
     // Runtime reflection confirms offset 0x198 is ObscuredInt _fixedTurnCharaSeed.
     // This is a named game field, not a complete PRNG state.
     let fixed_turn_chara_seed = if !sm_obj.is_null() {
@@ -4792,6 +4879,23 @@ unsafe fn read_summary_inner_impl() -> String {
         &format!("skill_eval={} count={}", skill_eval, skill_count),
     );
     log_predict_step("S:skills");
+
+    // ★ v3.28.3: Read buyable skill tips (group_id, rarity, level) for skill-score engine
+    let tips_json = {
+        let tips = read_skill_tips(chara_class, chara_obj, image);
+        if tips.is_empty() {
+            "[]".to_string()
+        } else {
+            let parts: Vec<String> = tips
+                .iter()
+                .map(|(g, r, l)| {
+                    format!(r#"{{"group_id":{},"rarity":{},"level":{}}}"#, g, r, l)
+                })
+                .collect();
+            format!("[{}]", parts.join(","))
+        }
+    };
+    log_predict_step("S:tips");
 
     let mot_s = match mot {
         5 => "Best",
@@ -6557,7 +6661,7 @@ unsafe fn read_summary_inner_impl() -> String {
 
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"{}","year":{},"turn":{},"raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"verified_ramen_upstream_semantics","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"ai":{}{}{}{} }}"#,
+        r#"{{"version":"{}","year":{},"turn":{},"raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"verified_ramen_upstream_semantics","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{},"style_nige":{},"style_senko":{},"style_sashi":{},"style_oikomi":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"skill_tips":{},"ai":{}{}{}{} }}"#,
         PLUGIN_VERSION,
         year,
         cumulative_turn,
@@ -6587,6 +6691,10 @@ unsafe fn read_summary_inner_impl() -> String {
         proper_dist_long,
         proper_ground_turf,
         proper_ground_dirt,
+        proper_style_nige,
+        proper_style_senko,
+        proper_style_sashi,
+        proper_style_oikomi,
         running_style,
         scenario_progress,
         training_event_type,
@@ -6603,6 +6711,7 @@ unsafe fn read_summary_inner_impl() -> String {
         skill_eval,
         skill_count,
         skills_json,
+        tips_json,
         ai_json,
         team_json,
         ramen_json,
