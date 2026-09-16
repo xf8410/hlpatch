@@ -1,4 +1,4 @@
-name: Release v3.28.3 Pure Data Pipeline (AI Removed)
+name: Release v3.28.3 Pure Data Pipeline (AI Removed, No Screen Mirror)
 
 on:
   workflow_dispatch:
@@ -35,29 +35,14 @@ jobs:
           test "$FIRST_SHA" = "$SECOND_SHA"
           grep -Fq 'fn hl_ptr_mapped(' hachimi_ura_plugin/src/lib.rs
 
-      - name: Apply screen mirror A-stage (v3.28.0)
+      - name: Verify screen mirror is NOT applied (removed per owner decision 2026-09-17)
         run: |
           set -euo pipefail
-          python3 scripts/apply_screen_mirror_frame_a.py
-          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.0"
-          grep -Fq '// ===== Screen mirror frame A-stage (v3.28.0) =====' hachimi_ura_plugin/src/lib.rs
-          grep -Fq 'mirror_egl_swap_handler' hachimi_ura_plugin/src/lib.rs
-          grep -Fq '"/api/frame"' hachimi_ura_plugin/src/lib.rs
-          grep -Fq '"/api/touch"' hachimi_ura_plugin/src/lib.rs
-          grep -Fq 'install_screen_mirror_hook' hachimi_ura_plugin/src/lib.rs
-
-      - name: Qualification greps (mirror invariants)
-        run: |
-          set -euo pipefail
-          for s in \
-            'MIRROR_FRAME: Mutex<Option<Vec<u8>>>' \
-            'MIRROR_TOUCHES: Mutex<Vec<(u64, f32, f32)>>' \
-            'glReadPixels' \
-            'X-Frame-Seq' \
-            'mirror_egl_swap_handler' \
-            'install_screen_mirror_hook'
-          do grep -aFq "$s" hachimi_ura_plugin/src/lib.rs || { echo "MISSING INVARIANT: $s"; exit 1; }
-          done
+          if grep -q 'install_screen_mirror_hook' hachimi_ura_plugin/src/lib.rs; then
+            echo 'screen mirror must not be in this release (lag source, temporarily removed)' >&2
+            exit 1
+          fi
+          echo 'screen_mirror=not_applied (as intended)'
 
       - name: Setup Rust
         run: rustup target add aarch64-linux-android
@@ -140,9 +125,10 @@ jobs:
           binary_sha256=$SHA256
           tag=v3.28.3
           workflow_run=${GITHUB_RUN_ID}
-          baseline=v3.28.1(sigsegv_guard+screen_mirror+anim_skip+signup_plaintext)
-          features=ai_removed_pure_data_pipeline,sigsegv_guard,screen_mirror_frame_a,training_anim_skip,signup_plaintext_observer
-          changes=summary_ai_output_null+event_recommend_route_disabled
+          baseline=v3.27.23(sigsegv_guard)
+          features=ai_removed_pure_data_pipeline,sigsegv_guard,training_anim_skip,signup_plaintext_observer
+          excluded=screen_mirror_frame_a(lag_source_temporarily_removed_per_owner_2026_09_17)
+          changes=summary_ai_output_null+event_recommend_route_disabled+no_screen_mirror
           decision_owner=jueceramen_umaai_rs
           runtime_validation=pending_device_execution
           EOF
@@ -161,14 +147,13 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a v3.28.3 "$GITHUB_SHA" -m "Release v3.28.3"
           git push origin refs/tags/v3.28.3
-          gh release create v3.28.3 --verify-tag --title "v3.28.3 纯数据管道（内置 AI 摘除）" \
-            --notes "基线=v3.28.1（含 SIGSEGV 防护、画面映射、训练动画跳过、签名明文观测），全部功能保留。
+          gh release create v3.28.3 --verify-tag --title "v3.28.3 纯数据管道（摘除内置 AI + 暂停画面映射）" \
+            --notes "基线=v3.27.23+SIGSEGV 防护，动画跳过与签名明文观测保留。
 
-          本版变更：摘除 SO 内置 AI，回归纯数据管道——
-          - /summary 的 ai 字段固定输出 null（v3.27.20 曾做运行时摘除，但 v3.28.1 发布链未继承，本版在源码层固定）
-          - /event/recommend 路由停用（404）；决策全部由 jueceramen（uma-juece-ramen，对齐 umaai-rs MCTS）承担
-          - 数据端点全部保留：/summary、/ramen、/debug/ramen_*、/api/event/choices、/mdb/*、/il2cpp/* 等原样可用
-          - /summary 每次轮询不再执行 AI 评估：减少对象读取与 CPU 开销，降低闪退面
+          本版变更：
+          1. 摘除 SO 内置 AI，回归纯数据管道——/summary 的 ai 字段固定 null（v3.27.20 曾做但 v3.28.1 链未继承，本版源码层固定）；/event/recommend 停用（404）。决策全部由 jueceramen（对齐 umaai-rs MCTS）承担。数据端点全部保留。
+          2. 画面映射（v3.28.0 的 eglSwapBuffers 截屏 hook）本版不上——卡顿源，按机主 2026-09-17 决定暂停；代码保留在 scripts/apply_screen_mirror_frame_a.py，需要时一行回植。
+          3. /summary 每次轮询不再执行 AI 评估：减少对象读取与 CPU 开销，降低闪退面。
 
           后续（v3.28.4 计划）：/il2cpp/classes 等全量枚举端点加分页与响应上限（本次 CI 日志已输出路由诊断锚点）。
           SHA256 见 SHA256SUMS。" \
