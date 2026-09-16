@@ -1,0 +1,186 @@
+name: Release v3.28.3 Pure Data Pipeline (AI Removed)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Generate and validate baseline 3.27.23
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/bump_plugin_version.py 3.27.23
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.23"
+          grep -Fq 'version = "3.27.23"' hachimi_ura_plugin/Cargo.lock
+          grep -Fq 'verified_ramen_upstream_semantics' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'Ramen turn mapping follows upstream umaai-rs semantics' hachimi_ura_plugin/src/lib.rs
+
+      - name: Add SIGSEGV guard (v3.27.23 wrappers, script extracted from v3.28.1)
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          FIRST_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          SECOND_SHA=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST_SHA" = "$SECOND_SHA"
+          grep -Fq 'fn hl_ptr_mapped(' hachimi_ura_plugin/src/lib.rs
+
+      - name: Apply screen mirror A-stage (v3.28.0)
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_screen_mirror_frame_a.py
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.0"
+          grep -Fq '// ===== Screen mirror frame A-stage (v3.28.0) =====' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'mirror_egl_swap_handler' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/frame"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/touch"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'install_screen_mirror_hook' hachimi_ura_plugin/src/lib.rs
+
+      - name: Qualification greps (mirror invariants)
+        run: |
+          set -euo pipefail
+          for s in \
+            'MIRROR_FRAME: Mutex<Option<Vec<u8>>>' \
+            'MIRROR_TOUCHES: Mutex<Vec<(u64, f32, f32)>>' \
+            'glReadPixels' \
+            'X-Frame-Seq' \
+            'mirror_egl_swap_handler' \
+            'install_screen_mirror_hook'
+          do grep -aFq "$s" hachimi_ura_plugin/src/lib.rs || { echo "MISSING INVARIANT: $s"; exit 1; }
+          done
+
+      - name: Setup Rust
+        run: rustup target add aarch64-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Apply v3.28.1 feature patches (signup + anim-skip + dynamic version)
+        run: |
+          set -euo pipefail
+          python3 scripts/bump_plugin_version.py 3.28.1
+          python3 scripts/apply_signup_plaintext_observer.py
+          python3 scripts/apply_training_anim_skip.py
+          FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          python3 scripts/apply_training_anim_skip.py
+          SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST" = "$SECOND"
+          python3 scripts/apply_dynamic_version.py
+          grep -Fq 'mod training_anim_skip;' hachimi_ura_plugin/src/lib.rs
+          grep -Fq '"/api/training/anim_skip"' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'mod signup_plaintext;' hachimi_ura_plugin/src/lib.rs
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.1"
+
+      - name: Bump to 3.28.3 and strip built-in AI (pure data pipeline)
+        run: |
+          set -euo pipefail
+          python3 scripts/bump_plugin_version.py 3.28.3
+          python3 scripts/strip_ai_output_v3283.py
+          FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          python3 scripts/strip_ai_output_v3283.py
+          SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST" = "$SECOND"
+          grep -Fq 'v3.28.3 ai removed' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'let ai_json = String::from("null")' hachimi_ura_plugin/src/lib.rs
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.3"
+          grep -Fq 'version = "3.28.3"' hachimi_ura_plugin/Cargo.lock
+
+      - name: Route diagnostics for follow-up hardening (informational, never fails)
+        run: |
+          set -uo pipefail
+          echo '--- event/recommend occurrences after strip ---'
+          grep -n 'event/recommend' hachimi_ura_plugin/src/lib.rs | head -20 || true
+          echo '--- evaluate_ai / ai_result_to_json remaining refs ---'
+          grep -n -E 'fn evaluate_ai|ai_result_to_json' hachimi_ura_plugin/src/lib.rs | head -20 || true
+          echo '--- il2cpp/classes route lines (pagination follow-up anchors) ---'
+          grep -n 'il2cpp/classes' hachimi_ura_plugin/src/lib.rs | head -20 || true
+          echo '--- class enumeration function candidates ---'
+          grep -n -E 'fn [a-z_]*(all_classes|classes|class_list)[a-z_]*' hachimi_ura_plugin/src/lib.rs | head -20 || true
+          echo '--- sniff hook install entry (default-state follow-up) ---'
+          grep -n -E 'fn (install_api_sniff_hooks|install_sniff_hooks)' hachimi_ura_plugin/src/lib.rs | head -10 || true
+
+      - name: Build Android arm64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee release-v3283-cargo.log
+
+      - name: Prepare immutable release assets
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          cargo_version=3.28.3
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.28.3
+          workflow_run=${GITHUB_RUN_ID}
+          baseline=v3.28.1(sigsegv_guard+screen_mirror+anim_skip+signup_plaintext)
+          features=ai_removed_pure_data_pipeline,sigsegv_guard,screen_mirror_frame_a,training_anim_skip,signup_plaintext_observer
+          changes=summary_ai_output_null+event_recommend_route_disabled
+          decision_owner=jueceramen_umaai_rs
+          runtime_validation=pending_device_execution
+          EOF
+
+      - name: Create immutable release (refuse overwrite)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          if gh release view v3.28.3 > /dev/null 2>&1; then
+            echo 'v3.28.3 already exists; refusing to overwrite' >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v3.28.3 "$GITHUB_SHA" -m "Release v3.28.3"
+          git push origin refs/tags/v3.28.3
+          gh release create v3.28.3 --verify-tag --title "v3.28.3 纯数据管道（内置 AI 摘除）" \
+            --notes "基线=v3.28.1（含 SIGSEGV 防护、画面映射、训练动画跳过、签名明文观测），全部功能保留。
+
+          本版变更：摘除 SO 内置 AI，回归纯数据管道——
+          - /summary 的 ai 字段固定输出 null（v3.27.20 曾做运行时摘除，但 v3.28.1 发布链未继承，本版在源码层固定）
+          - /event/recommend 路由停用（404）；决策全部由 jueceramen（uma-juece-ramen，对齐 umaai-rs MCTS）承担
+          - 数据端点全部保留：/summary、/ramen、/debug/ramen_*、/api/event/choices、/mdb/*、/il2cpp/* 等原样可用
+          - /summary 每次轮询不再执行 AI 评估：减少对象读取与 CPU 开销，降低闪退面
+
+          后续（v3.28.4 计划）：/il2cpp/classes 等全量枚举端点加分页与响应上限（本次 CI 日志已输出路由诊断锚点）。
+          SHA256 见 SHA256SUMS。" \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt hachimi_ura_plugin/release-v3283-cargo.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhachimi_ura-v3.28.3-run-${{ github.run_id }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/release-v3283-cargo.log
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: warn
