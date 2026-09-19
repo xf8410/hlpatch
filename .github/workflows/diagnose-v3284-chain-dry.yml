@@ -1,7 +1,7 @@
 name: "Diagnose v3.28.4 chain (dry run + anchor dumps)"
 
 # 只读干跑：在真实基线上把 v3.28.4 补丁链整条预演（不编译、不建 tag、不发 release），
-# 并把写 meta 直查路由需要的锚点区段全部 dump 出来（sqlite3mc 机件、钥匙读取、路由分发）。
+# 本轮起包含 meta 直查路由补丁的锚点验证与幂等检查。
 # push 触发器：workflow_dispatch 只认默认分支上的文件，push 触发不受此限。
 on:
   workflow_dispatch:
@@ -30,11 +30,10 @@ jobs:
           F=hachimi_ura_plugin/src/lib.rs
 
           echo "== branch tip =="
-          git log --oneline -3
-          echo "== baseline reachable =="
+          git log --oneline -2
           git cat-file -e "$BASELINE^{commit}" && echo baseline_ok || echo baseline_MISSING
 
-          echo "== fetch main helpers (bump/strip/DV/guard) =="
+          echo "== fetch main helpers =="
           git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
           echo fetch_rc=$?
 
@@ -43,107 +42,94 @@ jobs:
           echo pin_rc=$?
           git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
           echo helper_fetch_rc=$?
-          for f in run_generated_succession_l_cumulative.py apply_sigsegv_guard_v32723.py apply_crash_log_path_fix.py bump_plugin_version.py strip_ai_output_v3283.py apply_dynamic_version.py; do
+          for f in run_generated_succession_l_cumulative.py apply_sigsegv_guard_v32723.py apply_crash_log_path_fix.py apply_meta_query_route_v3284.py strip_ai_output_v3283.py apply_dynamic_version.py; do
             if [ -f "scripts/$f" ]; then echo "present: $f"; else echo "ABSENT: $f"; fi
           done
 
-          echo "== stage 1: cumulative =="
-          python3 scripts/run_generated_succession_l_cumulative.py > /tmp/cum.log 2>&1; echo rc=$?; tail -n 5 /tmp/cum.log
-          python3 scripts/bump_plugin_version.py 3.27.23 > /tmp/b1.log 2>&1; echo bump_2723_rc=$?; cat /tmp/b1.log
+          echo "== stage 1: cumulative + bump 3.27.23 =="
+          python3 scripts/run_generated_succession_l_cumulative.py > /tmp/cum.log 2>&1; echo rc=$?; tail -n 3 /tmp/cum.log
+          python3 scripts/bump_plugin_version.py 3.27.23 > /tmp/b1.log 2>&1; echo bump_2723_rc=$?
 
-          echo "== stage 2: sigsegv guard x2 (idempotency) =="
-          python3 scripts/apply_sigsegv_guard_v32723.py > /tmp/g1.log 2>&1; echo guard1_rc=$?; sed -n '1,4p' /tmp/g1.log
+          echo "== stage 2: sigsegv guard x2 =="
+          python3 scripts/apply_sigsegv_guard_v32723.py > /tmp/g1.log 2>&1; echo guard1_rc=$?
           S1=$(sha256sum "$F" | cut -c1-16)
           python3 scripts/apply_sigsegv_guard_v32723.py > /tmp/g2.log 2>&1; echo guard2_rc=$?
           S2=$(sha256sum "$F" | cut -c1-16)
           echo "guard_sha1=$S1 guard_sha2=$S2"
-          printf 'hl_ptr_mapped=%s\n' "$(grep -a -c 'fn hl_ptr_mapped(' "$F")"
 
-          echo "== stage 3: bump 3.28.0 (mirror step intentionally skipped) =="
-          python3 scripts/bump_plugin_version.py 3.28.0 > /tmp/b2.log 2>&1; echo bump_2800_rc=$?; cat /tmp/b2.log
+          echo "== stage 3: bump 3.28.0 =="
+          python3 scripts/bump_plugin_version.py 3.28.0 > /tmp/b2.log 2>&1; echo bump_2800_rc=$?
 
-          echo "== stage 4: crash-log fix (3.28.0 -> 3.28.2) =="
-          python3 scripts/apply_crash_log_path_fix.py > /tmp/c1.log 2>&1; echo crashlog_rc=$?; cat /tmp/c1.log
-          printf 'crashlog_dir=%s\n' "$(grep -a -c 'fn hl_crash_log_dir()' "$F")"
+          echo "== stage 4: crash-log fix =="
+          python3 scripts/apply_crash_log_path_fix.py > /tmp/c1.log 2>&1; echo crashlog_rc=$?
+          tail -n 1 /tmp/c1.log
 
           echo "== stage 5: strip built-in AI =="
-          python3 scripts/strip_ai_output_v3283.py > /tmp/s1.log 2>&1; echo strip_rc=$?; cat /tmp/s1.log
-          printf 'ai_marker=%s\n' "$(grep -a -c 'v3.28.3 ai removed' "$F")"
-          printf 'ai_json_null=%s\n' "$(grep -a -c 'let ai_json = String::from("null")' "$F")"
+          python3 scripts/strip_ai_output_v3283.py > /tmp/s1.log 2>&1; echo strip_rc=$?
 
           echo "== stage 6: dynamic version =="
-          python3 scripts/apply_dynamic_version.py > /tmp/d1.log 2>&1; echo dyn_rc=$?; cat /tmp/d1.log
-          printf 'literal_3_22_91=%s\n' "$(grep -a -c '3.22.91' "$F")"
+          python3 scripts/apply_dynamic_version.py > /tmp/d1.log 2>&1; echo dyn_rc=$?
 
-          echo "== stage 7: bump 3.28.4 (final) =="
-          python3 scripts/bump_plugin_version.py 3.28.4 > /tmp/b3.log 2>&1; echo bump_2804_rc=$?; cat /tmp/b3.log
+          echo "== stage 7: meta query route x2 (idempotency) =="
+          python3 scripts/apply_meta_query_route_v3284.py > /tmp/m1.log 2>&1; echo meta1_rc=$?; cat /tmp/m1.log
+          M1=$(sha256sum "$F" | cut -c1-16)
+          python3 scripts/apply_meta_query_route_v3284.py > /tmp/m2.log 2>&1; echo meta2_rc=$?; cat /tmp/m2.log
+          M2=$(sha256sum "$F" | cut -c1-16)
+          echo "meta_sha1=$M1 meta_sha2=$M2"
 
-          echo "== final anchor counts (would-be v3.28.4 tree) =="
+          echo "== stage 8: bump 3.28.4 (final) =="
+          python3 scripts/bump_plugin_version.py 3.28.4 > /tmp/b3.log 2>&1; echo bump_2804_rc=$?
+
+          echo "== final counts (would-be v3.28.4 tree) =="
+          printf 'meta_fn=%s\n' "$(grep -a -c 'fn debug_resource_meta_query(' "$F")"
+          printf 'meta_route=%s\n' "$(grep -a -c '} else if path == "/debug/resource_meta_query" {' "$F")"
+          printf 'meta_dispatch=%s\n' "$(grep -a -c 'debug_resource_meta_query(&full_uri)' "$F")"
+          printf 'meta_dl_plain=%s\n' "$(grep -a -c '"/debug/resource_meta_schema","/debug/resource_meta_query",' "$F")"
+          printf 'meta_health_escaped=%s\n' "$(grep -a -c '\\"/debug/resource_meta_query\\",' "$F")"
+          printf 'schema_fn=%s\n' "$(grep -a -c 'fn debug_resource_meta_schema' "$F")"
           printf 'mirror_calls=%s\n' "$(grep -a -c 'install_screen_mirror_hook' "$F")"
           printf 'crashlog_dir=%s\n' "$(grep -a -c 'hl_crash_log_dir' "$F")"
           printf 'sniff_route=%s\n' "$(grep -a -c '/api/sniff' "$F")"
           printf 'sniff_hooks=%s\n' "$(grep -a -c 'fn install_api_sniff_hooks' "$F")"
           printf 'obs_storage=%s\n' "$(grep -a -c 'hlpatch-observations' "$F")"
+          printf 'ai_marker=%s\n' "$(grep -a -c 'v3.28.3 ai removed' "$F")"
+          printf 'event_recommend_lit=%s\n' "$(grep -a -c '"/event/recommend"' "$F")"
           printf 'plugin_version=%s\n' "$(grep -a -c 'PLUGIN_VERSION' "$F")"
-          printf 'probe_route=%s\n' "$(grep -a -c '} else if path == "/debug/resource_meta_probe" {' "$F")"
-          printf 'schema_fn=%s\n' "$(grep -a -c 'fn debug_resource_meta_schema' "$F")"
-          printf 'meta_key_word=%s\n' "$(grep -a -c 'ura_meta_key' "$F")"
-          printf 'meta_key_hex_static=%s\n' "$(grep -a -c 'META_KEY_HEX' "$F")"
-          printf 'resolve_module_symbol=%s\n' "$(grep -a -c 'fn resolve_module_symbol' "$F")"
-          printf 'find_resource_storage=%s\n' "$(grep -a -c 'fn find_resource_storage' "$F")"
-          printf 'meta_query_free=%s\n' "$(grep -a -c 'resource_meta_query' "$F")"
+          printf 'cargo_version=%s\n' "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)"
 
-          echo "== dump A: route dispatch around meta schema/probe =="
-          ND=$(grep -a -n -m1 '} else if path == "/debug/resource_meta_schema" {' "$F" | cut -d: -f1)
+          echo "== meta fn head (first 24 lines) =="
+          NMQ=$(grep -a -n -m1 'fn debug_resource_meta_query(' "$F" | cut -d: -f1)
+          NMQ=${NMQ:-0}
+          echo "fn_line=$NMQ"
+          sed -n "${NMQ},$((NMQ+24))p" "$F" || true
+
+          echo "== meta fn tail (last 28 lines of fn region) =="
+          sed -n "$((NMQ+250)),$((NMQ+282))p" "$F" || true
+
+          echo "== route context after patch =="
+          ND=$(grep -a -n -m1 '} else if path == "/debug/resource_meta_query" {' "$F" | cut -d: -f1)
           ND=${ND:-9000}
-          echo "anchor_line=$ND"
-          sed -n "$((ND-8)),$((ND+18))p" "$F" || true
+          sed -n "$((ND-4)),$((ND+8))p" "$F" || true
 
-          echo "== dump B: debug_resource_meta_schema body (template for query route) =="
-          NS=$(grep -a -n -m1 'fn debug_resource_meta_schema' "$F" | cut -d: -f1)
-          NS=${NS:-13000}
-          echo "fn_line=$NS"
-          sed -n "$((NS-6)),$((NS+170))p" "$F" || true
+          echo "== DL_ALLOWED + health list context =="
+          grep -a -n -m 4 'resource_meta_query' "$F" || true
 
-          echo "== dump C: ura_meta_key / key persistence / meta key endpoint =="
-          grep -a -n -m 40 'ura_meta_key\|fn debug_resource_meta_key' "$F" || true
-          NK=$(grep -a -n -m1 'fn debug_resource_meta_key' "$F" | cut -d: -f1)
-          NK=${NK:-2000}
-          echo "fn_line=$NK"
-          sed -n "$((NK-4)),$((NK+95))p" "$F" || true
-
-          echo "== dump D: META_KEY_HEX static + capture site =="
-          grep -a -n -m 30 'META_KEY_HEX' "$F" || true
-          NM=$(grep -a -n -m1 'static META_KEY_HEX' "$F" | cut -d: -f1)
-          NM=${NM:-2000}
-          echo "static_line=$NM"
-          sed -n "$((NM-8)),$((NM+34))p" "$F" || true
-
-          echo "== dump E: libnative sqlite3mc wrapper region =="
-          NO=$(grep -a -n -m1 'let open_v2: OpenV2' "$F" | cut -d: -f1)
-          NO=${NO:-2000}
-          echo "open_v2_line=$NO"
-          sed -n "$((NO-70)),$((NO+230))p" "$F" || true
-
-          echo "== dump F: wrapper call sites + symbol resolution =="
-          grep -a -n -m 30 'open_v2(\|key_fn(\|prep(\|step(\|coltext(\|fin(' "$F" || true
-          grep -a -n -m 40 'resolve_module_symbol(' "$F" || true
-          grep -a -n -m 60 'sqlite3_key_v2\|sqlite3_key\|sqlite3_prepare_v2\|sqlite3_step\|sqlite3_column_text\|sqlite3_finalize\|sqlite3_close\|sqlite3_open\|sqlite3_errmsg\|sqlite3mc' "$F" || true
-
-          echo "== dump G: helper inventory =="
-          grep -a -n -m 30 'fn hex_encode\|fn json_escape\|fn parse_query\|fn to_cstr\|fn find_resource_storage\|fn boot_trace\|fn db_track' "$F" || true
-          grep -a -n -m 12 'libnative' "$F" || true
-          grep -a -n -m 20 'static .*Mutex<' "$F" | head -20 || true
-
-          echo "== dump H: resource_file_dl handler (param + meta usage) =="
-          grep -a -n -A100 '"/debug/resource_file_dl"' "$F" | head -160 || true
-
-          echo "== dump I: ai_json + event/recommend after strip =="
-          grep -a -n -m2 -B3 -A8 'let ai_json' "$F" || true
-          grep -a -n -m 12 'event/recommend\|__recommend_disabled' "$F" || true
-
-          echo "== dump J: /health version literal after DV =="
-          grep -a -n -m 3 'PLUGIN_VERSION,\|"version"' "$F" | head -10 || true
+          echo "== balance sanity (brace/paren counts near fn region) =="
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path('hachimi_ura_plugin/src/lib.rs').read_text(encoding='utf-8')
+          start = text.find('fn debug_resource_meta_query(')
+          end = text.find('fn debug_resource_meta_schema', start)
+          region = text[start:end] if start >= 0 and end > start else ''
+          print('region_len=%d' % len(region))
+          print('braces=%d parens=%d brackets=%d' % (
+              region.count('{') - region.count('}'),
+              region.count('(') - region.count(')'),
+              region.count('[') - region.count(']')))
+          print('raw_strings=%d' % region.count('r#"'))
+          print('close_raw=%d' % region.count('"#'))
+          PY
 
           echo "== dry run complete =="
           exit 0
