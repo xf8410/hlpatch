@@ -1,4 +1,4 @@
-name: Diagnose meta.sqlcipher gate (read-only source audit)
+name: Diagnose meta.sqlcipher gate (read-only source audit v2)
 
 on:
   workflow_dispatch:
@@ -15,29 +15,17 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Locate meta.sqlcipher / ura_meta_key / disabled_v anchors in production source
+      - name: Dump sqlcipher hook section and flag-file logic
         run: |
           set -uo pipefail
           F=hachimi_ura_plugin/src/lib.rs
-          echo "=== file size ==="
-          wc -c "$F"
-          echo "=== all occurrences: meta.sqlcipher (with 8 lines context) ==="
-          grep -n -C8 'meta\.sqlcipher' "$F" || echo 'no literal meta.sqlcipher'
-          echo "=== all occurrences: ura_meta_key (with 8 lines context) ==="
-          grep -n -C8 'ura_meta_key' "$F" || echo 'no literal ura_meta_key'
-          echo "=== all occurrences: disabled_v (with 4 lines context) ==="
-          grep -n -C4 'disabled_v' "$F" || echo 'no literal disabled_v'
-          echo "=== case-insensitive sqlcipher sweep (line numbers only) ==="
-          grep -n -i 'sqlcipher' "$F" | head -60 || echo 'no sqlcipher anywhere'
-          echo "=== resource_meta_key route handler context ==="
-          grep -n -C6 'resource_meta_key' "$F" | head -120 || echo 'no resource_meta_key'
-          echo "=== sqlite3_key references (line numbers only) ==="
-          grep -n -i 'sqlite3_key' "$F" | head -40 || echo 'no sqlite3_key references'
-          echo "=== git log touching meta/sqlcipher (last 20) ==="
-          git log --oneline -20 -i --grep='sqlcipher' || true
-          git log --oneline -20 -i --grep='meta_key' || true
-          echo "=== which release workflow first mentions disabled_v3.24.57 ==="
-          git grep -n 'disabled_v3\.24\.57' $(git rev-list --all --max-count=200) -- 2>/dev/null | head -20 || echo 'not found in last 200 commits'
-
-      - name: Summary
-        run: echo "diagnosis complete - see log above"
+          echo "=== total lines ==="
+          wc -l "$F"
+          echo "=== sqlcipher section: lines 12280-12520 (verbatim) ==="
+          sed -n '12280,12520p' "$F"
+          echo "=== flag file path candidates (grep -a, case-insensitive) ==="
+          grep -a -n -i -E 'sqlcipher[_-]?flag|flag[_-]?file|flag[_-]?path|enable.*sqlcipher|sqlcipher.*enable|\.sqlcipher|media.*dir.*flag|getExternalStorage|/storage/emulated' "$F" | head -60
+          echo "=== set_hook_status sqlcipher call sites ==="
+          grep -a -n -B6 -A20 'set_hook_status("meta.sqlcipher"' "$F" | head -200
+          echo "=== v3.24.59 safe-subset comment block ==="
+          grep -a -n -B4 -A30 'safe sqlcipher hook subset\|skip open_v2/key\|Hachimi-owned' "$F" | head -160
