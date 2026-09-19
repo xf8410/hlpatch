@@ -1,0 +1,153 @@
+name: Diagnose v3.28.4 chain (dry run: anchor dumps + rehearsal)
+
+# 只读干跑：在真实基线上把 v3.28.4 的补丁链整条预演一遍（不编译、不建 tag、不发 release）。
+# 同时把写 meta 直查路由需要的全部锚点区段 dump 出来（sqlite3mc 机件、钥匙读取、路由分发）。
+# push 触发器（workflow_dispatch 只认默认分支上的文件；push 触发不受此限）。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v3284-meta-query
+    paths:
+      - .github/workflows/diagnose-v3284-chain-dry.yml
+
+permissions:
+  contents: read
+
+jobs:
+  dry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Rehearse v3.28.4 patch chain on the real baseline (no build, no release)
+        run: |
+          set +e
+          BASELINE=721c086220ea081523229d88623de5abddd97eaa
+          F=hachimi_ura_plugin/src/lib.rs
+
+          echo "== branch tip =="
+          git log --oneline -5
+          echo; echo "== scripts on branch =="
+          ls scripts/ | sed -n '1,140p'
+          echo; echo "== baseline reachable =="
+          git cat-file -e "$BASELINE^{commit}" && echo baseline_ok || echo baseline_MISSING
+
+          echo; echo "== fetch origin/main tree (helper scripts) =="
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          echo fetch_rc=$?
+          git rev-parse refs/remotes/origin/main
+
+          echo; echo "== pin baseline skeleton =="
+          git checkout "$BASELINE" -- scripts hachimi_ura_plugin
+          echo pin_rc=$?
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          echo helper_fetch_rc=$?
+          for f in run_generated_succession_l_cumulative.py apply_sigsegv_guard_v32723.py apply_crash_log_path_fix.py apply_screen_mirror_frame_a.py bump_plugin_version.py strip_ai_output_v3283.py apply_dynamic_version.py; do
+            if [ -f "scripts/$f" ]; then echo "present: $f"; else echo "ABSENT: $f"; fi
+          done
+          sed -n 's/^version = "\([^"]*\)"/start_v=\1/p' hachimi_ura_plugin/Cargo.toml | sed -n '1p'
+
+          echo; echo "== stage: cumulative =="
+          python3 scripts/run_generated_succession_l_cumulative.py > /tmp/cum.log 2>&1
+          echo cumulative_rc=$?
+          tail -n 6 /tmp/cum.log
+          python3 scripts/bump_plugin_version.py 3.27.23 > /tmp/b1.log 2>&1
+          echo bump_2723_rc=$?
+          cat /tmp/b1.log
+
+          echo; echo "== stage: sigsegv guard (twice, idempotency) =="
+          python3 scripts/apply_sigsegv_guard_v32723.py > /tmp/g1.log 2>&1
+          echo guard1_rc=$?
+          sha1sum "$F" | cut -c1-16
+          python3 scripts/apply_sigsegv_guard_v32723.py > /tmp/g2.log 2>&1
+          echo guard2_rc=$?
+          sha1sum "$F" | cut -c1-16
+          sed -n '1,6p' /tmp/g1.log
+          printf 'hl_ptr_mapped_count=%s\n' "$(grep -a -c 'fn hl_ptr_mapped(' "$F")"
+
+          echo; echo "== stage: bump 3.28.0 (replaces the mirror step) =="
+          python3 scripts/bump_plugin_version.py 3.28.0 > /tmp/b2.log 2>&1
+          echo bump_2800_rc=$?
+          cat /tmp/b2.log
+          sed -n 's/^version = "\([^"]*\)"/v=\1/p' hachimi_ura_plugin/Cargo.toml | sed -n '1p'
+
+          echo; echo "== stage: crash-log fix (3.28.0 -> 3.28.2) =="
+          python3 scripts/apply_crash_log_path_fix.py > /tmp/c1.log 2>&1
+          echo crashlog_rc=$?
+          cat /tmp/c1.log
+          printf 'crashlog_dir_count=%s\n' "$(grep -a -c 'fn hl_crash_log_dir()' "$F")"
+
+          echo; echo "== stage: strip built-in AI =="
+          python3 scripts/strip_ai_output_v3283.py > /tmp/s1.log 2>&1
+          echo strip_rc=$?
+          cat /tmp/s1.log
+          printf 'ai_marker_count=%s\n' "$(grep -a -c 'v3.28.3 ai removed' "$F")"
+
+          echo; echo "== stage: dynamic version =="
+          python3 scripts/apply_dynamic_version.py > /tmp/d1.log 2>&1
+          echo dyn_rc=$?
+          cat /tmp/d1.log
+          printf 'literal_3_22_91=%s\n' "$(grep -a -c '3.22.91' "$F")"
+
+          echo; echo "== stage: bump 3.28.4 (final) =="
+          python3 scripts/bump_plugin_version.py 3.28.4 > /tmp/b3.log 2>&1
+          echo bump_2804_rc=$?
+          cat /tmp/b3.log
+
+          echo; echo "== final anchor counts in the would-be v3.28.4 tree =="
+          printf 'mirror_calls=%s\n' "$(grep -a -c 'install_screen_mirror_hook' "$F")"
+          printf 'crashlog_dir=%s\n' "$(grep -a -c 'hl_crash_log_dir' "$F")"
+          printf 'ai_null=%s\n' "$(grep -a -c 'let ai_json = String::from("null")' "$F")"
+          printf 'event_recommend=%s\n' "$(grep -a -c 'event/recommend' "$F")"
+          printf 'plugin_version_uses=%s\n' "$(grep -a -c 'PLUGIN_VERSION' "$F")"
+          printf 'probe_route=%s\n' "$(grep -a -c '} else if path == "/debug/resource_meta_probe" {' "$F")"
+          printf 'schema_fn=%s\n' "$(grep -a -c 'fn debug_resource_meta_schema' "$F")"
+          printf 'meta_key_route=%s\n' "$(grep -a -c '"/debug/resource_meta_key"' "$F")"
+          printf 'meta_key_word=%s\n' "$(grep -a -c 'ura_meta_key' "$F")"
+          printf 'meta_key_hex=%s\n' "$(grep -a -c 'META_KEY_HEX' "$F")"
+          printf 'resolve_module_symbol=%s\n' "$(grep -a -c 'fn resolve_module_symbol' "$F")"
+          printf 'find_resource_storage=%s\n' "$(grep -a -c 'fn find_resource_storage' "$F")"
+          printf 'meta_query_name_free=%s\n' "$(grep -a -c 'resource_meta_query' "$F")"
+
+          echo; echo "== dump: route dispatch around meta schema/probe =="
+          N=$(grep -a -n -m1 '} else if path == "/debug/resource_meta_schema" {' "$F" | cut -d: -f1)
+          N=${N:-9000}
+          echo "anchor_line=$N"
+          sed -n "$((N-6)),$((N+10))p" "$F"
+
+          echo; echo "== dump: ura_meta_key mentions + debug_resource_meta_key body =="
+          grep -a -n -m 40 'ura_meta_key\|fn debug_resource_meta_key' "$F"
+          K=$(grep -a -n -m1 'fn debug_resource_meta_key' "$F" | cut -d: -f1)
+          K=${K:-2000}
+          echo "fn_line=$K"
+          sed -n "$((K-4)),$((K+90))p" "$F"
+
+          echo; echo "== dump: META_KEY_HEX static + capture site =="
+          grep -a -n -m 30 'META_KEY_HEX' "$F"
+          M=$(grep -a -n -m1 'static META_KEY_HEX' "$F" | cut -d: -f1)
+          M=${M:-2000}
+          echo "static_line=$M"
+          sed -n "$((M-8)),$((M+30))p" "$F"
+
+          echo; echo "== dump: libnative sqlite3mc machinery (open/key/prepare/step/text) =="
+          O=$(grep -a -n -m1 'let open_v2: OpenV2' "$F" | cut -d: -f1)
+          O=${O:-2000}
+          echo "open_v2_line=$O"
+          sed -n "$((O-160)),$((O+160))p" "$F"
+
+          echo; echo "== dump: sqlite symbol name candidates =="
+          grep -a -n -m 60 'sqlite3_errmsg\|sqlite3_key_v2\|sqlite3_key\|sqlite3_prepare_v2\|sqlite3_step\|sqlite3_column_text\|sqlite3_finalize\|sqlite3_close\|sqlite3_open' "$F"
+
+          echo; echo "== dump: helper inventory =="
+          grep -a -n -m 30 'fn hex_encode\|fn json_escape\|fn parse_query\|fn to_cstr\|fn find_resource_storage\|fn boot_trace\|libnative' "$F"
+          grep -a -n -m 10 'use rusqlite' "$F"
+
+          echo; echo "== dump: ai_json context after strip =="
+          grep -a -n -m2 -B3 -A6 'let ai_json' "$F"
+
+          echo; echo "== dry run complete =="
+          exit 0
