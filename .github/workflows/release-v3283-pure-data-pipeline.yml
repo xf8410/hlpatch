@@ -97,6 +97,21 @@ jobs:
           echo '--- sniff hook install entry (default-state follow-up) ---'
           grep -n -E 'fn (install_api_sniff_hooks|install_sniff_hooks)' hachimi_ura_plugin/src/lib.rs | head -10 || true
 
+      - name: Reconcile Cargo.lock with manifest (existing dep pins preserved, run 35130588507 fix)
+        working-directory: hachimi_ura_plugin
+        run: |
+          set -euo pipefail
+          BEFORE=$(sha256sum Cargo.lock | cut -d' ' -f1)
+          cargo metadata --format-version 1 > /dev/null
+          AFTER=$(sha256sum Cargo.lock | cut -d' ' -f1)
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo 'Cargo.lock was out of sync with Cargo.toml; reconciled (diff below; existing dep pins untouched):'
+            git --no-pager diff -- Cargo.lock || true
+          else
+            echo 'Cargo.lock already in sync with manifest'
+          fi
+          grep -Fq 'version = "3.28.3"' Cargo.lock
+
       - name: Build Android arm64 release
         working-directory: hachimi_ura_plugin
         env:
