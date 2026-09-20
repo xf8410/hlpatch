@@ -1,0 +1,99 @@
+name: "Diagnose v3.28.5 post-summary pipeline (read-only)"
+
+# 只读诊断 #2：在 v3.28.5 候选链（与上一轮完全相同的补丁链）上，
+# 精确 dump 崩溃窗口相关代码：
+#   [P1] crash handler 头部（msg 缓冲/签名，为追加 addr 做准备）
+#   [P2] read_summary 全body（收尾段：flag 复位 / observe / cache / return 精确原文）
+#   [P3] observe_ramen_transition 全body（未受保护区第一嫌疑人）
+#   [P4] save_endpoint_log 全body + 调用点（handler 收尾）
+#   [P5][P6] 其余 sigsetjmp 使用点上下文
+#   [P7] push 管线（21562 号 sigsetjmp 使用者，"1. summary" 编号注释所在函数）
+#   [P8] push 线程 / 18766 / thread spawn
+#   [P9] 请求处理器尾部（save_endpoint_log 之后的响应写出）
+# 不编译、不发布、不改产品源码；触发：push（本文件路径）+ workflow_dispatch。
+on:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/diagnose-v3285-postsum.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin baseline + apply the exact v3.28.5 candidate chain"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          python3 scripts/run_generated_succession_l_cumulative.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.27.23
+          python3 scripts/apply_sigsegv_guard_v32723.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.28.0
+          python3 scripts/apply_crash_log_path_fix.py > /dev/null
+          python3 scripts/strip_ai_output_v3283.py > /dev/null
+          python3 scripts/apply_dynamic_version.py > /dev/null
+          python3 scripts/apply_meta_query_route_v3284.py > /dev/null
+
+      - name: "Dump post-summary pipeline code (read-only)"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "file_bytes=$(wc -c < "$F")"
+
+          echo '=== [P1] crash handler head 560-700 ==='
+          sed -n '560,700p' "$F"
+
+          echo '=== [P2] read_summary region 4740-4900 ==='
+          sed -n '4740,4900p' "$F"
+
+          echo '=== [P3] observe_ramen_transition ==='
+          grep -an -B4 -A130 'fn observe_ramen_transition' "$F" | head -220 || true
+
+          echo '=== [P4] save_endpoint_log ==='
+          grep -an -B6 -A90 'fn save_endpoint_log' "$F" | head -160 || true
+          grep -an 'save_endpoint_log' "$F" | head -20 || true
+
+          echo '=== [P5] guarded reader A (20040-20260) ==='
+          sed -n '20040,20260p' "$F"
+
+          echo '=== [P6] guarded reader B (21340-21450) ==='
+          sed -n '21340,21450p' "$F"
+
+          echo '=== [P7] push pipeline (21520-21790) ==='
+          sed -n '21520,21790p' "$F"
+
+          echo '=== [P8] push thread / 18766 / spawns ==='
+          grep -an '18766' "$F" | head -30 || true
+          grep -an 'fn [a-z_]*push[a-z_]*' "$F" | head -40 || true
+          grep -an -B3 -A14 'thread::spawn\|Builder::new' "$F" | head -170 || true
+
+          echo '=== [P9] request handler tail 9600-9840 ==='
+          sed -n '9600,9840p' "$F"
+
+          echo '=== [PZ] counts ==='
+          echo "crash_lines=$(grep -a -c 'CRASH at step' "$F" || true)"
+          echo "sjson=$(grep -a -c 'S:json' "$F" || true)"
+          echo "observe_calls=$(grep -a -c 'observe_ramen_transition' "$F" || true)"
+          echo "readsummary_fns=$(grep -a -c 'fn read_summary' "$F" || true)"
+          echo "setjmp_users=$(grep -a -c 'sys_sigsetjmp' "$F" || true)"
