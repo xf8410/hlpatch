@@ -3,6 +3,7 @@ name: "Diagnose v3.28.4 chain (dry run + anchor dumps)"
 # 只读干跑：在真实基线上把 v3.28.4 补丁链整条预演（不编译、不建 tag、不发 release）。
 # 覆盖：cumulative → guard → 崩溃日志修复 → 摘 AI → 动态版本 → meta 直查路由（跑两遍比 sha）→ bump 3.28.4。
 # push 触发器：workflow_dispatch 只认默认分支上的文件，push 触发不受此限。
+# 触发路径含补丁脚本本身：改脚本即自动重跑干跑。
 on:
   workflow_dispatch:
   push:
@@ -10,6 +11,7 @@ on:
       - workbench/v3284-meta-query
     paths:
       - .github/workflows/diagnose-v3284-chain-dry.yml
+      - scripts/apply_meta_query_route_v3284.py
 
 permissions:
   contents: read
@@ -85,7 +87,6 @@ jobs:
           printf 'meta_route=%s\n' "$(grep -a -c '} else if path == "/debug/resource_meta_query" {' "$F")"
           printf 'meta_dispatch=%s\n' "$(grep -a -c 'debug_resource_meta_query(&full_uri)' "$F")"
           printf 'meta_dl_plain=%s\n' "$(grep -a -c '"/debug/resource_meta_schema","/debug/resource_meta_query",' "$F")"
-          printf 'meta_health_escaped=%s\n' "$(grep -a -c '\\"/debug/resource_meta_query\\",' "$F")"
           printf 'schema_fn=%s\n' "$(grep -a -c 'fn debug_resource_meta_schema' "$F")"
           printf 'mirror_calls=%s\n' "$(grep -a -c 'install_screen_mirror_hook' "$F")"
           printf 'crashlog_dir=%s\n' "$(grep -a -c 'hl_crash_log_dir' "$F")"
@@ -103,16 +104,13 @@ jobs:
           echo "fn_line=$NMQ"
           if [ "$NMQ" -gt 0 ]; then sed -n "${NMQ},$((NMQ+24))p" "$F"; fi
 
-          echo "== meta fn tail (last 28 lines of fn region) =="
-          if [ "$NMQ" -gt 0 ]; then sed -n "$((NMQ+250)),$((NMQ+282))p" "$F"; fi
-
           echo "== route context after patch =="
           ND=$(grep -a -n -m1 '} else if path == "/debug/resource_meta_query" {' "$F" | cut -d: -f1)
-          ND=${ND:-9000}
-          sed -n "$((ND-4)),$((ND+8))p" "$F" || true
+          ND=${ND:-0}
+          if [ "$ND" -gt 0 ]; then sed -n "$((ND-4)),$((ND+8))p" "$F"; fi
 
-          echo "== DL_ALLOWED + health list context =="
-          grep -a -n -m 6 'resource_meta_query' "$F" || true
+          echo "== all resource_meta_query mentions =="
+          grep -a -n -m 8 'resource_meta_query' "$F" || true
 
           echo "== balance sanity (brace/paren counts near fn region) =="
           python3 - <<'PY'
