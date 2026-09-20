@@ -19,8 +19,10 @@ in-memory META_KEY_HEX capture), but:
     decrypts is accepted (the winner is reported as key_used);
   * caps rows (limit<=500, hard byte budget ~900 KB) and cell text (300 chars)
     so one query can never blow up the 18765 response path;
-  * adds the route to /health and the not-found endpoint lists, and to every
-    ?dl=1 download whitelist that mentions resource_meta_schema.
+  * registers the route as a sibling of resource_meta_schema in every list
+    where that endpoint already appears (DL_ALLOWED, /health endpoint list,
+    404 available list — all plain-quoted Rust string literals; verified on
+    the v3.28.2 baseline by CI dry run: 2 occurrences, escaped form: 0).
 
 Idempotent: marker present -> already_applied. Anchors fail closed.
 
@@ -519,8 +521,10 @@ def apply_once() -> str:
         1,
     )
 
-    # 3) plain whitelist entries ("/debug/resource_meta_schema",) — may appear
-    #    in more than one list; replace ALL occurrences and report the count.
+    # 3) register the new route as a sibling of resource_meta_schema in every
+    #    list that already carries the schema endpoint. On the v3.28.2 baseline
+    #    these are plain-quoted Rust string literals (DL_ALLOWED + the /health
+    #    and 404 raw-JSON lists); CI dry run confirmed count=2, escaped form=0.
     plain = '"/debug/resource_meta_schema",'
     c = text.count(plain)
     if c < 1:
@@ -528,32 +532,19 @@ def apply_once() -> str:
     text = text.replace(
         plain, '"/debug/resource_meta_schema","/debug/resource_meta_query",'
     )
-    replaced_plain = c
-
-    # 4) endpoint lists inside the raw JSON strings (escaped form, one or more)
-    esc = '\\"/debug/resource_meta_schema\\",'
-    c = text.count(esc)
-    if c < 1:
-        raise RuntimeError(f"escaped endpoint-list anchor missing (count={c})")
-    text = text.replace(
-        esc, '\\"/debug/resource_meta_schema\\",\\"/debug/resource_meta_query\\",'
-    )
-    replaced_esc = c
 
     # post conditions — refuse to write a half-applied tree
     if "fn debug_resource_meta_query(" not in text:
         raise RuntimeError("query fn missing after patch")
     if '} else if path == "/debug/resource_meta_query" {' not in text:
         raise RuntimeError("query route missing after patch")
-    if text.count('"/debug/resource_meta_query",') != replaced_plain:
-        raise RuntimeError("plain whitelist entries not all replaced")
-    if text.count('\\"/debug/resource_meta_query\\",') != replaced_esc:
-        raise RuntimeError("escaped list entries not all replaced")
+    if text.count('"/debug/resource_meta_query",') != c:
+        raise RuntimeError("route sibling entries not all inserted")
     if MARK not in text:
         raise RuntimeError("marker missing after patch")
 
     SOURCE.write_text(text, encoding="utf-8")
-    return f"applied plain_lists={replaced_plain} escaped_lists={replaced_esc}"
+    return f"applied sibling_lists={c}"
 
 
 if __name__ == "__main__":
