@@ -19,8 +19,8 @@ in-memory META_KEY_HEX capture), but:
     decrypts is accepted (the winner is reported as key_used);
   * caps rows (limit<=500, hard byte budget ~900 KB) and cell text (300 chars)
     so one query can never blow up the 18765 response path;
-  * adds the route to /health and the not-found endpoint lists, and to the
-    ?dl=1 download whitelist.
+  * adds the route to /health and the not-found endpoint lists, and to every
+    ?dl=1 download whitelist that mentions resource_meta_schema.
 
 Idempotent: marker present -> already_applied. Anchors fail closed.
 
@@ -519,14 +519,16 @@ def apply_once() -> str:
         1,
     )
 
-    # 3) DL_ALLOWED entry (plain string literal, exactly one)
+    # 3) plain whitelist entries ("/debug/resource_meta_schema",) — may appear
+    #    in more than one list; replace ALL occurrences and report the count.
     plain = '"/debug/resource_meta_schema",'
     c = text.count(plain)
-    if c != 1:
-        raise RuntimeError(f"DL_ALLOWED anchor count={c} (expect 1)")
+    if c < 1:
+        raise RuntimeError(f"whitelist anchor missing (count={c})")
     text = text.replace(
-        plain, '"/debug/resource_meta_schema","/debug/resource_meta_query",', 1
+        plain, '"/debug/resource_meta_schema","/debug/resource_meta_query",'
     )
+    replaced_plain = c
 
     # 4) endpoint lists inside the raw JSON strings (escaped form, one or more)
     esc = '\\"/debug/resource_meta_schema\\",'
@@ -536,19 +538,22 @@ def apply_once() -> str:
     text = text.replace(
         esc, '\\"/debug/resource_meta_schema\\",\\"/debug/resource_meta_query\\",'
     )
+    replaced_esc = c
 
     # post conditions — refuse to write a half-applied tree
     if "fn debug_resource_meta_query(" not in text:
         raise RuntimeError("query fn missing after patch")
     if '} else if path == "/debug/resource_meta_query" {' not in text:
         raise RuntimeError("query route missing after patch")
-    if '\\"/debug/resource_meta_query\\",' not in text:
-        raise RuntimeError("endpoint list entry missing after patch")
+    if text.count('"/debug/resource_meta_query",') != replaced_plain:
+        raise RuntimeError("plain whitelist entries not all replaced")
+    if text.count('\\"/debug/resource_meta_query\\",') != replaced_esc:
+        raise RuntimeError("escaped list entries not all replaced")
     if MARK not in text:
         raise RuntimeError("marker missing after patch")
 
     SOURCE.write_text(text, encoding="utf-8")
-    return "applied"
+    return f"applied plain_lists={replaced_plain} escaped_lists={replaced_esc}"
 
 
 if __name__ == "__main__":
