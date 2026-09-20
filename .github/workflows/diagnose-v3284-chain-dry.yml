@@ -1,7 +1,7 @@
 name: "Diagnose v3.28.4 chain (dry run + anchor dumps)"
 
-# 只读干跑：在真实基线上把 v3.28.4 补丁链整条预演（不编译、不建 tag、不发 release），
-# 本轮起包含 meta 直查路由补丁的锚点验证与幂等检查。
+# 只读干跑：在真实基线上把 v3.28.4 补丁链整条预演（不编译、不建 tag、不发 release）。
+# 覆盖：cumulative → guard → 崩溃日志修复 → 摘 AI → 动态版本 → meta 直查路由（跑两遍比 sha）→ bump 3.28.4。
 # push 触发器：workflow_dispatch 只认默认分支上的文件，push 触发不受此限。
 on:
   workflow_dispatch:
@@ -101,10 +101,10 @@ jobs:
           NMQ=$(grep -a -n -m1 'fn debug_resource_meta_query(' "$F" | cut -d: -f1)
           NMQ=${NMQ:-0}
           echo "fn_line=$NMQ"
-          sed -n "${NMQ},$((NMQ+24))p" "$F" || true
+          if [ "$NMQ" -gt 0 ]; then sed -n "${NMQ},$((NMQ+24))p" "$F"; fi
 
           echo "== meta fn tail (last 28 lines of fn region) =="
-          sed -n "$((NMQ+250)),$((NMQ+282))p" "$F" || true
+          if [ "$NMQ" -gt 0 ]; then sed -n "$((NMQ+250)),$((NMQ+282))p" "$F"; fi
 
           echo "== route context after patch =="
           ND=$(grep -a -n -m1 '} else if path == "/debug/resource_meta_query" {' "$F" | cut -d: -f1)
@@ -112,11 +112,10 @@ jobs:
           sed -n "$((ND-4)),$((ND+8))p" "$F" || true
 
           echo "== DL_ALLOWED + health list context =="
-          grep -a -n -m 4 'resource_meta_query' "$F" || true
+          grep -a -n -m 6 'resource_meta_query' "$F" || true
 
           echo "== balance sanity (brace/paren counts near fn region) =="
           python3 - <<'PY'
-          import re
           from pathlib import Path
           text = Path('hachimi_ura_plugin/src/lib.rs').read_text(encoding='utf-8')
           start = text.find('fn debug_resource_meta_query(')
