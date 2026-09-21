@@ -17,9 +17,10 @@ Two facts found while auditing the generated source (read-only CI dumps):
 
 This patch (no data behavior change):
   A) handler truth: sigaction(SA_SIGINFO|SA_ONSTACK) + sigaltstack; message
-     carries fault address (raw siginfo_t +16), faulting thread, and the
+     carries fault address (raw siginfo_t +16), faulting thread id, and the
      real verdict (RECOVERED only when the longjmp trampoline engages,
-     else FATAL). Allocation-free, raw syscalls only.
+     else FATAL). Allocation-free, raw syscalls only. The siginfo pointer
+     is typed *mut c_void so the patch does not depend on libc::siginfo_t.
   B) checkpoints: S:json_built after the JSON format! completes, plus
      S:obs_done / S:cache_done in read_summary's tail.
   C) recovery window: SIGSEGV_RECOVERY is cleared only at the very end of
@@ -114,7 +115,7 @@ unsafe fn hl_install_signal(sig: i32) {
     libc::sigaction(sig, &action, std::ptr::null_mut());
 }
 
-extern "C" fn crash_signal_handler(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {'''
+extern "C" fn crash_signal_handler(sig: i32, info: *mut libc::c_void, _ctx: *mut libc::c_void) {'''
 replace_once(handler_sig_old, handler_sig_new, "handler_signature")
 
 # ---- A2) bigger message buffer ----
@@ -134,6 +135,9 @@ verdict_old = r'''    let r = b" RECOVERED";
 verdict_new = r'''    let fault_addr = if info.is_null() {
         0usize
     } else {
+        // siginfo_t on arm64/bionic: si_signo(0) si_errno(4) si_code(8)
+        // __pad0(12..16), union starts at 16 and _sigfault.si_addr is the
+        // first member of that union.
         unsafe { std::ptr::read_unaligned((info as *const u8).add(16) as *const usize) }
     };
     let fault_tid = unsafe { libc::pthread_self() as usize };
