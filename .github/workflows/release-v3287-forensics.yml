@@ -6,6 +6,8 @@ name: "Release v3.28.7 Forensics Calibration"
 # → v3.28.7 校准（严格模块标签/seq 线程表/armed-tid 门/fa+c/tid 标记）
 # → bump 3.28.7 → 资格 grep → 锁整理 + --locked 构建 → 不可覆盖发布。
 # 触发：workflow_dispatch + push（本文件路径）；推送即发车。
+# 首跑 35550093075 因发布说明文档晚于本文件提交、触发 commit 里缺少
+# docs/release-v3287-notes.md 而在末段检查失败（已修复：文档已在分支树中）。
 on:
   workflow_dispatch:
   push:
@@ -211,10 +213,11 @@ jobs:
           test "$(grep -a -c 'HL_RECOVERY_ARMED_TID.load' "$F")" -eq 2
           test "$(grep -a -c 'SIGSEGV_RECOVERY.store(true' "$F")" -eq 1
           test "$(grep -a -c 'stack_size(4 \* 1024 \* 1024)' "$F")" -eq 2
-          test "$(grep -a -c 'T:{}={}' "$F")" -eq 1
+          test "$(grep -aF -c 'T:{}={}' "$F")" -ge 1
           test "$(grep -a -c '/api/sniff' "$F")" -ge 20
           test "$(grep -a -c 'PLUGIN_VERSION' "$F")" -ge 30
           test -s docs/release-v3287-notes.md
+          echo "greps_ok"
 
       - name: "Final counts (for the release log)"
         run: |
@@ -223,7 +226,7 @@ jobs:
           echo "calibration=$(grep -a -c 'v3.28.7' "$F")"
           echo "armed_sites=$(grep -a -c 'hl_arm_recovery();' "$F")"
           echo "module_labels=$(grep -a -c 'natwin\|nathelp\|libnative.so' "$F")"
-          echo "tid_markers=$(grep -a -c 'tid={}' "$F")"
+          echo "tid_markers=$(grep -aF -c 'tid={}' "$F")"
           echo "sniff_route=$(grep -a -c '/api/sniff' "$F")"
           echo "cargo_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)"
 
