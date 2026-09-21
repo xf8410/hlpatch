@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v3.28.8 crash forensics v4: raw registers + anon exec regions + module count.
+"""v3.28.8 crash forensics v4: raw registers + anon exec regions + rescan.
 
 The v3.28.7 sample:
 
@@ -8,23 +8,26 @@ The v3.28.7 sample:
 showed a pure NULL fault (addr=fa=0x0, c=1 MAPERR) on the init thread
 (registry-match: T:init=486854096128), but `pc=? lr=?` left the decisive
 fork unanswered: null jump (pc=0) vs anonymous executable region (JIT /
-trampoline) vs unknown module. Also, anonymous executable mappings were
-never indexed, and raw hex values were never printed.
+trampoline) vs missing module row. Anonymous exec mappings were never
+indexed, raw hex values were never printed, and the module table was built
+once at init - lazily-loaded libraries never got rows.
 
 This patch (forensics only, zero data-path change):
   0) module table ceiling 256 -> 512 (anonymous exec regions add rows);
   1) crash message buffer 320 -> 384 bytes;
-  2) `sp=0x…` field (sigcontext.sp @+424) - stack position context;
+  2) `sp=0x…` field (sigcontext.sp @+424) - stack position calibration;
   3) pc/lr now print RAW hex plus attribution: `pc=0x…(<mod>+off)` or
-     `pc=0x…(?)` when not in a known executable region;
-  4) anonymous executable regions (no path / no '/') are indexed as `anon`
-     (JIT / trampoline candidates);
-  5) `mc=<n>` field - module table row count (validates the table actually
-     parsed on this boot).
+     `pc=0x…(?)` when not in any known executable region;
+  4) anonymous executable regions (no path / no '/') are indexed as `anon`;
+  5) `mc=<n>` field - module table row count at crash time;
+  6) periodic rescan: `hl_modules_rescan_maybe()` (15 s throttle, CAS gate)
+     re-parses /proc/self/maps so lazily-loaded libs / new anon regions get
+     attributed; logs `M:rescan=<rows>`;
+  7) hl_put_mod clamps cached name length to 15 (torn-read hardening).
 
-Note (self-check precision): the 320-byte check targets the HANDLER message
+Self-check precision: the stale-buffer guard targets the HANDLER message
 buffer only (`let mut msg = [0u8; 320]`). The crash-log path fix has an
-unrelated `CRASH_LOG_FILE_BUF: [u8; 320]` that must stay.
+unrelated `CRASH_LOG_FILE_BUF: [u8; 320]` that must stay - asserted present.
 
 Idempotent: `fn hl_put_paren_mod(` present -> already_applied.
 """
@@ -176,6 +179,71 @@ replace_once(
     "anon_label",
 )
 
+# ---- 6c) clamp cached name length (torn-read hardening) ----
+replace_once(
+    "        let name_len = *lens.add(best) as usize;",
+    "        let name_len = (*lens.add(best) as usize).min(15); // v3.28.8: clamped",
+    "name_len_clamp",
+)
+
+# ---- 7) periodic rescan block (after modules_init, before thread registry) ----
+RESCAN_BLOCK = (
+    "\n"
+    "static HL_MOD_LAST_SCAN_MS: std::sync::atomic::AtomicU64 =\n"
+    "    std::sync::atomic::AtomicU64::new(0);\n"
+    "\n"
+    "fn hl_now_ms() -> u64 {\n"
+    "    use std::time::{SystemTime, UNIX_EPOCH};\n"
+    "    SystemTime::now()\n"
+    "        .duration_since(UNIX_EPOCH)\n"
+    "        .map(|d| d.as_millis() as u64)\n"
+    "        .unwrap_or(0)\n"
+    "}\n"
+    "\n"
+    "/// v3.28.8: re-parse /proc/self/maps so lazily-loaded libraries and new\n"
+    "/// anonymous executable regions are attributed in future crash records.\n"
+    "/// Throttled to once per 15 s; a CAS gate keeps a single scanner at a time.\n"
+    "fn hl_modules_rescan_maybe() {\n"
+    "    let now = hl_now_ms();\n"
+    "    let last = HL_MOD_LAST_SCAN_MS.load(std::sync::atomic::Ordering::Relaxed);\n"
+    "    if last != 0 && now.saturating_sub(last) < 15000 {\n"
+    "        return;\n"
+    "    }\n"
+    "    if HL_MOD_LAST_SCAN_MS\n"
+    "        .compare_exchange(\n"
+    "            last,\n"
+    "            now,\n"
+    "            std::sync::atomic::Ordering::Relaxed,\n"
+    "            std::sync::atomic::Ordering::Relaxed,\n"
+    "        )\n"
+    "        .is_err()\n"
+    "    {\n"
+    "        return;\n"
+    "    }\n"
+    "    hl_modules_init();\n"
+    "    log_predict_step(&format!(\n"
+    "        \"M:rescan={}\",\n"
+    "        HL_MOD_COUNT.load(std::sync::atomic::Ordering::Relaxed)\n"
+    "    ));\n"
+    "}\n"
+)
+replace_once(
+    "    HL_MOD_COUNT.store(count, std::sync::atomic::Ordering::Relaxed);\n}",
+    "    HL_MOD_COUNT.store(count, std::sync::atomic::Ordering::Relaxed);\n}"
+    + RESCAN_BLOCK,
+    "rescan_block",
+)
+
+# ---- 8) call rescan at read_summary entry ----
+replace_once(
+    "fn read_summary() -> String {\n"
+    '    log_predict_step(&format!("S:enter tid={}", unsafe { libc::pthread_self() as usize })); // v3.28.7',
+    "fn read_summary() -> String {\n"
+    "    hl_modules_rescan_maybe(); // v3.28.8 forensics: pick up lazy mappings\n"
+    '    log_predict_step(&format!("S:enter tid={}", unsafe { libc::pthread_self() as usize })); // v3.28.7',
+    "rescan_call",
+)
+
 # ---- post-checks (fail closed) ----
 for required in (
     "fn hl_put_paren_mod(",
@@ -189,6 +257,11 @@ for required in (
     "read_unaligned(base.add(424)",
     "path.is_empty() || !path.contains",
     "const HL_MOD_MAX: usize = 512;",
+    "fn hl_modules_rescan_maybe()",
+    "HL_MOD_LAST_SCAN_MS",
+    "M:rescan=",
+    ".min(15)",
+    "CRASH_LOG_FILE_BUF",
 ):
     if required not in text:
         raise RuntimeError(f"post-check missing: {required}")
@@ -202,9 +275,12 @@ if "!perms.contains('x') || path.is_empty()" in text:
     raise RuntimeError("old module skip condition still present")
 if "const HL_MOD_MAX: usize = 256;" in text:
     raise RuntimeError("old module ceiling still present")
+if text.count("hl_modules_rescan_maybe") < 2:
+    raise RuntimeError("rescan call/definition missing")
 
 SOURCE.write_text(text, encoding="utf-8")
 print(
     "crash_forensics_v3288=applied "
-    "raw_regs=pc,lr,sp anon_regions=1 module_count=mc mod_max=512 buffer=384"
+    "raw_regs=pc,lr,sp anon_regions=1 module_count=mc rescan=15s "
+    "mod_max=512 buffer=384 clamp=15"
 )
