@@ -73,7 +73,7 @@ jobs:
             'libc::sigaltstack' \
             'libc::sigaction' \
             'SA_SIGINFO | libc::SA_ONSTACK' \
-            'info: *mut libc::siginfo_t' \
+            'info: *mut libc::c_void' \
             'addr=0x' \
             'let verdict: &[u8]' \
             'S:json_built' \
