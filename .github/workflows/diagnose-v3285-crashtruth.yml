@@ -1,0 +1,114 @@
+name: "Diagnose v3.28.5 crash-truth patch (dry run, read-only)"
+
+# 干跑：v3.28.4 同款链（cumulative→guard→3.28.0→crashlog→stripAI→DV→metaQuery）
+# 之后叠加 v3.28.5 崩溃取证补丁（apply_summary_crash_truth_v3285.py），
+# 校验：幂等（跑两遍 sha 相等）、全部锚点计数、关键新标记在场、旧无条件
+# verdict 已消失、深度栈两处、区域 dump 供人工复核。不编译、不发布。
+on:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/diagnose-v3285-crashtruth.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin baseline + apply v3.28.4-equivalent chain"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          for f in apply_summary_crash_truth_v3285.py apply_crash_log_path_fix.py apply_meta_query_route_v3284.py; do
+            test -f "scripts/$f"
+          done
+          python3 scripts/run_generated_succession_l_cumulative.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.27.23 > /dev/null
+          python3 scripts/apply_sigsegv_guard_v32723.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.28.0 > /dev/null
+          python3 scripts/apply_crash_log_path_fix.py > /dev/null
+          python3 scripts/strip_ai_output_v3283.py > /dev/null
+          python3 scripts/apply_dynamic_version.py > /dev/null
+          python3 scripts/apply_meta_query_route_v3284.py > /dev/null
+
+      - name: "Stage 8: crash-truth patch (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_summary_crash_truth_v3285.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_summary_crash_truth_v3285.py | grep -q already_applied
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+          echo "idempotent_sha=$S1"
+
+      - name: "Qualification greps (new markers + old verdict gone + stack bumps)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          for s in \
+            'fn hl_put_hex(' \
+            'fn hl_put_uint(' \
+            'hl_init_sigaltstack();' \
+            'libc::sigaltstack' \
+            'libc::sigaction' \
+            'SA_SIGINFO | libc::SA_ONSTACK' \
+            'info: *mut libc::siginfo_t' \
+            'addr=0x' \
+            'let verdict: &[u8]' \
+            'S:json_built' \
+            'S:obs_done' \
+            'S:cache_done' \
+            'let summary_body = format!(' \
+            'stack_size(4 * 1024 * 1024)'
+          do grep -aFq "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done
+          if grep -aFq 'let r = b" RECOVERED";' "$F"; then
+            echo "REGRESSION: unconditional RECOVERED verdict still present"; exit 1
+          fi
+          test "$(grep -a -c 'stack_size(4 \* 1024 \* 1024)' "$F")" -eq 2
+          test "$(grep -a -c 'S:json_built' "$F")" -ge 1
+          test "$(grep -a -c 'S:obs_done' "$F")" -ge 1
+          test "$(grep -a -c 'S:cache_done' "$F")" -ge 1
+          # 旧调用点收尾必须保持原语义（flag 清理移到函数最末）
+          grep -a -A3 'S:cache_done' "$F" | grep -aFq 'SIGSEGV_RECOVERY.store(false'
+          echo "greps_ok"
+
+      - name: "Region dumps (manual review)"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "file_bytes=$(wc -c < "$F")"
+          echo '=== [H1] handler region ==='
+          grep -an -B6 -A120 'fn hl_put_uint' "$F" | head -180 || true
+          echo '=== [H2] verdict block ==='
+          grep -an -B8 -A40 'let verdict: &\[u8\]' "$F" | head -80 || true
+          echo '=== [H3] summary tail ==='
+          grep -an -B10 -A24 'S:obs_done' "$F" | head -70 || true
+          echo '=== [H4] json_built ==='
+          grep -an -B6 -A8 'S:json_built' "$F" | head -40 || true
+          echo '=== [H5] stack bumps ==='
+          grep -an -B4 -A8 'stack_size(4 \* 1024 \* 1024)' "$F" | head -60 || true
+          echo '=== [HZ] counts ==='
+          echo "setjmp=$(grep -a -c 'sys_sigsetjmp' "$F" || true)"
+          echo "json_built=$(grep -a -c 'S:json_built' "$F" || true)"
+          echo "stack_bumps=$(grep -a -c 'stack_size(4 \* 1024 \* 1024)' "$F" || true)"
