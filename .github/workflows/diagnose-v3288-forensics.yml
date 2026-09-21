@@ -1,5 +1,10 @@
 name: "Diagnose v3.28.8 forensics v4 (dry run, read-only)"
 
+# v3288 dry run, take 2: the first run (35553463733) failed ONLY in the
+# patch script's own self-check - the guard `"[0u8; 320]" in text` matched
+# the unrelated CRASH_LOG_FILE_BUF from the crash-log path fix. The guard is
+# now scoped to the handler message buffer (`let mut msg = [0u8; 320]`), and
+# the module-table ceiling was raised 256 -> 512 for anonymous exec regions.
 on:
   push:
     branches:
@@ -71,21 +76,28 @@ jobs:
             'b" lr=0x"' \
             'b" sp=0x"' \
             'b" mc="' \
-            '"anon"' \
+            'const HL_MOD_MAX: usize = 512;' \
             'let mut msg = [0u8; 384];' \
             'fault_sp' \
             'read_unaligned(base.add(424)' \
             'fn hl_arm_recovery()' \
-            'S:enter tid='
+            'S:enter tid=' \
+            'S:exit tid='
           do grep -aFq "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done
+          test "$(grep -aFc '"anon"' "$F" || true)" -ge 1
+          test "$(grep -aFc 'CRASH_LOG_FILE_BUF' "$F" || true)" -ge 1
+          if grep -aFq 'let mut msg = [0u8; 320]' "$F"; then
+            echo "REGRESSION: old handler msg buffer present"; exit 1
+          fi
+          if grep -aFq "!perms.contains('x') || path.is_empty()" "$F"; then
+            echo "REGRESSION: old module skip present"; exit 1
+          fi
+          if grep -aFq 'const HL_MOD_MAX: usize = 256;' "$F"; then
+            echo "REGRESSION: old module ceiling present"; exit 1
+          fi
           if grep -aFq 'let seg_c = b" pc=";' "$F"; then
             echo "REGRESSION: old pc piece present"; exit 1
           fi
-          if grep -aFq '!perms.contains('"'"'x'"'"') || path.is_empty()' "$F"; then
-            echo "REGRESSION: old module skip present"; exit 1
-          fi
-          test "$(grep -aFq -c 'b" pc=0x"' "$F")" -ge 1
-          test "$(grep -aFq -c 'b" anon"' "$F" || true)" -eq 0
           echo "greps_ok"
 
       - name: "Region dumps"
@@ -96,11 +108,12 @@ jobs:
           echo '=== [H1] context tuple ==='
           grep -an -B3 -A14 'fault_pc, fault_lr, fault_sp' "$F" | head -40 || true
           echo '=== [H2] pc/lr/sp pieces ==='
-          grep -an -B2 -A22 'b" pc=0x"' "$F" | head -50 || true
+          grep -an -B2 -A24 'b" pc=0x"' "$F" | head -60 || true
           echo '=== [H3] anon labels ==='
           grep -an -B3 -A8 '"anon"' "$F" | head -30 || true
           echo '=== [H4] mc field ==='
           grep -an -B2 -A10 'b" mc="' "$F" | head -30 || true
           echo '=== [H5] counts ==='
-          echo "paren=$(grep -aF -c 'hl_put_paren_mod' "$F" || true)"
-          echo "mc=$(grep -aF -c 'b\" mc=\"' "$F" || true)"
+          echo "paren=$(grep -aFc 'hl_put_paren_mod' "$F" || true)"
+          echo "anon_label=$(grep -aFc '"anon"' "$F" || true)"
+          echo "msg384=$(grep -aFc 'let mut msg = \[0u8; 384\];' "$F" || true)"
