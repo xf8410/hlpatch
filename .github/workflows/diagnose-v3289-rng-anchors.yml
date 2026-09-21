@@ -1,0 +1,84 @@
+name: "Diagnose v3.28.9 RNG seed anchors (read-only)"
+
+# 只读诊断：重建 v3.28.2 谱系（baseline 721c086 + cumulative 3.27.23 + guard
+# + crashlog fix + strip AI + dynamic version + meta query + v3285/86/87 取证链），
+# 然后把 RNG 种子线全部落刀点连上下文 dump 出来，供 apply_rng_seed_revive_v3289.py
+# 的锚点设计使用。本流水线不改源码、不发版。
+# 触发：push 本文件到 workbench/v3289-rng-seed-revive（推送即发车）。
+on:
+  push:
+    branches:
+      - workbench/v3289-rng-seed-revive
+    paths:
+      - .github/workflows/diagnose-v3289-rng-anchors.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin baseline and rebuild v3.28.7 chain"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          python3 scripts/run_generated_succession_l_cumulative.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.27.23 > /dev/null
+          python3 scripts/apply_sigsegv_guard_v32723.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.28.0 > /dev/null
+          python3 scripts/apply_crash_log_path_fix.py > /dev/null
+          python3 scripts/strip_ai_output_v3283.py > /dev/null
+          python3 scripts/apply_dynamic_version.py > /dev/null
+          python3 scripts/apply_meta_query_route_v3284.py > /dev/null
+          python3 scripts/apply_summary_crash_truth_v3285.py > /dev/null
+          python3 scripts/apply_crash_forensics_v3286.py > /dev/null
+          python3 scripts/apply_crash_forensics_v3287.py > /dev/null
+          echo "chain_built=true"
+
+      - name: "RNG region dumps"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "file_bytes=$(wc -c < "$F")"
+          echo '=== [R1] seed route stub region ==='
+          grep -an -B4 -A14 'rng_invalid_reason' "$F" | head -100 || true
+          echo '=== [R2] SEED_HISTORY statics ==='
+          grep -an 'SEED_HISTORY' "$F" | head -40 || true
+          echo '=== [R3] exec training hook body ==='
+          grep -an -B3 -A26 'fn exec_training_hook' "$F" | head -140 || true
+          echo '=== [R4] exec training install sites ==='
+          grep -an -B8 -A26 'EXEC_TRAINING_ADDR = ' "$F" | head -200 || true
+          echo '=== [R5] debug_training_seed endpoint ==='
+          grep -an -B8 -A40 'fn debug_training_seed' "$F" | head -200 || true
+          echo '=== [R6] guarded obscured int readers ==='
+          grep -an 'fn read_obscured_int_at' "$F" | head -20 || true
+          grep -an -B6 -A30 'fn read_obscured_int_at_inner' "$F" | head -140 || true
+          echo '=== [R7] training log / seed routes in dispatcher ==='
+          grep -an -B3 -A16 '"/debug/training_log"' "$F" | head -120 || true
+          grep -an -B3 -A16 '"/seed/history"' "$F" | head -120 || true
+          echo '=== [R8] summary tail inject point ==='
+          grep -an 'fn read_summary_inner' "$F" | head -20 || true
+          grep -an -B4 -A12 'S:json_built\|log_predict_step("S:json")' "$F" | head -100 || true
+          echo '=== [R9] action/failure statics ==='
+          grep -an 'LAST_TRAINING_RESULT\|LAST_FAILURE_RATE\|FAILURE_RATE_ADDR\|LAST_ACTION_SEQUENCE' "$F" | head -80 || true
+          echo '=== [R10] installer function for exec training ==='
+          grep -an -B6 -A30 'install_exec_training\|exec_training_hook as usize' "$F" | head -200 || true
+          echo "dump_done"
