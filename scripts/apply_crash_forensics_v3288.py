@@ -12,14 +12,19 @@ trampoline) vs unknown module. Also, anonymous executable mappings were
 never indexed, and raw hex values were never printed.
 
 This patch (forensics only, zero data-path change):
-  1) pc/lr now print RAW hex plus attribution: `pc=0x…(<mod>+off)` or
-     `pc=0x…(?)` when not in a file-backed module.
-  2) new `sp=0x…` field (sigcontext.sp @+424) - stack position context.
-  3) anonymous executable regions (no path / no '/') are indexed as `anon`
-     (JIT / trampoline candidates).
-  4) new `mc=<n>` field - module table row count (validates the table
-     actually parsed on this boot).
-  5) crash message buffer 320 -> 384 bytes.
+  0) module table ceiling 256 -> 512 (anonymous exec regions add rows);
+  1) crash message buffer 320 -> 384 bytes;
+  2) `sp=0x…` field (sigcontext.sp @+424) - stack position context;
+  3) pc/lr now print RAW hex plus attribution: `pc=0x…(<mod>+off)` or
+     `pc=0x…(?)` when not in a known executable region;
+  4) anonymous executable regions (no path / no '/') are indexed as `anon`
+     (JIT / trampoline candidates);
+  5) `mc=<n>` field - module table row count (validates the table actually
+     parsed on this boot).
+
+Note (self-check precision): the 320-byte check targets the HANDLER message
+buffer only (`let mut msg = [0u8; 320]`). The crash-log path fix has an
+unrelated `CRASH_LOG_FILE_BUF: [u8; 320]` that must stay.
 
 Idempotent: `fn hl_put_paren_mod(` present -> already_applied.
 """
@@ -41,7 +46,14 @@ def replace_once(old: str, new: str, label: str) -> None:
     text = text.replace(old, new, 1)
 
 
-# ---- 1) buffer 320 -> 384 ----
+# ---- 0) module table ceiling 256 -> 512 ----
+replace_once(
+    "const HL_MOD_MAX: usize = 256; // v3.28.7: room for per-module rows",
+    "const HL_MOD_MAX: usize = 512; // v3.28.8: anonymous exec regions included",
+    "mod_max_512",
+)
+
+# ---- 1) handler buffer 320 -> 384 ----
 replace_once(
     "    let mut msg = [0u8; 320]; // v3.28.6: addr + tid + pc + lr + thr + verdict",
     "    let mut msg = [0u8; 384]; // v3.28.8: addr + tid + pc/lr/sp(raw) + thr + fa + c + mc",
@@ -176,6 +188,7 @@ for required in (
     "fault_sp",
     "read_unaligned(base.add(424)",
     "path.is_empty() || !path.contains",
+    "const HL_MOD_MAX: usize = 512;",
 ):
     if required not in text:
         raise RuntimeError(f"post-check missing: {required}")
@@ -183,13 +196,15 @@ if 'let seg_c = b" pc=";' in text:
     raise RuntimeError("old pc piece still present")
 if 'let seg_d = b" lr=";' in text:
     raise RuntimeError("old lr piece still present")
-if "[0u8; 320]" in text:
-    raise RuntimeError("old 320 buffer still present")
+if "let mut msg = [0u8; 320]" in text:
+    raise RuntimeError("old handler msg buffer still present")
 if "!perms.contains('x') || path.is_empty()" in text:
     raise RuntimeError("old module skip condition still present")
+if "const HL_MOD_MAX: usize = 256;" in text:
+    raise RuntimeError("old module ceiling still present")
 
 SOURCE.write_text(text, encoding="utf-8")
 print(
     "crash_forensics_v3288=applied "
-    "raw_regs=pc,lr,sp anon_regions=1 module_count=mc buffer=384"
+    "raw_regs=pc,lr,sp anon_regions=1 module_count=mc mod_max=512 buffer=384"
 )
