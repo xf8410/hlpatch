@@ -15,13 +15,12 @@ This build adds attribution so the next crash names the culprit:
   1) crash handler also logs pc=/lr= (from the ucontext) with MODULE
      attribution (module table parsed from /proc/self/maps at init;
      names: hlpatch / il2cpp / native / libc / ... + offset).
-  2) thread labels: push / http / init threads self-register; handler
-     prints thr=<label> when the faulting tid matches, else thr=?.
-  3) extra checkpoints: S:enter (read_summary entry, covers cache-hit
-     path), S:exit (last statement of read_summary), H:ret / H:saved
-     (/summary route + save_endpoint_log), P:read_done / P:push_start /
-     P:push_done (push loop). Next crash's last marker localizes the
-     window to a single statement.
+  2) thread labels: push / http / init threads self-register in a
+     RING buffer (latest 16 kept - no wraparound loss); handler prints
+     thr=<label> when the faulting tid matches, else thr=?.
+  3) extra checkpoints: S:enter / S:exit / H:ret / H:saved /
+     P:read_done / P:push_start / P:push_done. Next crash's last marker
+     localizes the window to a single statement.
 
 All signal-path code is allocation-free, raw writes only. Idempotent:
 `hl_put_mod(` present -> already_applied. Anchors fail closed.
@@ -54,10 +53,11 @@ static mut HL_MOD_NAME: [[u8; 16]; HL_MOD_MAX] = [[0u8; 16]; HL_MOD_MAX];
 static mut HL_MOD_NAME_LEN: [u8; HL_MOD_MAX] = [0; HL_MOD_MAX];
 static HL_MOD_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+// Thread labels: RING buffer - the LATEST 16 registrations always survive.
 const HL_THR_MAX: usize = 16;
-static mut HL_THR_ID: [usize; HL_THR_MAX] = [0; HL_THR_MAX];
-static mut HL_THR_NAME: [[u8; 8]; HL_THR_MAX] = [[0u8; 8]; HL_THR_MAX];
-static HL_THR_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static mut HL_THR_TID: [usize; HL_THR_MAX] = [0; HL_THR_MAX];
+static mut HL_THR_NAMES: [[u8; 8]; HL_THR_MAX] = [[0u8; 8]; HL_THR_MAX];
+static HL_THR_NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn hl_modules_init() {
     let text = match std::fs::read_to_string("/proc/self/maps") {
@@ -148,23 +148,20 @@ fn hl_modules_init() {
 }
 
 fn hl_thread_register(label: &str) {
-    let idx = HL_THR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if idx >= HL_THR_MAX {
-        return;
-    }
+    let slot = HL_THR_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % HL_THR_MAX;
     let tid = unsafe { libc::pthread_self() as usize };
     unsafe {
-        let ids = std::ptr::addr_of_mut!(HL_THR_ID) as *mut usize;
-        let names = std::ptr::addr_of_mut!(HL_THR_NAME) as *mut u8;
-        *ids.add(idx) = tid;
+        let ids = std::ptr::addr_of_mut!(HL_THR_TID) as *mut usize;
+        let names = std::ptr::addr_of_mut!(HL_THR_NAMES) as *mut u8;
+        *ids.add(slot) = tid;
         let bytes = label.as_bytes();
         let n = bytes.len().min(7);
         let mut j = 0usize;
         while j < n {
-            *names.add(idx * 8 + j) = bytes[j];
+            *names.add(slot * 8 + j) = bytes[j];
             j += 1;
         }
-        *names.add(idx * 8 + n) = 0;
+        *names.add(slot * 8 + n) = 0;
     }
 }
 
@@ -211,13 +208,12 @@ fn hl_put_mod(msg: &mut [u8], mut len: usize, addr: usize) -> usize {
 }
 
 fn hl_put_thr(msg: &mut [u8], mut len: usize, tid: usize) -> usize {
-    let count = HL_THR_COUNT.load(std::sync::atomic::Ordering::Relaxed);
-    let mut i = 0usize;
     unsafe {
-        let ids = std::ptr::addr_of!(HL_THR_ID) as *const usize;
-        let names = std::ptr::addr_of!(HL_THR_NAME) as *const u8;
-        while i < count && i < HL_THR_MAX {
-            if *ids.add(i) == tid {
+        let ids = std::ptr::addr_of!(HL_THR_TID) as *const usize;
+        let names = std::ptr::addr_of!(HL_THR_NAMES) as *const u8;
+        let mut i = 0usize;
+        while i < HL_THR_MAX {
+            if *ids.add(i) == tid && tid != 0 {
                 let mut j = 0usize;
                 while j < 8 {
                     let c = *names.add(i * 8 + j);
