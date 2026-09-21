@@ -1,0 +1,268 @@
+name: "Release v3.28.5 Crash Truth + Recovery Window Fix"
+
+# 发布链（基座 = v3.28.2/3.28.4 同款谱系）：
+# cumulative→3.27.23 → SIGSEGV guard → bump 3.28.0 → 崩溃日志修复 → 摘内置 AI
+# → 动态版本 → meta 直查路由 → v3.28.5 崩溃取证补丁 → bump 3.28.5 → 资格 grep
+# → 锁整理 + --locked 构建 → 不可覆盖发布。
+# 触发：workflow_dispatch + push（本文件路径）；推送即发车。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/release-v3285-crash-truth.yml
+
+permissions:
+  contents: write
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts (guard / strip-AI / dynamic-version / bump)"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin source to v3.28.0 baseline (helpers from main; branch patches stay)"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          for f in run_generated_succession_l_cumulative.py apply_sigsegv_guard_v32723.py apply_crash_log_path_fix.py apply_meta_query_route_v3284.py apply_summary_crash_truth_v3285.py strip_ai_output_v3283.py apply_dynamic_version.py bump_plugin_version.py; do
+            test -f "scripts/$f"
+          done
+          grep -aFq 'const CRASH_LOG_PATH: &str = "/data/data/jp.pokemon.pokeuma/files/uma_predict.log";' hachimi_ura_plugin/src/lib.rs
+          ! grep -aFq 'mod training_anim_skip;' hachimi_ura_plugin/src/lib.rs
+          ! grep -aFq 'fn hl_crash_log_dir()' hachimi_ura_plugin/src/lib.rs
+          ! grep -aFq 'resource_meta_query' hachimi_ura_plugin/src/lib.rs
+          ! grep -aFq 'v3.28.3 ai removed' hachimi_ura_plugin/src/lib.rs
+          ! grep -aFq 'S:json_built' hachimi_ura_plugin/src/lib.rs
+
+      - name: "Stage 1: cumulative 3.27.23 (validate ramen semantics anchors)"
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/bump_plugin_version.py 3.27.23
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.27.23"
+          grep -Fq 'version = "3.27.23"' hachimi_ura_plugin/Cargo.lock
+          grep -aFq 'verified_ramen_upstream_semantics' hachimi_ura_plugin/src/lib.rs
+
+      - name: "Stage 2: SIGSEGV guard (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+          grep -aFq 'fn hl_ptr_mapped(' "$F"
+
+      - name: "Stage 3: bump 3.28.0 (screen mirror intentionally NOT applied)"
+        run: |
+          set -euo pipefail
+          python3 scripts/bump_plugin_version.py 3.28.0
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.0"
+          if grep -aFq 'install_screen_mirror_hook' hachimi_ura_plugin/src/lib.rs; then
+            echo 'REGRESSION: screen mirror must not be applied'; exit 1
+          fi
+
+      - name: "Stage 4: crash-log path fix (3.28.0 -> 3.28.2)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_crash_log_path_fix.py
+          python3 scripts/apply_crash_log_path_fix.py | grep -q already_applied
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.2"
+          grep -aFq 'fn hl_crash_log_dir()' "$F"
+          grep -aFq 'crash_log=' "$F"
+
+      - name: "Stage 5: strip built-in AI (pure data pipeline)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/strip_ai_output_v3283.py
+          grep -aFq 'v3.28.3 ai removed' "$F"
+          grep -aFq 'let ai_json = String::from("null")' "$F"
+
+      - name: "Stage 6: dynamic version (PLUGIN_VERSION single source)"
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_dynamic_version.py
+          python3 scripts/apply_dynamic_version.py | grep -q already_applied
+
+      - name: "Stage 7: meta query console route (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_meta_query_route_v3284.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_meta_query_route_v3284.py
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+          grep -aFq 'fn debug_resource_meta_query(full_uri: &str) -> String {' "$F"
+
+      - name: "Stage 8: v3.28.5 crash-truth patch (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_summary_crash_truth_v3285.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_summary_crash_truth_v3285.py | grep -q already_applied
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+          grep -aFq 'S:json_built' "$F"
+          grep -aFq 'let verdict: &[u8]' "$F"
+          grep -aFq 'hl_init_sigaltstack();' "$F"
+          grep -aFq 'S:obs_done' "$F"
+          grep -aFq 'S:cache_done' "$F"
+
+      - name: "Stage 9: bump 3.28.5 (final version)"
+        run: |
+          set -euo pipefail
+          python3 scripts/bump_plugin_version.py 3.28.5
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.5"
+          grep -Fq 'version = "3.28.5"' hachimi_ura_plugin/Cargo.lock
+
+      - name: "Qualification greps (crash-truth invariants + sniff independence + no mirror)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          for s in \
+            'fn hl_put_hex(' \
+            'fn hl_put_uint(' \
+            'libc::sigaltstack' \
+            'SA_SIGINFO | libc::SA_ONSTACK' \
+            'info: *mut libc::c_void' \
+            'addr=0x' \
+            ' FATAL' \
+            'S:json_built' \
+            'S:obs_done' \
+            'S:cache_done' \
+            'let summary_body = format!(' \
+            'stack_size(4 * 1024 * 1024)' \
+            'fn hl_crash_log_dir()' \
+            'v3.28.3 ai removed' \
+            'fn install_api_sniff_hooks' \
+            'hlpatch-observations' \
+            'META_KEY_HEX'
+          do grep -aFq "$s" "$F" || { echo "MISSING INVARIANT: $s"; exit 1; }; done
+          if grep -aFq 'let r = b" RECOVERED";' "$F"; then
+            echo "REGRESSION: unconditional RECOVERED verdict in release source"; exit 1
+          fi
+          if grep -aFq 'install_screen_mirror_hook' "$F"; then
+            echo "REGRESSION: screen mirror in release source"; exit 1
+          fi
+          test "$(grep -a -c 'stack_size(4 \* 1024 \* 1024)' "$F")" -eq 2
+          test "$(grep -a -c '/api/sniff' "$F")" -ge 20
+          test "$(grep -a -c 'PLUGIN_VERSION' "$F")" -ge 30
+          test -s docs/release-v3285-notes.md
+
+      - name: "Final counts (for the release log)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "crash_truth=$(grep -a -c 'summary crash truth' "$F")"
+          echo "json_built=$(grep -a -c 'S:json_built' "$F")"
+          echo "stack_bumps=$(grep -a -c 'stack_size(4 \* 1024 \* 1024)' "$F")"
+          echo "sniff_route=$(grep -a -c '/api/sniff' "$F")"
+          echo "cargo_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)"
+
+      - name: "Setup Rust"
+        run: rustup target add aarch64-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: "Reconcile Cargo.lock with manifest (run 35130588507 fix; assert 3.28.5)"
+        working-directory: hachimi_ura_plugin
+        run: |
+          set -euo pipefail
+          BEFORE=$(sha256sum Cargo.lock | cut -d' ' -f1)
+          cargo metadata --format-version 1 > /dev/null
+          AFTER=$(sha256sum Cargo.lock | cut -d' ' -f1)
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo 'Cargo.lock reconciled; diff:'
+            git --no-pager diff -- Cargo.lock || true
+          else
+            echo 'Cargo.lock already in sync'
+          fi
+          grep -Fq 'version = "3.28.5"' Cargo.lock
+
+      - name: "Build Android arm64 release"
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          HLPATCH_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          cargo build --locked --target aarch64-linux-android --release 2>&1 | tee release-v3285-cargo.log
+
+      - name: "Prepare immutable release assets"
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          cargo_version=3.28.5
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.28.5
+          workflow_run=${GITHUB_RUN_ID}
+          baseline=v3.28.0(${BASELINE_SHA})+cumulative_3.27.23+sigsegv_guard+crash_log_fix+meta_query
+          features=crash_truth_handler,summary_tail_checkpoints,recovery_window_fix,deep_thread_stacks,meta_query_console,ai_removed_pure_data_pipeline,dynamic_version
+          excluded=screen_mirror_frame_a,training_anim_skip,signup_plaintext_observer
+          decision_owner=jueceramen_umaai_rs
+          runtime_validation=pending_device_execution
+          EOF
+
+      - name: "Create immutable release (refuse overwrite)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          if gh release view v3.28.5 > /dev/null 2>&1; then
+            echo 'v3.28.5 already exists; refusing to overwrite' >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a v3.28.5 "$GITHUB_SHA" -m "Release v3.28.5"
+          git push origin refs/tags/v3.28.5
+          gh release create v3.28.5 --verify-tag --title "v3.28.5 崩溃取证升级 + 恢复窗口修复" \
+            --notes-file docs/release-v3285-notes.md \
+            "$ASSET" SHA256SUMS BUILD-MANIFEST.txt hachimi_ura_plugin/release-v3285-cargo.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libhachimi_ura-v3.28.5-run-${{ github.run_id }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            hachimi_ura_plugin/release-v3285-cargo.log
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: warn
