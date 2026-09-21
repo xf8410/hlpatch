@@ -89,8 +89,8 @@ jobs:
           test "$(grep -a -c 'S:json_built' "$F")" -ge 1
           test "$(grep -a -c 'S:obs_done' "$F")" -ge 1
           test "$(grep -a -c 'S:cache_done' "$F")" -ge 1
-          # 旧调用点收尾必须保持原语义（flag 清理移到函数最末）
-          grep -a -A3 'S:cache_done' "$F" | grep -aFq 'SIGSEGV_RECOVERY.store(false'
+          # flag 清理必须仍在（挪到函数最末、位于 tail 检查点之后 8 行内）
+          grep -a -A8 'S:cache_done' "$F" | grep -aFq 'SIGSEGV_RECOVERY.store(false'
           echo "greps_ok"
 
       - name: "Region dumps (manual review)"
