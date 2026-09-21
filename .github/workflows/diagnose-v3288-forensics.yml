@@ -1,0 +1,106 @@
+name: "Diagnose v3.28.8 forensics v4 (dry run, read-only)"
+
+on:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/diagnose-v3288-forensics.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin baseline + full chain through v3.28.7 + v3.28.8"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          for f in apply_summary_crash_truth_v3285.py apply_crash_forensics_v3286.py apply_crash_forensics_v3287.py apply_crash_forensics_v3288.py apply_crash_log_path_fix.py apply_meta_query_route_v3284.py; do
+            test -f "scripts/$f"
+          done
+          python3 scripts/run_generated_succession_l_cumulative.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.27.23 > /dev/null
+          python3 scripts/apply_sigsegv_guard_v32723.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.28.0 > /dev/null
+          python3 scripts/apply_crash_log_path_fix.py > /dev/null
+          python3 scripts/strip_ai_output_v3283.py > /dev/null
+          python3 scripts/apply_dynamic_version.py > /dev/null
+          python3 scripts/apply_meta_query_route_v3284.py > /dev/null
+          python3 scripts/apply_summary_crash_truth_v3285.py
+          python3 scripts/apply_crash_forensics_v3286.py
+          python3 scripts/apply_crash_forensics_v3287.py
+
+      - name: "Stage: v3.28.8 (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_crash_forensics_v3288.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_crash_forensics_v3288.py | grep -q already_applied
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+          echo "idempotent_sha=$S1"
+
+      - name: "Qualification greps"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          for s in \
+            'fn hl_put_paren_mod(' \
+            'b" pc=0x"' \
+            'b" lr=0x"' \
+            'b" sp=0x"' \
+            'b" mc="' \
+            '"anon"' \
+            'let mut msg = [0u8; 384];' \
+            'fault_sp' \
+            'read_unaligned(base.add(424)' \
+            'fn hl_arm_recovery()' \
+            'S:enter tid='
+          do grep -aFq "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done
+          if grep -aFq 'let seg_c = b" pc=";' "$F"; then
+            echo "REGRESSION: old pc piece present"; exit 1
+          fi
+          if grep -aFq '!perms.contains('"'"'x'"'"') || path.is_empty()' "$F"; then
+            echo "REGRESSION: old module skip present"; exit 1
+          fi
+          test "$(grep -aFq -c 'b" pc=0x"' "$F")" -ge 1
+          test "$(grep -aFq -c 'b" anon"' "$F" || true)" -eq 0
+          echo "greps_ok"
+
+      - name: "Region dumps"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "file_bytes=$(wc -c < "$F")"
+          echo '=== [H1] context tuple ==='
+          grep -an -B3 -A14 'fault_pc, fault_lr, fault_sp' "$F" | head -40 || true
+          echo '=== [H2] pc/lr/sp pieces ==='
+          grep -an -B2 -A22 'b" pc=0x"' "$F" | head -50 || true
+          echo '=== [H3] anon labels ==='
+          grep -an -B3 -A8 '"anon"' "$F" | head -30 || true
+          echo '=== [H4] mc field ==='
+          grep -an -B2 -A10 'b" mc="' "$F" | head -30 || true
+          echo '=== [H5] counts ==='
+          echo "paren=$(grep -aF -c 'hl_put_paren_mod' "$F" || true)"
+          echo "mc=$(grep -aF -c 'b\" mc=\"' "$F" || true)"
