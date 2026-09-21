@@ -1,0 +1,137 @@
+name: "Diagnose v3.28.5 anchors (read-only)"
+
+# 只读诊断：在 v3.28.2 谱系上重放 v3.28.5 候选链
+# (cumulative -> guard -> crashlog -> stripAI -> dynamicVersion -> metaQuery)，
+# 然后逐段 dump 新功能落刀点（分页 / RNG seed / call 任意实例 / 资源映射 / 私有文件参数）。
+# 不编译、不发布、不改产品源码；触发：push（本文件路径）+ workflow_dispatch。
+on:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/diagnose-v3285-anchors.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts (guard / strip-AI / dynamic-version / bump)"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin source to v3.28.0 baseline (helpers from main; branch patches stay)"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          for f in run_generated_succession_l_cumulative.py apply_sigsegv_guard_v32723.py apply_crash_log_path_fix.py apply_meta_query_route_v3284.py strip_ai_output_v3283.py apply_dynamic_version.py bump_plugin_version.py; do
+            test -f "scripts/$f"
+          done
+
+      - name: "Stage 1: cumulative (3.27.23)"
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/bump_plugin_version.py 3.27.23
+
+      - name: "Stage 2: SIGSEGV guard (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+
+      - name: "Stage 3: bump 3.28.0"
+        run: |
+          set -euo pipefail
+          python3 scripts/bump_plugin_version.py 3.28.0
+
+      - name: "Stage 4: crash-log path fix"
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_crash_log_path_fix.py
+
+      - name: "Stage 5: strip built-in AI"
+        run: |
+          set -euo pipefail
+          python3 scripts/strip_ai_output_v3283.py
+
+      - name: "Stage 6: dynamic version"
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_dynamic_version.py
+
+      - name: "Stage 7: meta query route (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_meta_query_route_v3284.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_meta_query_route_v3284.py
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+
+      - name: "Anchor dumps (read-only; each section non-fatal)"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          wc -c "$F" || true
+
+          echo '=== [A] il2cpp/classes route + handler candidates ==='
+          grep -an -B3 -A20 'il2cpp/classes' "$F" | head -420 || true
+          grep -an 'fn [a-z_]*classes[a-z_]*(' "$F" | head -40 || true
+          grep -an '31382\|class_count\|total_classes\|get_class_count\|classCount' "$F" | head -40 || true
+
+          echo '=== [B] /debug/maps_list ==='
+          grep -an -B2 -A14 'maps_list' "$F" | head -200 || true
+
+          echo '=== [C] mdb dump routes (/mdb, dl_batch) ==='
+          grep -an -B2 -A16 '"/mdb"' "$F" | head -240 || true
+          grep -an -B2 -A12 'dl_batch' "$F" | head -200 || true
+
+          echo '=== [D] seed endpoints + ObscuredInt ==='
+          grep -an -B3 -A25 '/seed/history\|/seed/stats' "$F" | head -340 || true
+          grep -an 'rng_invalid_reason\|ObscuredInt' "$F" | head -90 || true
+          grep -an -B3 -A16 'ObscuredInt' "$F" | head -340 || true
+
+          echo '=== [E] /il2cpp/call family + singleton binding ==='
+          grep -an -B3 -A20 'il2cpp/call' "$F" | head -460 || true
+          grep -an -B4 -A18 'singleton_null' "$F" | head -300 || true
+
+          echo '=== [F] ResourceManager dictionaries + read primitives ==='
+          grep -an -B2 -A10 'nameHashMap\|hashNamesMap' "$F" | head -240 || true
+          grep -an -B2 -A10 'ResourceManager' "$F" | head -240 || true
+          grep -an -B2 -A12 'resource_file_dl' "$F" | head -180 || true
+          grep -an 'fn read_ptr\|fn read_u32\|fn read_usize\|fn read_i32\|fn read_u64' "$F" | head -50 || true
+          grep -an 'fn [a-z_]*singleton[a-z_]*' "$F" | head -50 || true
+
+          echo '=== [G] private_file_inventory / private_file_dl ==='
+          grep -an -B3 -A20 'private_file_inventory' "$F" | head -260 || true
+
+          echo '=== [H] query param helper candidates ==='
+          grep -an 'fn [a-z_]*query[a-z_]*(\|fn q[a-z_]*_param(' "$F" | head -70 || true
+
+          echo '=== [Z] counts ==='
+          echo "sniff_count=$(grep -a -c '/api/sniff' "$F" || true)"
+          echo "plugin_version_count=$(grep -a -c 'PLUGIN_VERSION' "$F" || true)"
+          echo "meta_query_count=$(grep -a -c 'resource_meta_query' "$F" || true)"
+          echo "mirror_count=$(grep -a -c 'install_screen_mirror_hook' "$F" || true)"
+          echo "anim_skip_count=$(grep -a -c 'training_anim_skip' "$F" || true)"

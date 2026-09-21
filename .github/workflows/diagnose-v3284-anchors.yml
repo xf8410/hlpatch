@@ -1,0 +1,87 @@
+name: Diagnose v3.28.4 anchors (read-only source audit)
+
+# 只读诊断：为 v3.28.4 补丁集摸清 v3.28.2 基线（v3.28.0+cumulative+guard 链前）的真实锚点。
+# 不动任何源码；推自己即触发（push 触发器不需要 workflow 在默认分支上）。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v3284-meta-query
+    paths:
+      - .github/workflows/diagnose-v3284-anchors.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Dump v3.28.4 patch anchors
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "== file size =="
+          wc -c "$F"; wc -l "$F"
+
+          echo; echo "== 1) resource_meta_probe route dispatch (60 lines before) =="
+          grep -a -n -B60 '"/debug/resource_meta_probe"' "$F" | head -170
+
+          echo; echo "== 2) resource_meta_probe route dispatch (40 lines after) =="
+          grep -a -n -A40 '"/debug/resource_meta_probe"' "$F" | head -110
+
+          echo; echo "== 3) resource_meta_schema + probe handler bodies =="
+          grep -a -n -B4 -A70 'fn .*resource_meta_schema\|fn .*resource_meta_probe' "$F" | head -280
+
+          echo; echo "== 4) resolve_module_symbol definition =="
+          grep -a -n -B4 -A45 'fn resolve_module_symbol' "$F" | head -110
+
+          echo; echo "== 5) transmute / raw fn-pointer patterns =="
+          grep -a -n 'transmute' "$F" | head -40
+
+          echo; echo "== 6) ura_meta_key persistence (how the key is stored) =="
+          grep -a -n -B8 -A40 'ura_meta_key' "$F" | head -240
+
+          echo; echo "== 7) sqlite3_key_v2 hook (key byte form) =="
+          grep -a -n -B6 -A60 'sqlite3_key_v2_hook' "$F" | head -200
+
+          echo; echo "== 8) query-string parse patterns =="
+          grep -a -n "find('?')\|splitn(2" "$F" | head -25
+
+          echo; echo "== 9) resource_file_dl handler (param parse + reply pattern) =="
+          grep -a -n -B4 -A70 'resource_file_dl' "$F" | head -200
+
+          echo; echo "== 10) strip-AI anchors =="
+          printf 'let_ai_json_count=%s\n' "$(grep -a -c 'let ai_json = {' "$F" || true)"
+          printf 'event_recommend_count=%s\n' "$(grep -a -c 'event/recommend' "$F" || true)"
+          printf 'ai_removed_marker=%s\n' "$(grep -a -c 'v3.28.3 ai removed' "$F" || true)"
+
+          echo; echo "== 11) dynamic-version anchors =="
+          printf 'literal_3_22_91_count=%s\n' "$(grep -a -c '3.22.91' "$F" || true)"
+          grep -a -n 'PLUGIN_VERSION' "$F" | head -12
+          grep -a -n 'URA plugin v3.24.9 loaded' "$F" | head -5
+
+          echo; echo "== 12) mirror / crashlog presence on baseline =="
+          printf 'mirror_count=%s\n' "$(grep -a -c 'install_screen_mirror_hook' "$F" || true)"
+          printf 'crashlog_count=%s\n' "$(grep -a -c 'hl_crash_log_dir' "$F" || true)"
+
+          echo; echo "== 13) sniff anchors (regression-guard seeds) =="
+          printf 'api_sniff_count=%s\n' "$(grep -a -c '/api/sniff' "$F" || true)"
+          grep -a -n 'fn install_api_sniff_hooks\|fn install_sniff' "$F" | head -8
+          grep -a -n 'hlpatch-observations\|observation_storage_root' "$F" | head -12
+
+          echo; echo "== 14) Mutex static pattern =="
+          grep -a -n -B2 -A8 'static .*Mutex<' "$F" | head -90
+
+          echo; echo "== 15) JSON string-escape helpers =="
+          grep -a -n 'fn .*escape\|fn je(' "$F" | head -20
+
+          echo; echo "== 16) http server reply writeback =="
+          grep -a -n -B4 -A26 'fn start_http_server' "$F" | head -90
+
+          echo; echo "== diagnosis done =="

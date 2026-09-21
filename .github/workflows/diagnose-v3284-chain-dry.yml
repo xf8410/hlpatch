@@ -1,0 +1,132 @@
+name: "Diagnose v3.28.4 chain (dry run + anchor dumps)"
+
+# 只读干跑：在真实基线上把 v3.28.4 补丁链整条预演（不编译、不建 tag、不发 release）。
+# 覆盖：cumulative → guard → 崩溃日志修复 → 摘 AI → 动态版本 → meta 直查路由（跑两遍比 sha）→ bump 3.28.4。
+# push 触发器：workflow_dispatch 只认默认分支上的文件，push 触发不受此限。
+# 触发路径含补丁脚本本身：改脚本即自动重跑干跑。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v3284-meta-query
+    paths:
+      - .github/workflows/diagnose-v3284-chain-dry.yml
+      - scripts/apply_meta_query_route_v3284.py
+
+permissions:
+  contents: read
+
+jobs:
+  dry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Rehearse v3.28.4 patch chain on the real baseline (no build, no release)"
+        run: |
+          set +e
+          BASELINE=721c086220ea081523229d88623de5abddd97eaa
+          F=hachimi_ura_plugin/src/lib.rs
+
+          echo "== branch tip =="
+          git log --oneline -2
+          git cat-file -e "$BASELINE^{commit}" && echo baseline_ok || echo baseline_MISSING
+
+          echo "== fetch main helpers =="
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          echo fetch_rc=$?
+
+          echo "== pin baseline skeleton =="
+          git checkout "$BASELINE" -- scripts hachimi_ura_plugin
+          echo pin_rc=$?
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          echo helper_fetch_rc=$?
+          for f in run_generated_succession_l_cumulative.py apply_sigsegv_guard_v32723.py apply_crash_log_path_fix.py apply_meta_query_route_v3284.py strip_ai_output_v3283.py apply_dynamic_version.py; do
+            if [ -f "scripts/$f" ]; then echo "present: $f"; else echo "ABSENT: $f"; fi
+          done
+
+          echo "== stage 1: cumulative + bump 3.27.23 =="
+          python3 scripts/run_generated_succession_l_cumulative.py > /tmp/cum.log 2>&1; echo rc=$?; tail -n 3 /tmp/cum.log
+          python3 scripts/bump_plugin_version.py 3.27.23 > /tmp/b1.log 2>&1; echo bump_2723_rc=$?
+
+          echo "== stage 2: sigsegv guard x2 =="
+          python3 scripts/apply_sigsegv_guard_v32723.py > /tmp/g1.log 2>&1; echo guard1_rc=$?
+          S1=$(sha256sum "$F" | cut -c1-16)
+          python3 scripts/apply_sigsegv_guard_v32723.py > /tmp/g2.log 2>&1; echo guard2_rc=$?
+          S2=$(sha256sum "$F" | cut -c1-16)
+          echo "guard_sha1=$S1 guard_sha2=$S2"
+
+          echo "== stage 3: bump 3.28.0 =="
+          python3 scripts/bump_plugin_version.py 3.28.0 > /tmp/b2.log 2>&1; echo bump_2800_rc=$?
+
+          echo "== stage 4: crash-log fix =="
+          python3 scripts/apply_crash_log_path_fix.py > /tmp/c1.log 2>&1; echo crashlog_rc=$?
+          tail -n 1 /tmp/c1.log
+
+          echo "== stage 5: strip built-in AI =="
+          python3 scripts/strip_ai_output_v3283.py > /tmp/s1.log 2>&1; echo strip_rc=$?
+
+          echo "== stage 6: dynamic version =="
+          python3 scripts/apply_dynamic_version.py > /tmp/d1.log 2>&1; echo dyn_rc=$?
+
+          echo "== stage 7: meta query route x2 (idempotency) =="
+          python3 scripts/apply_meta_query_route_v3284.py > /tmp/m1.log 2>&1; echo meta1_rc=$?; cat /tmp/m1.log
+          M1=$(sha256sum "$F" | cut -c1-16)
+          python3 scripts/apply_meta_query_route_v3284.py > /tmp/m2.log 2>&1; echo meta2_rc=$?; cat /tmp/m2.log
+          M2=$(sha256sum "$F" | cut -c1-16)
+          echo "meta_sha1=$M1 meta_sha2=$M2"
+
+          echo "== stage 8: bump 3.28.4 (final) =="
+          python3 scripts/bump_plugin_version.py 3.28.4 > /tmp/b3.log 2>&1; echo bump_2804_rc=$?
+
+          echo "== final counts (would-be v3.28.4 tree) =="
+          printf 'meta_fn=%s\n' "$(grep -a -c 'fn debug_resource_meta_query(' "$F")"
+          printf 'meta_route=%s\n' "$(grep -a -c '} else if path == "/debug/resource_meta_query" {' "$F")"
+          printf 'meta_dispatch=%s\n' "$(grep -a -c 'debug_resource_meta_query(&full_uri)' "$F")"
+          printf 'meta_dl_plain=%s\n' "$(grep -a -c '"/debug/resource_meta_schema","/debug/resource_meta_query",' "$F")"
+          printf 'schema_fn=%s\n' "$(grep -a -c 'fn debug_resource_meta_schema' "$F")"
+          printf 'mirror_calls=%s\n' "$(grep -a -c 'install_screen_mirror_hook' "$F")"
+          printf 'crashlog_dir=%s\n' "$(grep -a -c 'hl_crash_log_dir' "$F")"
+          printf 'sniff_route=%s\n' "$(grep -a -c '/api/sniff' "$F")"
+          printf 'sniff_hooks=%s\n' "$(grep -a -c 'fn install_api_sniff_hooks' "$F")"
+          printf 'obs_storage=%s\n' "$(grep -a -c 'hlpatch-observations' "$F")"
+          printf 'ai_marker=%s\n' "$(grep -a -c 'v3.28.3 ai removed' "$F")"
+          printf 'event_recommend_lit=%s\n' "$(grep -a -c '"/event/recommend"' "$F")"
+          printf 'plugin_version=%s\n' "$(grep -a -c 'PLUGIN_VERSION' "$F")"
+          printf 'cargo_version=%s\n' "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)"
+
+          echo "== meta fn head (first 24 lines) =="
+          NMQ=$(grep -a -n -m1 'fn debug_resource_meta_query(' "$F" | cut -d: -f1)
+          NMQ=${NMQ:-0}
+          echo "fn_line=$NMQ"
+          if [ "$NMQ" -gt 0 ]; then sed -n "${NMQ},$((NMQ+24))p" "$F"; fi
+
+          echo "== route context after patch =="
+          ND=$(grep -a -n -m1 '} else if path == "/debug/resource_meta_query" {' "$F" | cut -d: -f1)
+          ND=${ND:-0}
+          if [ "$ND" -gt 0 ]; then sed -n "$((ND-4)),$((ND+8))p" "$F"; fi
+
+          echo "== all resource_meta_query mentions =="
+          grep -a -n -m 8 'resource_meta_query' "$F" || true
+
+          echo "== balance sanity (brace/paren counts near fn region) =="
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('hachimi_ura_plugin/src/lib.rs').read_text(encoding='utf-8')
+          start = text.find('fn debug_resource_meta_query(')
+          end = text.find('fn debug_resource_meta_schema', start)
+          region = text[start:end] if start >= 0 and end > start else ''
+          print('region_len=%d' % len(region))
+          print('braces=%d parens=%d brackets=%d' % (
+              region.count('{') - region.count('}'),
+              region.count('(') - region.count(')'),
+              region.count('[') - region.count(']')))
+          print('raw_strings=%d' % region.count('r#"'))
+          print('close_raw=%d' % region.count('"#'))
+          PY
+
+          echo "== dry run complete =="
+          exit 0
