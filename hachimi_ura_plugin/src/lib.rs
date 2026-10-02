@@ -1789,7 +1789,14 @@ unsafe fn read_scenario_detail() -> String {
     ];
 
     // Try get_DataSet()
-    if !scenario_class.is_null() {
+    // ★ 3.28.2 实测（uma-3.28.2-offset-ledger 2026-10-02 struct-constants [4]）：
+    //   WorkSingleModeScenarioURA（sid=1/Ramen）在 3.28.2 只有 15 个方法，
+    //   不含 get_DataSet()。旧代码调不存在的方法恒返回 null，URA 分支全空。
+    //   这里对 sid=1 短路标注，避免无效调用；其余剧本未证伪，保留探测。
+    if scenario_id == 1 {
+        let note = "3.28.2 WorkSingleModeScenarioURA has no get_DataSet; URA data moved (candidate: SingleModeURAAPI / ApplySingleModeURADataSet input), see ledger 2026-10-02";
+        result_parts.push(format!(r#""dataset_available":false,"dataset_note":"{}""#, note));
+    } else if !scenario_class.is_null() {
         let dataset_obj = call_getter_ref(scenario_class, scenario_obj, "get_DataSet");
         if !dataset_obj.is_null() {
             result_parts.push(format!(r#""dataset_obj":"{:p}""#, dataset_obj));
@@ -1988,22 +1995,20 @@ unsafe fn read_scenario_detail() -> String {
                                             if p_elem.is_null() {
                                                 continue;
                                             }
-                                            // ★ Breeders: always plain Int32 (SingleModeParamsIncDecInfo)
+                                            // ★ 3.28.2 实测修正（uma-3.28.2-offset-ledger 2026-10-02 批次
+                                            //   struct-constants-and-findings.txt [3]）：
+                                            //   元素布局为两个独立 ObscuredInt：TargetType@0x10、Value@0x24
+                                            //   （ObscuredInt 步长 0x14，故第二个字段在 0x24 不是 0x14）。
+                                            //   旧读法把 TargetType 的壳（key@0x10/hidden@0x14）当成
+                                            //   (tt,val) 一对拆 => Ramen(14)/Breeders(13)/Onsen(12) 的
+                                            //   params_inc_dec 全错。现改 read_obscured_int_at 按实测偏移读。
                                             // TargetType 实测映射（与dump.cs ParameterType枚举不同！）：
                                             //   枚举定义3=Power 4=Guts，但target_type字段实际3=Guts 4=Power
                                             //   验证：Stamina训练(TT3)加Guts，Power训练(TT4)加Power
                                             //   0=None, 1=Speed, 2=Stamina, 3=Guts, 4=Power, 5=Wiz
                                             //   10=HP, 20=Motivation, 30=SkillPt
-                                            let bytes = p_elem as *const u8;
-                                            let t = std::ptr::read_unaligned::<i32>(
-                                                bytes.add(IL2CPP_OBSCURED_INT_KEY_OFF)
-                                                    as *const i32,
-                                            );
-                                            let v = std::ptr::read_unaligned::<i32>(
-                                                bytes.add(IL2CPP_OBSCURED_INT_HIDDEN_OFF)
-                                                    as *const i32,
-                                            );
-                                            let (tt, val) = (t, v);
+                                            let tt = read_obscured_int_at(p_elem, 0x10);
+                                            let val = read_obscured_int_at(p_elem, 0x24);
                                             let tt_name = match tt {
                                                 0 => "None",
                                                 1 => "Speed",
