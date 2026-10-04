@@ -1,0 +1,81 @@
+name: "Diagnose v3.28.5 push loop + response tail (read-only)"
+
+# 只读诊断 #4：v3.28.5 候选链重放后，dump 崩溃窗口最后的嫌疑区：
+#   [T1] 6820-6996  —— push_to_app / push_loop 全文（含 v3.22.89 SIGSEGV 注释区）
+#   [T2] 9838-10060 —— handle_http 响应收尾（save_endpoint_log 之后的输出路径）
+#   [T3] 12690-12860 —— 启动 5 秒后的崩溃日志检查/上传线程
+#   [T4] 子进程用法 grep（system/fork/Command/curl）——排查多线程 fork 类崩溃
+#   [T5] push 相关符号全列表
+#   [T6] handle_http 头部（请求解析 + 谁调用 read_summary）
+#   [T7] 计数
+# 不编译、不发布、不改产品源码；触发：push（本文件路径）+ workflow_dispatch。
+on:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/diagnose-v3285-pushloop.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin baseline + apply the exact v3.28.5 candidate chain"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          python3 scripts/run_generated_succession_l_cumulative.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.27.23 > /dev/null
+          python3 scripts/apply_sigsegv_guard_v32723.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.28.0 > /dev/null
+          python3 scripts/apply_crash_log_path_fix.py > /dev/null
+          python3 scripts/strip_ai_output_v3283.py > /dev/null
+          python3 scripts/apply_dynamic_version.py > /dev/null
+          python3 scripts/apply_meta_query_route_v3284.py > /dev/null
+
+      - name: "Dump push loop + response tail (read-only)"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "file_bytes=$(wc -c < "$F")"
+
+          echo '=== [T1] 6820-6996 push_to_app + push_loop ==='
+          sed -n '6820,6996p' "$F"
+
+          echo '=== [T2] 9838-10060 response tail ==='
+          sed -n '9838,10060p' "$F"
+
+          echo '=== [T3] 12690-12860 boot crash upload ==='
+          sed -n '12690,12860p' "$F"
+
+          echo '=== [T4] child process / system usage ==='
+          grep -an 'sys_system\|system(\|fork\|Command::new\|curl ' "$F" | head -60 || true
+
+          echo '=== [T5] push symbols ==='
+          grep -an 'push_to_app\|push_loop\|push_addr\|push_port\|PUSH_' "$F" | head -80 || true
+
+          echo '=== [T6] handle_http head ==='
+          grep -an -A45 'fn handle_http' "$F" | head -110 || true
+
+          echo '=== [T7] summary call sites ==='
+          grep -an 'read_summary()' "$F" | head -40 || true

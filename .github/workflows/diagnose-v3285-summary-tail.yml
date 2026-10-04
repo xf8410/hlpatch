@@ -1,0 +1,136 @@
+name: "Diagnose v3.28.5 summary tail (read-only)"
+
+# 只读诊断：重放 v3.28.5 候选链（cumulative -> guard -> crashlog -> stripAI -> dynamicVersion -> metaQuery），
+# 然后 dump：/summary 尾部（S:buffs done 到函数结束）、S:json 调用点、崩溃信号处理器全文、
+# /summary 路由与 save/发送点、log_predict_step 实现、HTTP 线程创建与栈大小、线程 attach 相关调用。
+# 不编译、不发布、不改产品源码；触发：push（本文件路径）+ workflow_dispatch。
+on:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/diagnose-v3285-summary-tail.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin source to v3.28.0 baseline (helpers from main; branch patches stay)"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          for f in run_generated_succession_l_cumulative.py apply_sigsegv_guard_v32723.py apply_crash_log_path_fix.py apply_meta_query_route_v3284.py strip_ai_output_v3283.py apply_dynamic_version.py bump_plugin_version.py; do
+            test -f "scripts/$f"
+          done
+
+      - name: "Stage 1: cumulative (3.27.23)"
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/bump_plugin_version.py 3.27.23
+
+      - name: "Stage 2: SIGSEGV guard (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+
+      - name: "Stage 3: bump 3.28.0"
+        run: |
+          set -euo pipefail
+          python3 scripts/bump_plugin_version.py 3.28.0
+
+      - name: "Stage 4: crash-log path fix"
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_crash_log_path_fix.py
+
+      - name: "Stage 5: strip built-in AI"
+        run: |
+          set -euo pipefail
+          python3 scripts/strip_ai_output_v3283.py
+
+      - name: "Stage 6: dynamic version"
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_dynamic_version.py
+
+      - name: "Stage 7: meta query route (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_meta_query_route_v3284.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_meta_query_route_v3284.py
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+
+      - name: "Dump summary tail / handler / route / threads (read-only)"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "file_bytes=$(wc -c < "$F")"
+
+          echo '=== [I] summary tail: around S:buffs done ==='
+          grep -an -B6 -A175 'S:buffs done' "$F" | head -360 || true
+
+          echo '=== [I3] S:json call site context ==='
+          grep -an -B5 -A30 'log_predict_step("S:json")' "$F" | head -120 || true
+
+          echo '=== [K] crash handler around RECOVERED ==='
+          grep -an -B35 -A95 'RECOVERED' "$F" | head -300 || true
+
+          echo '=== [K2] signal setup + thread attach greps ==='
+          grep -an 'sigaltstack\|SA_ONSTACK\|sigaction\|SIGSEGV\|siglongjmp\|setjmp\|longjmp\|SIGSTKSZ' "$F" | head -70 || true
+          grep -an 'thread_attach\|ThreadAttach\|AttachThread\|il2cpp_thread' "$F" | head -40 || true
+
+          echo '=== [J2] /summary route ==='
+          grep -an -B8 -A50 'path == "/summary"' "$F" | head -180 || true
+
+          echo '=== [J3] post-route: save_endpoint_log(&path, &body) context ==='
+          grep -an -B14 -A70 'save_endpoint_log(&path, &body)' "$F" | head -240 || true
+
+          echo '=== [J] read_summary wrapper/callers ==='
+          grep -an -B4 -A55 'fn read_summary' "$F" | head -240 || true
+          grep -an -B3 -A8 'read_summary_inner' "$F" | head -70 || true
+
+          echo '=== [L] log_predict_step impl ==='
+          grep -an -B4 -A70 'fn log_predict_step' "$F" | head -150 || true
+
+          echo '=== [M] thread spawns / stack size ==='
+          grep -an 'thread::spawn\|thread::Builder\|stack_size' "$F" | head -70 || true
+
+          echo '=== [M2] http server loop ==='
+          grep -an -B6 -A30 'incoming_requests\|tiny_http\|Server::http\|TcpListener' "$F" | head -170 || true
+
+          echo '=== [Z2] counts ==='
+          echo "buffs_done=$(grep -a -c 'S:buffs done' "$F" || true)"
+          echo "sjson=$(grep -a -c 'S:json' "$F" || true)"
+          echo "read_summary=$(grep -a -c 'fn read_summary' "$F" || true)"
+          echo "recovered=$(grep -a -c 'RECOVERED' "$F" || true)"
+          echo "crash_step=$(grep -a -c 'CRASH at step' "$F" || true)"
+          echo "save_endpoint=$(grep -a -c 'save_endpoint_log' "$F" || true)"

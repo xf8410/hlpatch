@@ -1,0 +1,78 @@
+name: "Diagnose v3.28.5 push pipeline (read-only)"
+
+# 只读诊断 #3：与 v3.28.5 候选链完全相同的补丁链上，精确 dump 推送管线：
+#   [R1] 21355-21440（另一个 guard 包装函数据此定位函数名）
+#   [R2] 21530-21830（push 包装：READ_MUTEX + sigsetjmp + "1. summary" 调用点及其后续 POST 逻辑）
+#   [R3] push 相关函数名 / 18766 / 线程创建 grep
+#   [R4] observe_ramen_transition / append_global_observation / persist_protocol_observation_boundary 调用点
+#   [R5] 计数
+# 不编译、不发布、不改产品源码；触发：push（本文件路径）+ workflow_dispatch。
+on:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/diagnose-v3285-push-tail.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin baseline + apply the exact v3.28.5 candidate chain"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          python3 scripts/run_generated_succession_l_cumulative.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.27.23 > /dev/null
+          python3 scripts/apply_sigsegv_guard_v32723.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.28.0 > /dev/null
+          python3 scripts/apply_crash_log_path_fix.py > /dev/null
+          python3 scripts/strip_ai_output_v3283.py > /dev/null
+          python3 scripts/apply_dynamic_version.py > /dev/null
+          python3 scripts/apply_meta_query_route_v3284.py > /dev/null
+
+      - name: "Dump push pipeline code (read-only)"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "file_bytes=$(wc -c < "$F")"
+
+          echo '=== [R1] 21355-21440 ==='
+          sed -n '21355,21440p' "$F"
+
+          echo '=== [R2] 21530-21830 ==='
+          sed -n '21530,21830p' "$F"
+
+          echo '=== [R3] push fns / 18766 / spawns ==='
+          grep -an '18766' "$F" | head -20 || true
+          grep -an 'fn [a-z_0-9]*push[a-z_0-9]*' "$F" | head -50 || true
+          grep -an -B2 -A8 'thread::Builder\|thread::spawn' "$F" | head -120 || true
+
+          echo '=== [R4] observation call sites ==='
+          grep -an 'append_global_observation\|persist_protocol_observation_boundary\|observe_ramen_transition\|compact_training_observation' "$F" | head -60 || true
+
+          echo '=== [R5] counts ==='
+          echo "read_mutex_users=$(grep -a -c 'READ_MUTEX.lock' "$F" || true)"
+          echo "setjmp_users=$(grep -a -c 'sys_sigsetjmp' "$F" || true)"
+          echo "recovery_store_true=$(grep -a -c 'SIGSEGV_RECOVERY.store(true' "$F" || true)"
+          echo "recovery_store_false=$(grep -a -c 'SIGSEGV_RECOVERY.store(false' "$F" || true)"

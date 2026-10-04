@@ -1,0 +1,120 @@
+name: "Diagnose v3.28.7 crash-forensics fixes (dry run, read-only)"
+
+# 干跑：v3.28.5 + v3.28.6 全链之后叠加 v3.28.7 修复补丁，
+# 校验：幂等、严格模块标签（native/natwin/nathelp）、best-fit 查表、
+# seq 线程表 + T: 映射日志、armed-tid longjmp 双重门、fa=/c= 字段、
+# S:enter/S:exit 带 tid、arming 站点全量重写（store(true) 唯一）。
+on:
+  push:
+    branches:
+      - workbench/v3285-features
+    paths:
+      - .github/workflows/diagnose-v3287-forensics.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: "Fetch main helper scripts"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: "Pin baseline + full v3.28.5/6 chain + v3.28.7 fixes"
+        run: |
+          set -euo pipefail
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git checkout "$BASELINE_SHA" -- scripts hachimi_ura_plugin
+          git checkout refs/remotes/origin/main -- scripts/apply_sigsegv_guard_v32723.py scripts/strip_ai_output_v3283.py scripts/apply_dynamic_version.py scripts/bump_plugin_version.py
+          for f in apply_summary_crash_truth_v3285.py apply_crash_forensics_v3286.py apply_crash_forensics_v3287.py apply_crash_log_path_fix.py apply_meta_query_route_v3284.py; do
+            test -f "scripts/$f"
+          done
+          python3 scripts/run_generated_succession_l_cumulative.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.27.23 > /dev/null
+          python3 scripts/apply_sigsegv_guard_v32723.py > /dev/null
+          python3 scripts/bump_plugin_version.py 3.28.0 > /dev/null
+          python3 scripts/apply_crash_log_path_fix.py > /dev/null
+          python3 scripts/strip_ai_output_v3283.py > /dev/null
+          python3 scripts/apply_dynamic_version.py > /dev/null
+          python3 scripts/apply_meta_query_route_v3284.py > /dev/null
+          python3 scripts/apply_summary_crash_truth_v3285.py
+          python3 scripts/apply_crash_forensics_v3286.py
+
+      - name: "Stage: v3.28.7 fixes (idempotent x2, sha equal)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          python3 scripts/apply_crash_forensics_v3287.py
+          S1=$(sha256sum "$F" | cut -d' ' -f1)
+          python3 scripts/apply_crash_forensics_v3287.py | grep -q already_applied
+          S2=$(sha256sum "$F" | cut -d' ' -f1)
+          test "$S1" = "$S2"
+          echo "idempotent_sha=$S1"
+
+      - name: "Qualification greps (v3287 invariants)"
+        run: |
+          set -euo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          for s in \
+            'fn hl_arm_recovery()' \
+            'HL_RECOVERY_ARMED_TID' \
+            'fname == "libnative.so"' \
+            '"natwin"' \
+            '"nathelp"' \
+            'HL_THR_SEQ' \
+            'HL_THR_SEQ_NEXT' \
+            'T:{}={}' \
+            'S:enter tid=' \
+            'S:exit tid=' \
+            'b" fa=0x"' \
+            'b" c="' \
+            'best_span' \
+            'best_seq' \
+            'const HL_MOD_MAX: usize = 256;'
+          do grep -aFq "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done
+          # 旧合并行必须消失
+          if grep -aFq 'starts_with("libnative")' "$F"; then
+            echo "REGRESSION: broad libnative prefix still present"; exit 1
+          fi
+          if grep -aFq 'log_predict_step("S:enter")' "$F" || grep -aFq 'log_predict_step("S:exit")' "$F"; then
+            echo "REGRESSION: plain S:enter/S:exit marker still present"; exit 1
+          fi
+          # armed-tid 门必须恰好两处（longjmp + verdict）
+          test "$(grep -a -c 'HL_RECOVERY_ARMED_TID.load' "$F")" -eq 2
+          # store(true) 唯一（仅 helper）
+          test "$(grep -a -c 'SIGSEGV_RECOVERY.store(true' "$F")" -eq 1
+          echo "greps_ok"
+
+      - name: "Region dumps (manual review)"
+        run: |
+          set -uo pipefail
+          F=hachimi_ura_plugin/src/lib.rs
+          echo "file_bytes=$(wc -c < "$F")"
+          echo '=== [G1] module labels + near-merge ==='
+          grep -an -B2 -A6 'fname == "libnative.so"' "$F" | head -40 || true
+          echo '=== [G2] best-fit lookup ==='
+          grep -an -B2 -A16 'best_span' "$F" | head -50 || true
+          echo '=== [G3] armed-tid helper + gates ==='
+          grep -an -B2 -A10 'fn hl_arm_recovery' "$F" | head -30 || true
+          grep -an 'HL_RECOVERY_ARMED_TID.load' "$F" || true
+          echo '=== [G4] fa/c fields ==='
+          grep -an -B2 -A8 'b" fa=0x"' "$F" | head -30 || true
+          echo '=== [G5] seq thread registry ==='
+          grep -an -B2 -A6 'T:{}={}' "$F" | head -20 || true
+          echo '=== [G6] counts ==='
+          echo "armed_sites=$(grep -a -c 'hl_arm_recovery();' "$F" || true)"
+          echo "store_true=$(grep -a -c 'SIGSEGV_RECOVERY.store(true' "$F" || true)"
+          echo "tid_markers=$(grep -a -c 'tid={}' "$F" || true)"
