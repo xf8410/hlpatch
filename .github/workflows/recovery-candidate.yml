@@ -34,6 +34,12 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --target aarch64-linux-android
           cargo +1.97.1 install cargo-ndk --version 4.1.2 --locked
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
+      - name: Fetch locked dependencies before offline production harnesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fetch --locked --manifest-path hachimi_ura_plugin/Cargo.toml
+          cargo +1.97.1 fetch --locked --manifest-path ramen_observation/Cargo.toml
       - name: Check provenance, production policies and portable contracts
         run: python scripts/recovery/run_checks.py
       - name: Build direct candidate or isolated historical baseline
