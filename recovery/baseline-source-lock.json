@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/xf8410/hlpatch.git",
+  "baseline_revision": "721c086220ea081523229d88623de5abddd97eaa",
+  "release_workflow_revision": "fa2c820f4847f4e7b377e846ade958e0be19e98d",
+  "release_tag_revision": "a86707ec3fd37a15a71ba63dc617b2526be4c4ce",
+  "release_tag": "v3.28.2",
+  "release_workflow_run": 34753597638,
+  "published_binary": {
+    "sha256": "5e6584b8859632d86cd51f6ed99d6c5dc87451bf045aa59a743efa36a6ba5075",
+    "size": 4884384
+  },
+  "inputs": {
+    ".github/workflows/release-v3282-crashlog.yml": {
+      "revision": "fa2c820f4847f4e7b377e846ade958e0be19e98d",
+      "path": ".github/workflows/release-v3282-crashlog.yml",
+      "sha256_lf": "fa8cf372572d2acacececb98ba48c437531e265a1857d58dbca77e6663857474"
+    },
+    "hachimi_ura_plugin/.cargo/config.toml": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "hachimi_ura_plugin/.cargo/config.toml",
+      "sha256_lf": "54d0c19c12ebf0b5a5ba8bd69c7eb3bc7b5a8dc702a7d3f6379750619d4f991a"
+    },
+    "hachimi_ura_plugin/.gitignore": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "hachimi_ura_plugin/.gitignore",
+      "sha256_lf": "12cc0f91b51fedf41ae1670d1624ee1d78a284bdb101645b60a06a12de16c069"
+    },
+    "hachimi_ura_plugin/Cargo.lock": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "hachimi_ura_plugin/Cargo.lock",
+      "sha256_lf": "e99dfc52a4211286a4847f422a29b2975734d7897bef059c4a57c1f89e1f48c0"
+    },
+    "hachimi_ura_plugin/Cargo.toml": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "hachimi_ura_plugin/Cargo.toml",
+      "sha256_lf": "32808a107ae6d85fba092cf8c85714063c051aeae4e4d96dedfbf44498a78353"
+    },
+    "hachimi_ura_plugin/src/keychain_source_observer.rs": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "hachimi_ura_plugin/src/keychain_source_observer.rs",
+      "sha256_lf": "f9bf9d019c50a289f655d8b33766fa468132a11330487f8d68def406fec91353"
+    },
+    "hachimi_ura_plugin/src/lib.rs": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "hachimi_ura_plugin/src/lib.rs",
+      "sha256_lf": "c7fbf94b308cf20268e6f1530b5ca48abc1074f9a32e6a7109624656f9c13c02"
+    },
+    "hachimi_ura_plugin/src/protocol_send_discovery.rs": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "hachimi_ura_plugin/src/protocol_send_discovery.rs",
+      "sha256_lf": "d3fcc1eaab98b93250c76404fe2fdd3f9a94433ed2fa9093b3d125fb53a0f196"
+    },
+    "hachimi_ura_plugin/src/signup_plaintext.rs": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "hachimi_ura_plugin/src/signup_plaintext.rs",
+      "sha256_lf": "0d9d66b47c0f19d45cfefa778af6cfc3c962de72b70042980f69d4c89fa0d667"
+    },
+    "scripts/apply_crash_log_path_fix.py": {
+      "revision": "fa2c820f4847f4e7b377e846ade958e0be19e98d",
+      "path": "scripts/apply_crash_log_path_fix.py",
+      "sha256_lf": "b94bc0d2549c7e0d437727d3faadbef5393d7ddff3d0bc0d32970be587b2e82b"
+    },
+    "scripts/apply_exact_method_probe_b1.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_exact_method_probe_b1.py",
+      "sha256_lf": "df83b6b2b5a7e7cc1a22e9d526c06bb4481974551239f73cd61fed4d83854435"
+    },
+    "scripts/apply_generated_succession_runtime_l.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_generated_succession_runtime_l.py",
+      "sha256_lf": "2610b8a3d71486c57e42d0b485e53e749da688e8a829fce3b326e104d7c77cd2"
+    },
+    "scripts/apply_generated_succession_runtime_l_support_fix.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_generated_succession_runtime_l_support_fix.py",
+      "sha256_lf": "f08a224f9721deeadf282d64f6f08797ff1d2f351ceb0990b81f35d715f33e10"
+    },
+    "scripts/apply_hachimi_textcommon_observer.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_hachimi_textcommon_observer.py",
+      "sha256_lf": "8509b49c2c91a981fc31278156d567d2f9be9302224e836ac15786e593fb87fb"
+    },
+    "scripts/apply_il2cpp_signature_patch.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_il2cpp_signature_patch.py",
+      "sha256_lf": "645da2646f5cabf4fa512ab0d94c13073dd0796a403cf97907279c27913cc101"
+    },
+    "scripts/apply_keychain_source_observer.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_keychain_source_observer.py",
+      "sha256_lf": "3a540295e860f147201580595a7421ab839af7d93654f02edd87a5c2ca6dd1a6"
+    },
+    "scripts/apply_protocol_archive_reliability_p.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_protocol_archive_reliability_p.py",
+      "sha256_lf": "44a8dc0b98736921a62149eb8a2c7918914745bc1c817df65d7943dcd48f6410"
+    },
+    "scripts/apply_protocol_multisection_event_timeline.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_protocol_multisection_event_timeline.py",
+      "sha256_lf": "d6f6162118eecf4a0faae879eb55257e6add7c0be00bdfa3282c41895f6ba45b"
+    },
+    "scripts/apply_protocol_send_discovery.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_protocol_send_discovery.py",
+      "sha256_lf": "ee4552a821281501da9460f9c55fec7ed6be724c0973bdc9a2ac3102b7973c37"
+    },
+    "scripts/apply_ramen_global_durable_observation.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_ramen_global_durable_observation.py",
+      "sha256_lf": "e7264b9e5231b5f65358a8565fe6e074cb20508623a91571f781fa7a01844a1d"
+    },
+    "scripts/apply_screen_mirror_frame_a.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_screen_mirror_frame_a.py",
+      "sha256_lf": "4508081a2b399a0313b9965407642d63b747f73553d95e9100e69a31da43f057"
+    },
+    "scripts/apply_signup_plaintext_observer.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_signup_plaintext_observer.py",
+      "sha256_lf": "1060079dd745fbd4d7cb9ca01457fd8d5f25e76607f3f241cf140a9b016e6964"
+    },
+    "scripts/apply_storage_read_range_a1.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_storage_read_range_a1.py",
+      "sha256_lf": "3b4a7aab0ff463528034646871709cd91de671c1826377578e7bf39ecc893c5f"
+    },
+    "scripts/apply_unified_endpoint_a_compile_fix.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_a_compile_fix.py",
+      "sha256_lf": "ee87289e7d43d56a6ca53843715ef6e9b600521c5459bfea29b296441238c58e"
+    },
+    "scripts/apply_unified_endpoint_a_patch.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_a_patch.py",
+      "sha256_lf": "c4c37cbde03ea56f71c3e9569dbb756a6536cca147322e0661e08706ae4590e2"
+    },
+    "scripts/apply_unified_endpoint_b_storage_compile_fix.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_b_storage_compile_fix.py",
+      "sha256_lf": "1645a6b3c203ddd0ab59074108e49cc08d7a28bef373e738c83fbc526551c2b4"
+    },
+    "scripts/apply_unified_endpoint_b_storage_patch.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_b_storage_patch.py",
+      "sha256_lf": "4d4e6a9648c7eeb5f0fc3db077f3dac18670e77a907c89edc0f213df376fc5c7"
+    },
+    "scripts/apply_unified_endpoint_c_inherit_pair_patch.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_c_inherit_pair_patch.py",
+      "sha256_lf": "dd53818004cc351d15f9721dbd29fd1e39beb9019eeb26cc8be6e7882a34cd71"
+    },
+    "scripts/apply_unified_endpoint_d_selected_parent_patch.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_d_selected_parent_patch.py",
+      "sha256_lf": "1dfd124659a0af1f755d12ccc8713b2c0d82d8bde94f1cd4ac0945ec82a85b05"
+    },
+    "scripts/apply_unified_endpoint_e_runtime_correction.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_e_runtime_correction.py",
+      "sha256_lf": "8096f246eff104d66fc09e0b69f11ca9adf689a095dece2d967279e486fad082"
+    },
+    "scripts/apply_unified_endpoint_f_pre_release_fix.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_f_pre_release_fix.py",
+      "sha256_lf": "91b95e9a2eba5eed312daba4d4fe0444f5cae167f9ef6f7d3ba690a35b892da8"
+    },
+    "scripts/apply_unified_endpoint_g_release_gate_fix.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_g_release_gate_fix.py",
+      "sha256_lf": "5dd53b6aae8a3aec280e2736d812e31f9ac218cd7e5cfad00e59d60b4cc09cf9"
+    },
+    "scripts/apply_unified_endpoint_h_response_headers.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_h_response_headers.py",
+      "sha256_lf": "52f2ea08329b41791df611371ab92dc21b83c3a1e8f52815b63ad818017e970e"
+    },
+    "scripts/apply_unified_endpoint_i_parent_multisource.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_i_parent_multisource.py",
+      "sha256_lf": "96cbc7f9a399706501ecc8cd08613a42d0db03a1b5dc00c1f4e5d7cf3b8da8d6"
+    },
+    "scripts/apply_unified_endpoint_j_parent_runtime_semantics.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_j_parent_runtime_semantics.py",
+      "sha256_lf": "11a43319df22053e0939c3df133b2dd9580176cadd915ec23ae3abd0f58438a6"
+    },
+    "scripts/apply_unified_endpoint_k_complete.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/apply_unified_endpoint_k_complete.py",
+      "sha256_lf": "5ab3a79d9cdf5d26fedc9a46c348685a7721e4e25aa73367826141c4335bb118"
+    },
+    "scripts/extract_pre_release_endpoint_source_context.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/extract_pre_release_endpoint_source_context.py",
+      "sha256_lf": "d37240242d0d5456eae203ecc769bf5cecf1d85e4ba3afe901a98e24a366b232"
+    },
+    "scripts/extract_response_header_hook_context.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/extract_response_header_hook_context.py",
+      "sha256_lf": "c46c0c920cd83462319a25ec83079f11edffe625aa5c28200e583b6e428abd18"
+    },
+    "scripts/fix_unified_endpoint_f_patch_anchors.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/fix_unified_endpoint_f_patch_anchors.py",
+      "sha256_lf": "a5ff8f2614d9fcf61113783fefcf14dfe24c2afe6576aa0d1611a15ef8c89417"
+    },
+    "scripts/fix_unified_endpoint_k_complete_anchors.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/fix_unified_endpoint_k_complete_anchors.py",
+      "sha256_lf": "3c3a245b95efce330a595ebadffde53c8713ee6938a329130b8777ed51c17afb"
+    },
+    "scripts/fix_unified_endpoint_k_rust_types.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/fix_unified_endpoint_k_rust_types.py",
+      "sha256_lf": "fdbc7983aaddbc0ff0f608418836767f1d176ea0fc9cd909225a7387fd305c63"
+    },
+    "scripts/run_generated_succession_l_cumulative.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "scripts/run_generated_succession_l_cumulative.py",
+      "sha256_lf": "21ad28bb9645c3170aa03a20fcceb731627610b1b42e41b86898f0f736e5be05"
+    },
+    "tooling/apply_turn_event_json_export.py": {
+      "revision": "721c086220ea081523229d88623de5abddd97eaa",
+      "path": "tooling/apply_turn_event_json_export.py",
+      "sha256_lf": "98197557da1231596a04601f1b58a7986f92fcd270013130042243f652fbb780"
+    }
+  },
+  "generated_files": {
+    "hachimi_ura_plugin/Cargo.lock": "adf4590bd7ee2bd2af35440841996fa1e0d909b6e2b7cc0feed206e71a491442",
+    "hachimi_ura_plugin/Cargo.toml": "2ee6056be81ea40d37380610c7f0abb639af1a4127582b0a4c8332acf60594ec",
+    "hachimi_ura_plugin/src/keychain_source_observer.rs": "f9bf9d019c50a289f655d8b33766fa468132a11330487f8d68def406fec91353",
+    "hachimi_ura_plugin/src/lib.rs": "67f1cb0ef8d0319e4c9f7e3ea026d5938b7f7833d14304594111ac414e6e76c9",
+    "hachimi_ura_plugin/src/protocol_send_discovery.rs": "d3fcc1eaab98b93250c76404fe2fdd3f9a94433ed2fa9093b3d125fb53a0f196",
+    "hachimi_ura_plugin/src/signup_plaintext.rs": "0d9d66b47c0f19d45cfefa778af6cfc3c962de72b70042980f69d4c89fa0d667"
+  },
+  "reproduction_scope": "Exact reviewed generated UTF-8/LF source. Historical build toolchain and post-resolution Cargo.lock were not published; new builds do not claim original binary identity."
+}

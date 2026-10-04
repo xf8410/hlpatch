@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "cargo_lock_sha256_lf": "e99ac61286d648eead54668c5105c8625100cbda7ff4224d703c07d5be072e6f",
+  "rust": "1.97.1",
+  "resolved_utc_date": "2026-10-04",
+  "scope": "Modern locked dependencies for historical generated v3.28.2 source. The published release did not preserve its post-resolution Cargo.lock; this does not claim identical release dependencies or binary."
+}
