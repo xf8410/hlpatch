@@ -1,2 +1,12 @@
 *.apk filter=lfs diff=lfs merge=lfs -text
 reverse/*.json filter=lfs diff=lfs merge=lfs -text
+
+recovery/*.json text eol=lf
+recovery/*.lock text eol=lf
+scripts/recovery/*.py text eol=lf
+scripts/recovery/tests/*.py text eol=lf
+.github/workflows/*.yml text eol=lf
+rust-toolchain.toml text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf

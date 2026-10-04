@@ -1,0 +1,56 @@
+name: Recovery candidate and pinned source baseline
+
+on:
+  push:
+    branches: ["workbench/so-recovery-*"]
+  pull_request:
+    paths: ["hachimi_ura_plugin/**", "ramen_observation/**", "scripts/recovery/**", "recovery/**", ".github/workflows/recovery-candidate.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    if: ${{ startsWith(github.ref_name, 'workbench/so-recovery-') || startsWith(github.head_ref, 'workbench/so-recovery-') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [baseline, candidate]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13.7"
+      - name: Install the locked native tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --target aarch64-linux-android
+          cargo +1.97.1 install cargo-ndk --version 4.1.2 --locked
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
+      - name: Check provenance, production policies and portable contracts
+        run: python scripts/recovery/run_checks.py
+      - name: Build direct candidate or isolated historical baseline
+        shell: bash
+        env:
+          RECOVERY_MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$RECOVERY_MODE" == baseline ]]; then args+=(--baseline); fi
+          python scripts/recovery/build_native.py "${args[@]}" --ndk "$ANDROID_HOME/ndk/28.2.13676358"
+      - name: Retain SO, full symbols, build IDs, source manifests and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recovery-${{ matrix.mode }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: .recovery-artifacts/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

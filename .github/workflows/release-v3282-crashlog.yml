@@ -15,6 +15,7 @@ env:
   BASELINE_SHA: 721c086220ea081523229d88623de5abddd97eaa
 jobs:
   release:
+    if: ${{ !startsWith(github.ref_name, 'workbench/so-recovery-') && !startsWith(github.head_ref, 'workbench/so-recovery-') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

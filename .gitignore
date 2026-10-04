@@ -1,2 +1,9 @@
 native/build/\nnative/libs/\n*.o\n*.a
 *.bak
+
+# Isolated recovery rebuilds and immutable local artifacts
+/.recovery-cache/
+/.recovery-artifacts/
+/hachimi_ura_plugin/target/
+**/target/
+__pycache__/

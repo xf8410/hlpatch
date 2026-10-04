@@ -10,6 +10,7 @@ permissions:
   contents: write
 jobs:
   release:
+    if: ${{ !startsWith(github.ref_name, 'workbench/so-recovery-') && !startsWith(github.head_ref, 'workbench/so-recovery-') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

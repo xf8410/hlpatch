@@ -1,6 +1,6 @@
 [package]
 name = "hachimi_ura"
-version = "3.27.9"
+version = "3.28.2-recovery.3"
 edition = "2021"
 authors = ["URA Plugin Developer"]
 description = "Umamusume Response Analyzer - URA Blackboard Plugin for Hachimi (minimal V3)"
@@ -12,10 +12,18 @@ crate-type = ["cdylib"]
 rusqlite = { version = "0.31", default-features = false, features = ["bundled"] }
 ureq = { version = "2", features = ["tls"] }
 libc = "0.2"
+rmpv = "1"
+sha2 = "0.10"
+serde_json = "1.0.151"
+ramen_observation = { version = "0.1.0", path = "../ramen_observation" }
 
 [profile.release]
 opt-level = 3
 lto = true
-strip = true
+strip = false
+debug = 2
 panic = "unwind"
 codegen-units = 1
+
+# This plugin is built independently of unrelated parent workspace manifests.
+[workspace]
