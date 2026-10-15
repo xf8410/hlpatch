@@ -1,0 +1,59 @@
+{
+  "purpose": "Durable offline/static evidence snapshot; no game-tool calls are required to interpret this file.",
+  "source": {
+    "so_version": "3.27.15",
+    "mdb": "/data/data/jp.co.cygames.umamusume/files/master/master.mdb",
+    "access": "/mdb/raw?sql=...",
+    "web_sources_used": false,
+    "existing_pr": 17,
+    "source_branch": "workbench/succession-factor-evidence"
+  },
+  "correction": {
+    "incorrect_prior_claim": "63 = 9 x 7 succession-trigger gain",
+    "correct_claim": "63 is an opening/base-stat bonus, not a succession-event gain.",
+    "database_proof": {
+      "table": "succession_initial_factor",
+      "factor_type": 1,
+      "value_1": 3,
+      "value_2": 0,
+      "value_2_meaning": "ParamUp",
+      "add_point": 21,
+      "derived_example": "three applicable 3-star white parameter factors: 21 x 3 = 63"
+    },
+    "separation": {
+      "white_parameter_factor": "succession_initial_factor: 1-star +5, 2-star +12, 3-star +21 at opening",
+      "blue_parameter_factor": "succession_factor_effect: ordinary 1-star +3, 2-star +6, 3-star +9 per successful succession trigger"
+    }
+  },
+  "orm_offsets": {
+    "SuccessionFactorEffect": {
+      "Id": "0x10",
+      "FactorGroupId": "0x14",
+      "EffectId": "0x18",
+      "TargetType": "0x1c",
+      "Value1": "0x20",
+      "Value2": "0x24"
+    },
+    "SuccessionInitialFactor": {
+      "Id": "0x10",
+      "FactorType": "0x14",
+      "Value1": "0x18",
+      "Value2": "0x1c",
+      "AddPoint": "0x20"
+    }
+  },
+  "tables": {
+    "succession_factor": 2577,
+    "succession_factor_effect": 6674,
+    "succession_factor_addon_effect": 2,
+    "succession_initial_factor": 13,
+    "single_mode_12_factor_bonus": 9,
+    "text_data_columns": ["id", "category", "index", "text"]
+  },
+  "runtime_signatures": {
+    "SuccessionBonusParams": ["ApplyFactor(ref factorData, ref uniqueSkill, int factorLv)", "GetBonusValueByType(FactorTargetType) -> int"],
+    "SuccessionFactor": ["Name(int lv) -> string", "get_Description() -> string"]
+  },
+  "id_to_text_note": "Factor IDs must be resolved through the game's text/resource mapping. WinSaddleAnalyzer uses factor_effects.br; do not assume factor_id equals text_data.id.",
+  "memory_note": "Previously captured process addresses are ASLR-dependent; stable identifiers are file offsets, not runtime virtual addresses."
+}
