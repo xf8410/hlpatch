@@ -70,7 +70,7 @@ jobs:
           ndk-version: r26c
           link-to-sdk: true
 
-      - name: Build Android arm64 release (3.28.2-era: no --locked)
+      - name: Build Android arm64 release (3.28.2-era, no locked flag)
         id: cargo
         working-directory: hachimi_ura_plugin
         env:
