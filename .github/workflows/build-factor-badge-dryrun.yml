@@ -2,6 +2,7 @@ name: Dry-run factor badge build (3.28.2 lineage + badge, no release)
 
 # Full chain + cargo build, but NO tag and NO release. Catches Rust
 # errors and anchor drift before the real release workflow is dispatched.
+# Toolchain pinned by rust-toolchain.toml (1.97.1, same as so-recovery-3).
 
 on:
   workflow_dispatch:
@@ -12,6 +13,7 @@ on:
       - .github/workflows/build-factor-badge-dryrun.yml
       - scripts/apply_factor_index_badge.py
       - hachimi_ura_plugin/src/factor_index_badge.rs
+      - rust-toolchain.toml
 
 permissions:
   contents: write
@@ -62,7 +64,7 @@ jobs:
           grep -aFq '/sdcard/Android/media/jp.co.cygames.umamusume/hachimi/uma_predict.log' "$SRC"
           ! grep -aFq 'jp.pokemon.pokeuma/files/uma_predict.log' "$SRC"
 
-      - name: Setup Rust
+      - name: Setup Rust (toolchain pinned by rust-toolchain.toml)
         run: rustup target add aarch64-linux-android
       - uses: nttld/setup-ndk@v1
         id: ndk
