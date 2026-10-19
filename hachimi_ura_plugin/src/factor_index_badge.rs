@@ -4,21 +4,35 @@
 //! player no longer has to count rows by hand. Purely cosmetic and local:
 //! no packets, no server state, no game-data mutation.
 //!
-//! Mechanism: post-hook `Gallop.PartsSingleModeResultFactorList.CreateFactorList`.
+//! Mechanism: post-hook TWO entry points, whichever fires last wins:
+//!   1. `Gallop.PartsSingleModeResultFactorList.CreateFactorList`
+//!   2. `Gallop.PartsSingleModeResultFactorList.PlayInFactorList`
 //! After the original populates `_partsList` (List<PartsFactorListContent>),
 //! walk it and prefix each item's `_factorName` (TextCommon) text with "N. ".
 //!
+//! Why two hooks (playin-fix, 2026-10-20): CreateFactorList contains
+//! compiler-generated lambdas (b__14_0/b__14_1) and PlayInFactorList returns
+//! a byref (UniTask-ish) — item text is written asynchronously AFTER
+//! CreateFactorList returns (via SetupFactorNameCommon). Badging at
+//! CreateFactorList-return time raced with that deferred text setup:
+//! get_text read empty/stale text, the game's later set_text overwrote our
+//! prefix (or our bare "N. " clobbered an item), producing broken UI both
+//! with and without Hachimi translation. PlayInFactorList fires when the
+//! list is actually displayed — by then every item's name is final.
+//! Both call sites are idempotent via already_prefixed().
+//!
 //! Field offsets verified live on the device, SO v3.28.2, 2026-10-17
-//! (via /fields endpoints):
+//! (via /fields endpoints); re-verified on 3.28.10 runtime, 2026-10-20:
 //!   PartsSingleModeResultFactorList._partsList  = +96  (0x60)  List<PartsFactorListContent>
 //!   PartsFactorListContent._factorName          = +56  (0x38)  TextCommon
 //! IL2CPP List<T>: _items +0x10, _size +0x18; element array data +0x20, stride 8.
 //!
-//! Red-line compliance: we hook CreateFactorList (a game result-screen UI
-//! builder) which Hachimi does NOT hook (Hachimi's hooks are text/asset/
-//! network functions). We only *call* TextCommon.set_text through a method
-//! pointer — calling through Hachimi's hooked function is safe by design
-//! (unknown strings pass the translation layer through unchanged).
+//! Red-line compliance: we hook CreateFactorList/PlayInFactorList (game
+//! result-screen UI builders) which Hachimi does NOT hook (Hachimi's hooks
+//! are text/asset/network functions). We only *call* TextCommon.set_text
+//! through a method pointer — calling through Hachimi's hooked function is
+//! safe by design (unknown strings pass the translation layer through
+//! unchanged).
 //!
 //! Toggle: GET /api/factor_index/on|off ; status: GET /api/factor_index
 
@@ -27,10 +41,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 static HOOK_ADDR: AtomicUsize = AtomicUsize::new(0);
+static PLAYIN_HOOK_ADDR: AtomicUsize = AtomicUsize::new(0);
 static SET_TEXT_ADDR: AtomicUsize = AtomicUsize::new(0);
 static GET_TEXT_ADDR: AtomicUsize = AtomicUsize::new(0);
 static STRING_NEW_UTF16: AtomicUsize = AtomicUsize::new(0);
 static APPLIED_LISTS: AtomicU64 = AtomicU64::new(0);
+static APPLIED_VIA_CREATE: AtomicU64 = AtomicU64::new(0);
+static APPLIED_VIA_PLAYIN: AtomicU64 = AtomicU64::new(0);
 static BADGED_ITEMS: AtomicU64 = AtomicU64::new(0);
 // 0=ok 1=api 2=set_text/string_new unresolved 3=parts_list null 4=items null
 // 5=hook install failed 6=class not found 7=method not found
@@ -65,7 +82,7 @@ fn already_prefixed(text: &str) -> bool {
     i > 0 && i + 1 < bytes.len() && bytes[i] == b'.' && bytes[i + 1] == b' '
 }
 
-unsafe fn apply_badges(list_this: *mut c_void) {
+unsafe fn apply_badges(list_this: *mut c_void, via_playin: bool) {
     let set_text = SET_TEXT_ADDR.load(Ordering::Acquire);
     let string_new = STRING_NEW_UTF16.load(Ordering::Acquire);
     if set_text == 0 || string_new == 0 {
@@ -129,7 +146,39 @@ unsafe fn apply_badges(list_this: *mut c_void) {
         BADGED_ITEMS.fetch_add(1, Ordering::AcqRel);
     }
     APPLIED_LISTS.fetch_add(1, Ordering::AcqRel);
+    if via_playin {
+        APPLIED_VIA_PLAYIN.fetch_add(1, Ordering::AcqRel);
+    } else {
+        APPLIED_VIA_CREATE.fetch_add(1, Ordering::AcqRel);
+    }
     LAST_ERROR.store(0, Ordering::Release);
+}
+
+// AAPCS64: extra declared parameters are harmless when the real signature
+// has fewer; returning the original x0 covers void, pointer/int and small
+// struct (UniTask) returns.
+type FnHookTarget = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> usize;
+
+unsafe fn run_original_then_badge(
+    hook_fn: usize,
+    this: *mut c_void,
+    a1: usize,
+    a2: usize,
+    a3: usize,
+    via_playin: bool,
+) -> usize {
+    let trampoline = super::interceptor_get_trampoline(hook_fn);
+    if trampoline == 0 {
+        return 0;
+    }
+    let original: FnHookTarget = std::mem::transmute(trampoline);
+    let result = original(this, a1, a2, a3);
+    if is_enabled() && !this.is_null() {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            apply_badges(this, via_playin);
+        }));
+    }
+    result
 }
 
 extern "C" fn create_factor_list_hook(
@@ -139,22 +188,18 @@ extern "C" fn create_factor_list_hook(
     a3: usize,
 ) -> usize {
     unsafe {
-        let trampoline = super::interceptor_get_trampoline(create_factor_list_hook as usize);
-        if trampoline == 0 {
-            return 0;
-        }
-        // AAPCS64: extra declared parameters are harmless when the real
-        // signature has fewer; returning the original x0 covers both void
-        // and pointer/int returns.
-        type FnType = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> usize;
-        let original: FnType = std::mem::transmute(trampoline);
-        let result = original(this, a1, a2, a3);
-        if is_enabled() && !this.is_null() {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                apply_badges(this);
-            }));
-        }
-        result
+        run_original_then_badge(create_factor_list_hook as usize, this, a1, a2, a3, false)
+    }
+}
+
+extern "C" fn play_in_factor_list_hook(
+    this: *mut c_void,
+    a1: usize,
+    a2: usize,
+    a3: usize,
+) -> usize {
+    unsafe {
+        run_original_then_badge(play_in_factor_list_hook as usize, this, a1, a2, a3, true)
     }
 }
 
@@ -261,11 +306,21 @@ pub unsafe fn install() {
         return;
     }
     HOOK_ADDR.store(create_list, Ordering::Release);
+
+    // Second hook: PlayInFactorList fires when the list is displayed, after
+    // the deferred per-item text setup has run. Failure here is non-fatal —
+    // the CreateFactorList hook alone still works on timing-safe flows.
+    let play_in = resolve_method(class, &["PlayInFactorList"], &[0]);
+    if play_in != 0 && super::interceptor_hook(play_in, play_in_factor_list_hook as usize) {
+        PLAYIN_HOOK_ADDR.store(play_in, Ordering::Release);
+    }
+
     super::set_hook_status(
         "factor_index",
         &format!(
-            "hooked@0x{:x} set_text@0x{:x} get_text@0x{:x} string_new@0x{:x}",
+            "hooked@0x{:x} playin@0x{:x} set_text@0x{:x} get_text@0x{:x} string_new@0x{:x}",
             create_list,
+            PLAYIN_HOOK_ADDR.load(Ordering::Acquire),
             SET_TEXT_ADDR.load(Ordering::Acquire),
             GET_TEXT_ADDR.load(Ordering::Acquire),
             STRING_NEW_UTF16.load(Ordering::Acquire)
@@ -275,14 +330,17 @@ pub unsafe fn install() {
 
 pub fn endpoint() -> String {
     format!(
-        r#"{{"ok":true,"feature":"factor_index_badge","enabled":{},"installed":{},"hook_addr":"0x{:x}","set_text_addr":"0x{:x}","get_text_addr":"0x{:x}","string_new_addr":"0x{:x}","applied_lists":{},"badged_items":{},"last_error":{},"usage":"GET /api/factor_index/on|off to toggle; numbers are added to the result-screen factor list while enabled"}}"#,
+        r#"{{"ok":true,"feature":"factor_index_badge","enabled":{},"installed":{},"hook_addr":"0x{:x}","playin_hook_addr":"0x{:x}","set_text_addr":"0x{:x}","get_text_addr":"0x{:x}","string_new_addr":"0x{:x}","applied_lists":{},"applied_via_create":{},"applied_via_playin":{},"badged_items":{},"last_error":{},"usage":"GET /api/factor_index/on|off to toggle; numbers are added to the result-screen factor list while enabled"}}"#,
         is_enabled(),
         HOOK_ADDR.load(Ordering::Acquire) != 0,
         HOOK_ADDR.load(Ordering::Acquire),
+        PLAYIN_HOOK_ADDR.load(Ordering::Acquire),
         SET_TEXT_ADDR.load(Ordering::Acquire),
         GET_TEXT_ADDR.load(Ordering::Acquire),
         STRING_NEW_UTF16.load(Ordering::Acquire),
         APPLIED_LISTS.load(Ordering::Acquire),
+        APPLIED_VIA_CREATE.load(Ordering::Acquire),
+        APPLIED_VIA_PLAYIN.load(Ordering::Acquire),
         BADGED_ITEMS.load(Ordering::Acquire),
         LAST_ERROR.load(Ordering::Acquire),
     )
