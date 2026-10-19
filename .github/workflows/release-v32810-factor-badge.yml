@@ -1,0 +1,126 @@
+name: Release v3.28.10 Factor Index Badge
+
+# 3.28.2 lineage (cumulative -> 3.27.23 -> sigsegv guard -> screen mirror A
+# -> crash-log media path parity) + factor index badge. Toolchain pinned by
+# rust-toolchain.toml (1.97.1). Dry-run verified green in
+# build-factor-badge-dryrun.yml (run 39034781181).
+# Trigger: one-shot push on this file (dispatch needs the file on main, which
+# we deliberately avoid). The refuse-overwrite guard makes re-fires safe.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/factor-index-badge
+    paths:
+      - .github/workflows/release-v32810-factor-badge.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v3.28.10 >/dev/null 2>&1; then
+            echo 'v3.28.10 release already exists — refusing to overwrite'
+            exit 1
+          fi
+
+      - name: Generate 3.28.2-equivalent chain + badge patch
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/bump_plugin_version.py 3.27.23
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          python3 scripts/apply_screen_mirror_frame_a.py
+          python3 scripts/apply_factor_index_badge.py
+          python3 scripts/bump_plugin_version.py 3.28.10
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.10"
+          grep -Fq 'version = "3.28.10"' hachimi_ura_plugin/Cargo.lock
+
+      - name: Idempotency check (double apply => identical sha)
+        run: |
+          set -euo pipefail
+          FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          python3 scripts/apply_factor_index_badge.py
+          SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST" = "$SECOND"
+
+      - name: Qualification greps (badge + 3.28.2 invariants)
+        run: |
+          set -euo pipefail
+          SRC=hachimi_ura_plugin/src/lib.rs
+          for s in \
+            'mod factor_index_badge;' \
+            '"/api/factor_index"' \
+            '"/api/factor_index/on"' \
+            '"/api/factor_index/off"' \
+            'install_screen_mirror_hook' \
+            'fn hl_ptr_mapped('
+          do grep -aFq "$s" "$SRC" || { echo "MISSING INVARIANT: $s"; exit 1; }
+          done
+          test "$(grep -aFc 'factor_index_badge::install();' "$SRC")" = "3"
+          grep -aFq '/sdcard/Android/media/jp.co.cygames.umamusume/hachimi/uma_predict.log' "$SRC"
+          ! grep -aFq 'jp.pokemon.pokeuma/files/uma_predict.log' "$SRC"
+
+      - name: Setup Rust (toolchain pinned by rust-toolchain.toml)
+        run: rustup target add aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build Android arm64 release (3.28.2-era, no locked flag)
+        id: cargo
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32810-cargo.log
+
+      - name: Prepare immutable release assets
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          cargo_version=3.28.10
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.28.10
+          workflow_run=${GITHUB_RUN_ID}
+          baseline=v3.28.2_lineage(cumulative+3.27.23+sigsegv_guard+screen_mirror_a+crashlog_media_path)
+          features=factor_index_badge,screen_mirror_frame_a,sigsegv_guard
+          toolchain=rust-1.97.1-pinned
+          runtime_validation=pending_device_execution
+          EOF
+          cat BUILD-MANIFEST.txt
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          gh release create "v3.28.10" "$ASSET" SHA256SUMS BUILD-MANIFEST.txt hachimi_ura_plugin/release-v32810-cargo.log \
+            --title "v3.28.10 育成结束因子序号显示" \
+            --notes "基线=v3.28.2 谱系（cumulative→3.27.23→SIGSEGV guard→画面映射A→崩溃日志 media 路径对齐），画面映射等全部 hook 原样保留，一刀切未动。新增：育成结束因子列表自动编号——hook PartsSingleModeResultFactorList.CreateFactorList，列表建成后给每个因子条目前置 1./2./3.… 序号（纯本地显示，零发包、不碰因子顺序通行证验证）。端点：GET /api/factor_index（状态/计数/错误码）、/api/factor_index/on、/api/factor_index/off（默认开）。字段偏移 2026-10-17 真机 3.28.2 实测：_partsList@+96、_factorName@+56。工具链钉 Rust 1.97.1（新版 rustc 拒编基线 link_name open 签名，与 so-recovery-3 同案）。SHA256 见 SHA256SUMS。"

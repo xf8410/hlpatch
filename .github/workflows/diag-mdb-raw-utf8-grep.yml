@@ -1,0 +1,34 @@
+name: diag mdb-raw utf8 grep
+
+# Read-only diagnostic round 2: dump exact url_decode + parse_query source
+# for an anchor-asserted fix script. Round 1 located the bug:
+#   lib.rs:13991 fn url_decode — pushes percent-decoded BYTES as chars
+#   (`result.push(n as char)` / `bytes[i] as char`) = Latin-1 mojibake.
+# Trigger: one-shot push on this file.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/mdb-raw-utf8-fix
+    paths:
+      - .github/workflows/diag-mdb-raw-utf8-grep.yml
+
+jobs:
+  grep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: dump url_decode and parse_query
+        run: |
+          set -euo pipefail
+          SRC=hachimi_ura_plugin/src/lib.rs
+          echo "=== url_decode full body (13980..14020) ==="
+          sed -n '13980,14020p' "$SRC"
+          echo "=== parse_query definitions ==="
+          grep -an 'fn parse_query' "$SRC" || true
+          P=$(grep -an 'fn parse_query' "$SRC" | head -1 | cut -d: -f1 || true)
+          if [ -n "$P" ]; then
+            echo "--- parse_query context ---"
+            sed -n "$((P>5?P-5:1)),$((P+40))p" "$SRC"
+          fi
