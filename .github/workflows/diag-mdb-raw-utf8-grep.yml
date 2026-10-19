@@ -2,9 +2,16 @@ name: diag mdb-raw utf8 grep
 
 # Read-only diagnostic: locate the query-string decode path used by /mdb/raw
 # (Japanese LIKE patterns arrive mojibake'd — need the decoder source to fix).
+# Trigger: one-shot push on this file (fresh workflow files are not
+# dispatchable until GitHub indexes them; push-fire avoids that).
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - workbench/mdb-raw-utf8-fix
+    paths:
+      - .github/workflows/diag-mdb-raw-utf8-grep.yml
 
 jobs:
   grep:
