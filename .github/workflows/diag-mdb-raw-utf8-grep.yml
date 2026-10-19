@@ -1,0 +1,26 @@
+name: diag mdb-raw utf8 grep
+
+# Read-only diagnostic: locate the query-string decode path used by /mdb/raw
+# (Japanese LIKE patterns arrive mojibake'd — need the decoder source to fix).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  grep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: locate decoder and mdb/raw handler
+        run: |
+          set -euo pipefail
+          SRC=hachimi_ura_plugin/src/lib.rs
+          echo "=== route: /mdb/raw ==="
+          grep -an 'mdb/raw' "$SRC" | head -10 || true
+          L=$(grep -an '"/mdb/raw"' "$SRC" | head -1 | cut -d: -f1 || true)
+          if [ -n "$L" ]; then
+            echo "--- context around line $L ---"
+            sed -n "$((L>40?L-40:1)),$((L+50))p" "$SRC"
+          fi
+          echo "=== decoder function candidates ==="
+          grep -an 'fn .*url_decode\|fn .*percent\|fn .*decode_uri\|fn .*decode_query\|fn .*query_param\|fn .*get_query\|from_utf8_lossy\|String::from_utf8\| as char' "$SRC" | head -40 || true
