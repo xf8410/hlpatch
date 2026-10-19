@@ -1,9 +1,10 @@
 name: diag mdb-raw utf8 grep
 
-# Read-only diagnostic: locate the query-string decode path used by /mdb/raw
-# (Japanese LIKE patterns arrive mojibake'd — need the decoder source to fix).
-# Trigger: one-shot push on this file (fresh workflow files are not
-# dispatchable until GitHub indexes them; push-fire avoids that).
+# Read-only diagnostic round 2: dump exact url_decode + parse_query source
+# for an anchor-asserted fix script. Round 1 located the bug:
+#   lib.rs:13991 fn url_decode — pushes percent-decoded BYTES as chars
+#   (`result.push(n as char)` / `bytes[i] as char`) = Latin-1 mojibake.
+# Trigger: one-shot push on this file.
 
 on:
   workflow_dispatch:
@@ -18,16 +19,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: locate decoder and mdb/raw handler
+      - name: dump url_decode and parse_query
         run: |
           set -euo pipefail
           SRC=hachimi_ura_plugin/src/lib.rs
-          echo "=== route: /mdb/raw ==="
-          grep -an 'mdb/raw' "$SRC" | head -10 || true
-          L=$(grep -an '"/mdb/raw"' "$SRC" | head -1 | cut -d: -f1 || true)
-          if [ -n "$L" ]; then
-            echo "--- context around line $L ---"
-            sed -n "$((L>40?L-40:1)),$((L+50))p" "$SRC"
+          echo "=== url_decode full body (13980..14020) ==="
+          sed -n '13980,14020p' "$SRC"
+          echo "=== parse_query definitions ==="
+          grep -an 'fn parse_query' "$SRC" || true
+          P=$(grep -an 'fn parse_query' "$SRC" | head -1 | cut -d: -f1 || true)
+          if [ -n "$P" ]; then
+            echo "--- parse_query context ---"
+            sed -n "$((P>5?P-5:1)),$((P+40))p" "$SRC"
           fi
-          echo "=== decoder function candidates ==="
-          grep -an 'fn .*url_decode\|fn .*percent\|fn .*decode_uri\|fn .*decode_query\|fn .*query_param\|fn .*get_query\|from_utf8_lossy\|String::from_utf8\| as char' "$SRC" | head -40 || true
