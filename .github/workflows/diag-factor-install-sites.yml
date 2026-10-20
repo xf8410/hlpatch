@@ -1,7 +1,7 @@
 name: diag factor install sites
 
 # Read-only diagnostic: dump the context around each factor_index_badge::install()
-# call site in generated lib.rs to learn WHEN the badge hooks go live
+# call site in the GENERATED lib.rs to learn WHEN the badge hooks go live
 # (device shows installed=false while already inside 育成, so install is not
 # at process startup — need the real call-site timing to reason about the
 # skill-page crash). One-shot push-fire.
@@ -19,6 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: generate chain (same as release)
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/bump_plugin_version.py 3.27.23
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          python3 scripts/apply_screen_mirror_frame_a.py
+          python3 scripts/apply_factor_index_badge.py
+          python3 scripts/apply_url_decode_utf8_fix.py
       - name: dump install call sites
         run: |
           set -euo pipefail
@@ -26,7 +35,7 @@ jobs:
           grep -an 'factor_index_badge::install();' "$SRC" || true
           for L in $(grep -an 'factor_index_badge::install();' "$SRC" | cut -d: -f1); do
             echo "=== site at line $L ==="
-            sed -n "$((L>25?L-25:1)),$((L+8))p" "$SRC"
+            sed -n "$((L>30?L-30:1)),$((L+8))p" "$SRC"
             echo "--- enclosing fn ---"
             awk -v n="$L" 'NR<=n && /^(pub )?(unsafe )?fn /{f=$0; fl=NR} NR==n{print fl": "f; exit}' "$SRC"
           done
