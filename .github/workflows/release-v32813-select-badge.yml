@@ -1,0 +1,143 @@
+name: Release v3.28.13 factor select badge + install-race fix
+
+# v3.28.13: two changes on the v3.28.12 lineage.
+# 1) Factor numbers on the 因子選択 (second-confirm) screen: hooks on
+#    PartsSingleModeResultFactorListCarouselScrollItem.UpdateFactorList /
+#    UpdateItem, walking _partsFactorListContentList @+0x90 (same
+#    PartsFactorListContent item layout, _factorName @+0x38).
+# 2) Root-cause fix for the silent v3.28.11/v3.28.12 crashes: push_loop used
+#    to break its wait loop on GAME_INITIALIZED without installing hooks, so
+#    the /api/event/choices lazy retry patched functions mid-game while they
+#    were executing. Now installs idempotently before breaking.
+# Toolchain pinned by rust-toolchain.toml (1.97.1).
+# Trigger: one-shot push on this file. Refuse-overwrite guard keeps re-fires safe.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/factor-select-badge
+    paths:
+      - .github/workflows/release-v32813-select-badge.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v3.28.13 >/dev/null 2>&1; then
+            echo 'v3.28.13 release already exists — refusing to overwrite'
+            exit 1
+          fi
+
+      - name: Generate chain + badge (select screen) + url_decode + pushloop fix
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/bump_plugin_version.py 3.27.23
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          python3 scripts/apply_screen_mirror_frame_a.py
+          python3 scripts/apply_factor_index_badge.py
+          python3 scripts/apply_url_decode_utf8_fix.py
+          python3 scripts/apply_pushloop_install_fix.py
+          python3 scripts/bump_plugin_version.py 3.28.13
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.13"
+          grep -Fq 'version = "3.28.13"' hachimi_ura_plugin/Cargo.lock
+
+      - name: Idempotency check (double apply => identical sha)
+        run: |
+          set -euo pipefail
+          FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          python3 scripts/apply_factor_index_badge.py
+          python3 scripts/apply_url_decode_utf8_fix.py
+          python3 scripts/apply_pushloop_install_fix.py
+          SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST" = "$SECOND"
+
+      - name: Qualification greps (select badge + pushloop fix + invariants)
+        run: |
+          set -euo pipefail
+          SRC=hachimi_ura_plugin/src/lib.rs
+          MOD=hachimi_ura_plugin/src/factor_index_badge.rs
+          for s in \
+            'mod factor_index_badge;' \
+            '"/api/factor_index"' \
+            'install_screen_mirror_hook' \
+            'fn hl_ptr_mapped(' \
+            'String::from_utf8_lossy(&out).into_owned()' \
+            'v3.28.13: install hooks before breaking'
+          do grep -aFq "$s" "$SRC" || { echo "MISSING INVARIANT: $s"; exit 1; }
+          done
+          test "$(grep -aFc 'factor_index_badge::install();' "$SRC")" = "4"
+          grep -aFq '/sdcard/Android/media/jp.co.cygames.umamusume/hachimi/uma_predict.log' "$SRC"
+          ! grep -aFq 'jp.pokemon.pokeuma/files/uma_predict.log' "$SRC"
+          ! grep -aFq 'result.push(n as char)' "$SRC"
+          ! grep -aFq 'result.push(bytes[i] as char)' "$SRC"
+          grep -aFq 'fn(*mut c_void, usize, usize, usize) -> u128' "$MOD"
+          ! grep -aFq 'fn(*mut c_void, usize, usize, usize) -> usize' "$MOD"
+          grep -aFq 'select_update_factor_list_hook' "$MOD"
+          grep -aFq 'select_update_item_hook' "$MOD"
+          grep -aFq 'OFFSET_PARTS_LIST_CAROUSEL' "$MOD"
+
+      - name: Setup Rust (toolchain pinned by rust-toolchain.toml)
+        run: rustup target add aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build Android arm64 release (3.28.2-era, no locked flag)
+        id: cargo
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32813-cargo.log
+
+      - name: Prepare immutable release assets
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          cargo_version=3.28.13
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.28.13
+          workflow_run=${GITHUB_RUN_ID}
+          baseline=v3.28.2_lineage(cumulative+3.27.23+sigsegv_guard+screen_mirror_a+crashlog_media_path)
+          features=factor_index_badge_select_screen,factor_index_badge_playin_dual_hook_u128abi,pushloop_install_race_fix,url_decode_utf8_fix,screen_mirror_frame_a,sigsegv_guard
+          toolchain=rust-1.97.1-pinned
+          runtime_validation=pending_device_execution
+          EOF
+          cat BUILD-MANIFEST.txt
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          gh release create "v3.28.13" "$ASSET" SHA256SUMS BUILD-MANIFEST.txt hachimi_ura_plugin/release-v32813-cargo.log \
+            --title "v3.28.13 因子選択屏序号 + 装机竞态修复" \
+            --notes "两项变更：① 因子再獲得后的因子選択（二次确认/元因子）屏也加序号——hook PartsSingleModeResultFactorListCarouselScrollItem 的 UpdateFactorList+UpdateItem，行项目与第一屏同构（_factorName@+0x38），翻页重显后幂等补打；② 修复 v3.28.11/12 无声闪退的真根因——push_loop 在 GAME_INITIALIZED 已被其他路径置位时提前 break 跳过装机，导致懒补装在游戏中途打补丁撞执行中函数；现在装机幂等前置完成。蓝粉绿跳过编号本期未实装（规则待定）。SHA256 见 SHA256SUMS。"
