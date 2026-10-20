@@ -1,27 +1,59 @@
-//! ===== Result-screen factor index badge (v3.28.13) =====
+//! ===== Factor index badge (育成结束因子序号显示) =====
 //!
-//! Prepends "1. ", "2. ", ... to factor names on the result screens so they
-//! can be matched to factor-roll order at a glance.
+//! Numbers every factor item on the training-result factor list so the
+//! player no longer has to count rows by hand. Purely cosmetic and local:
+//! no packets, no server state, no game-data mutation.
 //!
-//! Screens covered:
-//!   1) 因子(再獲得)列表 — Gallop.PartsSingleModeResultFactorList
-//!        CreateFactorList + PlayInFactorList (double hook; text is assigned
-//!        asynchronously after both return, idempotency via "N. " prefix check)
-//!   2) 因子選択（二次确认/元因子）— Gallop.PartsSingleModeResultFactorListCarouselScrollItem
-//!        UpdateFactorList + UpdateItem (double hook; the carousel re-pools
-//!        page items on tab switches, so text must be re-applied whenever the
-//!        game rewrites it)
+//! Mechanism: post-hook TWO entry points, whichever fires last wins:
+//!   1. `Gallop.PartsSingleModeResultFactorList.CreateFactorList`
+//!   2. `Gallop.PartsSingleModeResultFactorList.PlayInFactorList`
+//! After the original populates `_partsList` (List<PartsFactorListContent>),
+//! walk it and prefix each item's `_factorName` (TextCommon) text with "N. ".
 //!
-//! Both lists hold Gallop.PartsFactorListContent items with the same layout
-//! (_factorName TextCommon @ +0x38), so one walk routine serves both.
+//! Why two hooks (playin-fix, 2026-10-20): CreateFactorList contains
+//! compiler-generated lambdas (b__14_0/b__14_1) and PlayInFactorList returns
+//! a byref (UniTask-ish) — item text is written asynchronously AFTER
+//! CreateFactorList returns (via SetupFactorNameCommon). Badging at
+//! CreateFactorList-return time raced with that deferred text setup:
+//! get_text read empty/stale text, the game's later set_text overwrote our
+//! prefix (or our bare "N. " clobbered an item), producing broken UI both
+//! with and without Hachimi translation. PlayInFactorList fires when the
+//! list is actually displayed — by then every item's name is final.
+//! Both call sites are idempotent via already_prefixed().
 //!
-//! The list walk is read-only except TextCommon.set_text on items whose text
-//! does not start with a digit prefix yet. Everything is local UI only.
+//! v3.28.12 ABI fix (2026-10-20, device crash report): the v3.28.11 detours
+//! returned `usize` (x0 only). PlayInFactorList returns UniTask — a 16-byte
+//! struct returned in x0:x1 under AAPCS64 — so x1 kept whatever garbage it
+//! held and the result screen's async machinery consumed a corrupt UniTask:
+//! the game SIGSEGVed the instant 育成 was entered with a pending result
+//! screen. u128 occupies exactly x0:x1 and is ignored by void/pointer
+//! callers, so one signature now covers all hooked targets.
 //!
-//! Toggle: /api/factor_index/on|off (default on). Status: /api/factor_index.
+//! v3.28.13 (2026-10-20): also badge the 因子選択 (second-confirm / 元因子)
+//! screen after 因子再獲得. Its pages are
+//! `PartsSingleModeResultFactorListCarouselScrollItem` objects holding the
+//! same PartsFactorListContent rows in `_partsFactorListContentList` (+0x90);
+//! the carousel re-pools page items on tab switches, so we hook BOTH
+//! UpdateFactorList (population) and UpdateItem (framework re-display) and
+//! rely on already_prefixed() for idempotency.
+//!
+//! Field offsets verified live on the device, SO v3.28.2, 2026-10-17
+//! (via /fields endpoints); re-verified on 3.28.10 runtime, 2026-10-20:
+//!   PartsSingleModeResultFactorList._partsList  = +96  (0x60)  List<PartsFactorListContent>
+//!   ...FactorListCarouselScrollItem._partsFactorListContentList = +144 (0x90)
+//!   PartsFactorListContent._factorName          = +56  (0x38)  TextCommon
+//! IL2CPP List<T>: _items +0x10, _size +0x18; element array data +0x20, stride 8.
+//!
+//! Red-line compliance: we hook CreateFactorList/PlayInFactorList (game
+//! result-screen UI builders) which Hachimi does NOT hook (Hachimi's hooks
+//! are text/asset/network functions). We only *call* TextCommon.set_text
+//! through a method pointer — calling through Hachimi's hooked function is
+//! safe by design (unknown strings pass the translation layer through
+//! unchanged).
+//!
+//! Toggle: GET /api/factor_index/on|off ; status: GET /api/factor_index
 
-use std::ffi::{c_char, c_void};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
@@ -31,110 +63,144 @@ static SELECT_UPDATE_ADDR: AtomicUsize = AtomicUsize::new(0);
 static SELECT_UPDATE_ITEM_ADDR: AtomicUsize = AtomicUsize::new(0);
 static SET_TEXT_ADDR: AtomicUsize = AtomicUsize::new(0);
 static GET_TEXT_ADDR: AtomicUsize = AtomicUsize::new(0);
-static STRING_NEW_ADDR: AtomicUsize = AtomicUsize::new(0);
+static STRING_NEW_UTF16: AtomicUsize = AtomicUsize::new(0);
 static APPLIED_LISTS: AtomicU64 = AtomicU64::new(0);
 static APPLIED_VIA_CREATE: AtomicU64 = AtomicU64::new(0);
 static APPLIED_VIA_PLAYIN: AtomicU64 = AtomicU64::new(0);
 static APPLIED_VIA_SELECT_UPDATE: AtomicU64 = AtomicU64::new(0);
 static APPLIED_VIA_SELECT_ITEM: AtomicU64 = AtomicU64::new(0);
 static BADGED_ITEMS: AtomicU64 = AtomicU64::new(0);
+// 0=ok 1=api 2=set_text/string_new unresolved 3=parts_list null 4=items null
+// 5=hook install failed 6=class not found 7=method not found
 static LAST_ERROR: AtomicU64 = AtomicU64::new(0);
 
-const OFFSET_PARTS_LIST_RESULT: usize = 0x60; // PartsSingleModeResultFactorList._partsList
-const OFFSET_PARTS_LIST_CAROUSEL: usize = 0x90; // ...FactorListCarouselScrollItem._partsFactorListContentList
-const OFFSET_ITEM_TEXT: usize = 0x38; // PartsFactorListContent._factorName (TextCommon)
-const MAX_ITEMS: usize = 64;
+const OFF_PARTS_LIST: i32 = 0x60;
+const OFF_PARTS_LIST_CAROUSEL: i32 = 0x90;
+const OFF_FACTOR_NAME: i32 = 0x38;
+const LIST_ITEMS_OFF: i32 = 0x10;
+const LIST_SIZE_OFF: i32 = 0x18;
+const ARRAY_DATA_OFF: i32 = 0x20;
+const MAX_ITEMS: i32 = 64;
 
-fn utf16_to_string(s: usize) -> String {
-    unsafe {
-        if s == 0 {
-            return String::new();
-        }
-        let len = *((s + 0x10) as *const i32);
-        if len <= 0 || len > 4096 {
-            return String::new();
-        }
-        let chars = (s + 0x14) as *const u16;
-        let slice = std::slice::from_raw_parts(chars, len as usize);
-        String::from_utf16_lossy(slice)
-    }
+pub fn is_enabled() -> bool {
+    ENABLED.load(Ordering::Acquire)
 }
 
-fn already_prefixed(s: &str) -> bool {
-    let b = s.as_bytes();
+pub fn set_enabled(value: bool) {
+    ENABLED.store(value, Ordering::Release);
+}
+
+type FnGetText = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+type FnSetText = unsafe extern "C" fn(*mut c_void, *mut c_void);
+type FnStringNewUtf16 = unsafe extern "C" fn(*const u16, i32) -> *mut c_void;
+
+fn already_prefixed(text: &str) -> bool {
+    // Detect our own "N. " / "NN. " prefix so re-entry never double-prefixes.
+    let bytes = text.as_bytes();
     let mut i = 0usize;
-    while i < b.len() && b[i].is_ascii_digit() {
+    while i < bytes.len() && i < 3 && bytes[i].is_ascii_digit() {
         i += 1;
     }
-    i > 0 && i + 1 < b.len() && b[i] == b'.' && b[i + 1] == b' '
+    i > 0 && i + 1 < bytes.len() && bytes[i] == b'.' && bytes[i + 1] == b' '
 }
 
-unsafe fn get_text(text: usize) -> String {
-    let addr = GET_TEXT_ADDR.load(Ordering::Acquire);
-    if addr == 0 || text == 0 {
-        return String::new();
+unsafe fn apply_badges(list_this: *mut c_void, parts_off: i32, counter: &AtomicU64) {
+    let set_text = SET_TEXT_ADDR.load(Ordering::Acquire);
+    let string_new = STRING_NEW_UTF16.load(Ordering::Acquire);
+    if set_text == 0 || string_new == 0 {
+        LAST_ERROR.store(2, Ordering::Release);
+        return;
     }
-    type GetTextFn = unsafe extern "C" fn(usize) -> usize;
-    let f: GetTextFn = std::mem::transmute(addr);
-    let s = f(text);
-    utf16_to_string(s)
-}
+    let get_text = GET_TEXT_ADDR.load(Ordering::Acquire);
 
-/// Walk a List<PartsFactorListContent> and prefix un-numbered items.
-unsafe fn apply_badges_parts(parts: usize) {
-    if parts == 0 {
+    let parts_list = super::read_ptr_at(list_this, parts_off);
+    if parts_list.is_null() {
+        LAST_ERROR.store(3, Ordering::Release);
         return;
     }
-    let size_ptr = (parts + 0x18) as *const i32;
-    let count = (*size_ptr).clamp(0, MAX_ITEMS as i32) as usize;
-    if count == 0 {
+    let items = super::read_ptr_at(parts_list, LIST_ITEMS_OFF);
+    if items.is_null() {
+        LAST_ERROR.store(4, Ordering::Release);
         return;
     }
-    let items = *(parts as *const usize);
-    if items == 0 {
+    let size = super::read_int_at(parts_list, LIST_SIZE_OFF);
+    if size <= 0 {
         return;
     }
-    let set_text_addr = SET_TEXT_ADDR.load(Ordering::Acquire);
-    let string_new_addr = STRING_NEW_ADDR.load(Ordering::Acquire);
-    if set_text_addr == 0 || string_new_addr == 0 {
-        return;
-    }
-    type SetTextFn = unsafe extern "C" fn(usize, usize);
-    let set_text: SetTextFn = std::mem::transmute(set_text_addr);
-    type StringNewFn = unsafe extern "C" fn(*const u16, i32) -> usize;
-    let string_new: StringNewFn = std::mem::transmute(string_new_addr);
-    for i in 0..count {
-        let item = *((items + 0x20 + i * 8) as *const usize);
-        if item == 0 {
+    let size = size.min(MAX_ITEMS);
+
+    let setter: FnSetText = std::mem::transmute(set_text);
+    let string_new_fn: FnStringNewUtf16 = std::mem::transmute(string_new);
+
+    for i in 0..size {
+        let item = super::read_ptr_at(items, ARRAY_DATA_OFF + i * 8);
+        if item.is_null() {
             continue;
         }
-        let text_ptr = *((item + OFFSET_ITEM_TEXT) as *const usize);
-        if text_ptr == 0 {
+        let text_common = super::read_ptr_at(item, OFF_FACTOR_NAME);
+        if text_common.is_null() {
             continue;
         }
-        let badge_no = i + 1;
-        let current = get_text(text_ptr);
-        if current.is_empty() || already_prefixed(&current) {
+
+        let mut label = format!("{}. ", i + 1);
+        if get_text != 0 {
+            let getter: FnGetText = std::mem::transmute(get_text);
+            let current = getter(text_common);
+            let current_text = super::read_il2cpp_string(current);
+            if already_prefixed(&current_text) {
+                continue;
+            }
+            label.push_str(&current_text);
+        }
+        // Without a getter we still write the bare "N. " prefix; the index is
+        // the information the player needs, the name stays visible in the
+        // original color block anyway.
+
+        let utf16: Vec<u16> = label.encode_utf16().collect();
+        if utf16.is_empty() || utf16.len() > 256 {
             continue;
         }
-        let new_text = format!("{}. {}", badge_no, current);
-        let mut wide: Vec<u16> = new_text.encode_utf16().collect();
-        let new_str = string_new(wide.as_mut_ptr(), wide.len() as i32);
-        if new_str == 0 {
-            LAST_ERROR.store(3, Ordering::Release);
+        let new_str = string_new_fn(utf16.as_ptr(), utf16.len() as i32);
+        if new_str.is_null() {
             continue;
         }
-        set_text(text_ptr, new_str);
+        setter(text_common, new_str);
         BADGED_ITEMS.fetch_add(1, Ordering::AcqRel);
     }
+    APPLIED_LISTS.fetch_add(1, Ordering::AcqRel);
+    counter.fetch_add(1, Ordering::AcqRel);
+    LAST_ERROR.store(0, Ordering::Release);
 }
 
-unsafe fn apply_badges(this: *mut c_void, parts_list_offset: usize) {
-    if this.is_null() {
-        return;
+// AAPCS64: extra declared parameters are harmless when the real signature
+// has fewer. The return type MUST be u128 (x0:x1): PlayInFactorList returns
+// UniTask, a 16-byte struct delivered in x0:x1 — a usize detour left x1
+// holding garbage and the async continuation crashed on the corrupt value
+// (v3.28.11 device crash). u128 covers struct/pointer returns and is
+// ignored by void callers.
+type FnHookTarget = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> u128;
+
+unsafe fn run_original_then_badge(
+    hook_fn: usize,
+    this: *mut c_void,
+    a1: usize,
+    a2: usize,
+    a3: usize,
+    parts_off: i32,
+    counter: &AtomicU64,
+) -> u128 {
+    let trampoline = super::interceptor_get_trampoline(hook_fn);
+    if trampoline == 0 {
+        return 0;
     }
-    let parts = *((this as usize + parts_list_offset) as *const usize);
-    apply_badges_parts(parts);
+    let original: FnHookTarget = std::mem::transmute(trampoline);
+    let result = original(this, a1, a2, a3);
+    if is_enabled() && !this.is_null() {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            apply_badges(this, parts_off, counter);
+        }));
+    }
+    result
 }
 
 extern "C" fn create_factor_list_hook(
@@ -143,25 +209,17 @@ extern "C" fn create_factor_list_hook(
     a2: usize,
     a3: usize,
 ) -> u128 {
-    let result = unsafe {
-        let orig_ptr = super::interceptor_get_trampoline(create_factor_list_hook as usize);
-        if orig_ptr != 0 {
-            type FnTy = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> u128;
-            let original: FnTy = std::mem::transmute(orig_ptr);
-            original(this, a1, a2, a3)
-        } else {
-            LAST_ERROR.store(4, Ordering::Release);
-            0
-        }
-    };
-    if is_enabled() && !this.is_null() {
-        let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
-            apply_badges(this, OFFSET_PARTS_LIST_RESULT);
-        }));
-        APPLIED_LISTS.fetch_add(1, Ordering::AcqRel);
-        APPLIED_VIA_CREATE.fetch_add(1, Ordering::AcqRel);
+    unsafe {
+        run_original_then_badge(
+            create_factor_list_hook as usize,
+            this,
+            a1,
+            a2,
+            a3,
+            OFF_PARTS_LIST,
+            &APPLIED_VIA_CREATE,
+        )
     }
-    result
 }
 
 extern "C" fn play_in_factor_list_hook(
@@ -170,25 +228,17 @@ extern "C" fn play_in_factor_list_hook(
     a2: usize,
     a3: usize,
 ) -> u128 {
-    let result = unsafe {
-        let orig_ptr = super::interceptor_get_trampoline(play_in_factor_list_hook as usize);
-        if orig_ptr != 0 {
-            type FnTy = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> u128;
-            let original: FnTy = std::mem::transmute(orig_ptr);
-            original(this, a1, a2, a3)
-        } else {
-            LAST_ERROR.store(5, Ordering::Release);
-            0
-        }
-    };
-    if is_enabled() && !this.is_null() {
-        let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
-            apply_badges(this, OFFSET_PARTS_LIST_RESULT);
-        }));
-        APPLIED_LISTS.fetch_add(1, Ordering::AcqRel);
-        APPLIED_VIA_PLAYIN.fetch_add(1, Ordering::AcqRel);
+    unsafe {
+        run_original_then_badge(
+            play_in_factor_list_hook as usize,
+            this,
+            a1,
+            a2,
+            a3,
+            OFF_PARTS_LIST,
+            &APPLIED_VIA_PLAYIN,
+        )
     }
-    result
 }
 
 extern "C" fn select_update_factor_list_hook(
@@ -197,25 +247,17 @@ extern "C" fn select_update_factor_list_hook(
     a2: usize,
     a3: usize,
 ) -> u128 {
-    let result = unsafe {
-        let orig_ptr = super::interceptor_get_trampoline(select_update_factor_list_hook as usize);
-        if orig_ptr != 0 {
-            type FnTy = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> u128;
-            let original: FnTy = std::mem::transmute(orig_ptr);
-            original(this, a1, a2, a3)
-        } else {
-            LAST_ERROR.store(6, Ordering::Release);
-            0
-        }
-    };
-    if is_enabled() && !this.is_null() {
-        let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
-            apply_badges(this, OFFSET_PARTS_LIST_CAROUSEL);
-        }));
-        APPLIED_LISTS.fetch_add(1, Ordering::AcqRel);
-        APPLIED_VIA_SELECT_UPDATE.fetch_add(1, Ordering::AcqRel);
+    unsafe {
+        run_original_then_badge(
+            select_update_factor_list_hook as usize,
+            this,
+            a1,
+            a2,
+            a3,
+            OFF_PARTS_LIST_CAROUSEL,
+            &APPLIED_VIA_SELECT_UPDATE,
+        )
     }
-    result
 }
 
 extern "C" fn select_update_item_hook(
@@ -224,140 +266,131 @@ extern "C" fn select_update_item_hook(
     a2: usize,
     a3: usize,
 ) -> u128 {
-    let result = unsafe {
-        let orig_ptr = super::interceptor_get_trampoline(select_update_item_hook as usize);
-        if orig_ptr != 0 {
-            type FnTy = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> u128;
-            let original: FnTy = std::mem::transmute(orig_ptr);
-            original(this, a1, a2, a3)
-        } else {
-            LAST_ERROR.store(7, Ordering::Release);
+    unsafe {
+        run_original_then_badge(
+            select_update_item_hook as usize,
+            this,
+            a1,
+            a2,
+            a3,
+            OFF_PARTS_LIST_CAROUSEL,
+            &APPLIED_VIA_SELECT_ITEM,
+        )
+    }
+}
+
+unsafe fn resolve_method(class: *mut c_void, names: &[&str], parameter_counts: &[i32]) -> usize {
+    let api = &*super::API;
+    match api.il2cpp_get_method_addr_fn {
+        Some(get_method_addr) => {
+            for name in names {
+                for count in parameter_counts {
+                    let addr =
+                        get_method_addr(class as usize, super::to_cstr(name).as_ptr(), *count);
+                    if addr != 0 {
+                        return addr;
+                    }
+                }
+            }
             0
         }
-    };
-    if is_enabled() && !this.is_null() {
-        let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
-            apply_badges(this, OFFSET_PARTS_LIST_CAROUSEL);
-        }));
-        APPLIED_LISTS.fetch_add(1, Ordering::AcqRel);
-        APPLIED_VIA_SELECT_ITEM.fetch_add(1, Ordering::AcqRel);
+        None => 0,
     }
-    result
 }
 
-unsafe fn resolve_method(class: usize, names: &[&str], counts: &[i32]) -> usize {
-    if class == 0 {
-        return 0;
-    }
-    for name in names {
-        let cname = super::to_cstr(name);
-        for &count in counts {
-            let addr = super::get_method_addr(class, cname.as_ptr(), count);
-            if addr != 0 {
-                return addr;
-            }
-        }
-    }
-    0
-}
-
-pub unsafe fn install() -> bool {
+pub unsafe fn install() {
     if HOOK_ADDR.load(Ordering::Acquire) != 0 {
-        return true;
+        return;
     }
     if super::API.is_null() {
         super::set_hook_status("factor_index", "failed: api_null");
         LAST_ERROR.store(1, Ordering::Release);
-        return false;
+        return;
     }
-    if api().interceptor == 0 {
-        super::set_hook_status("factor_index", "failed: api_null");
+    let api = &*super::API;
+    if api.interceptor == 0 {
+        super::set_hook_status("factor_index", "failed: interceptor_unavailable");
         LAST_ERROR.store(1, Ordering::Release);
-        return false;
+        return;
     }
-    let image = super::get_image(b"Gallop\0".as_ptr() as *const c_char);
-    if image.is_none() {
+    let get_image = match api.il2cpp_get_assembly_image_fn {
+        Some(v) => v,
+        None => {
+            super::set_hook_status("factor_index", "failed: assembly_api_unavailable");
+            LAST_ERROR.store(1, Ordering::Release);
+            return;
+        }
+    };
+    let get_class = match api.il2cpp_get_class_fn {
+        Some(v) => v,
+        None => {
+            super::set_hook_status("factor_index", "failed: class_api_unavailable");
+            LAST_ERROR.store(1, Ordering::Release);
+            return;
+        }
+    };
+    let image = get_image(super::to_cstr("umamusume.dll").as_ptr());
+    if image.is_null() {
         super::set_hook_status("factor_index", "failed: image_not_found");
-        LAST_ERROR.store(5, Ordering::Release);
-        return false;
-    }
-    let image = image.unwrap();
-    if image == 0 {
-        super::set_hook_status("factor_index", "failed: image_null");
-        LAST_ERROR.store(5, Ordering::Release);
-        return false;
+        LAST_ERROR.store(1, Ordering::Release);
+        return;
     }
 
-    let text_common = super::get_class(
+    // il2cpp_string_new_utf16: create Il2CppString from UTF-16 data.
+    let string_new = super::resolve_il2cpp_symbol("il2cpp_string_new_utf16");
+    if !string_new.is_null() {
+        STRING_NEW_UTF16.store(string_new as usize, Ordering::Release);
+    }
+
+    // TextCommon text accessors. Hachimi hooks set_text for translations;
+    // we only *call* it, never hook it. Try known name casings.
+    let text_common = get_class(
         image,
         super::to_cstr("Gallop").as_ptr(),
         super::to_cstr("TextCommon").as_ptr(),
     );
-    if text_common != 0 {
-        let set_text = resolve_method(text_common, &["set_text", "SetText", "Set"], &[1]);
-        let get_text = resolve_method(text_common, &["get_text", "GetText"], &[0]);
-        SET_TEXT_ADDR.store(set_text, Ordering::Release);
-        GET_TEXT_ADDR.store(get_text, Ordering::Release);
-    }
-
-    let corlib = super::get_image(b"corlib\0".as_ptr() as *const c_char);
-    if let Some(core) = corlib {
-        if core != 0 {
-            let string_class = super::get_class(
-                core,
-                super::to_cstr("System").as_ptr(),
-                super::to_cstr("String").as_ptr(),
-            );
-            if string_class != 0 {
-                let ctor = resolve_method(string_class, &["CreateString"], &[1, 2]);
-                if ctor == 0 {
-                    let ctor2 = resolve_method(string_class, &[".ctor"], &[1, 2]);
-                    STRING_NEW_ADDR.store(ctor2, Ordering::Release);
-                } else {
-                    STRING_NEW_ADDR.store(ctor, Ordering::Release);
-                }
-            }
+    if !text_common.is_null() {
+        let set_addr = resolve_method(text_common, &["set_text", "SetText"], &[1]);
+        if set_addr != 0 {
+            SET_TEXT_ADDR.store(set_addr, Ordering::Release);
+        }
+        let get_addr = resolve_method(text_common, &["get_text", "GetText"], &[0]);
+        if get_addr != 0 {
+            GET_TEXT_ADDR.store(get_addr, Ordering::Release);
         }
     }
-    if STRING_NEW_ADDR.load(Ordering::Acquire) == 0 {
-        let fast = super::get_method_addr_by_name(
-            b"System.String::CreateString\0".as_ptr() as *const c_char
-        );
-        STRING_NEW_ADDR.store(fast, Ordering::Release);
-    }
-    if SET_TEXT_ADDR.load(Ordering::Acquire) == 0 {
-        super::set_hook_status("factor_index", "failed: set_text_unresolved");
-        LAST_ERROR.store(2, Ordering::Release);
-        return false;
-    }
 
-    let class_name = "PartsSingleModeResultFactorList";
-    let class = super::get_class(
+    let class = get_class(
         image,
         super::to_cstr("Gallop").as_ptr(),
-        super::to_cstr(class_name).as_ptr(),
+        super::to_cstr("PartsSingleModeResultFactorList").as_ptr(),
     );
-    if class == 0 {
+    if class.is_null() {
         super::set_hook_status("factor_index", "failed: class_not_found");
         LAST_ERROR.store(6, Ordering::Release);
-        return false;
+        return;
     }
-
     let create_list = resolve_method(class, &["CreateFactorList"], &[0, 1, 2, 3]);
-    if create_list == 0 || !super::interceptor_hook(create_list, create_factor_list_hook as usize)
-    {
-        super::set_hook_status("factor_index", "failed: create_hook");
+    if create_list == 0 {
+        super::set_hook_status("factor_index", "failed: method_not_found");
         LAST_ERROR.store(7, Ordering::Release);
-        return false;
+        return;
+    }
+    if !super::interceptor_hook(create_list, create_factor_list_hook as usize) {
+        super::set_hook_status("factor_index", "failed: interceptor_hook");
+        LAST_ERROR.store(5, Ordering::Release);
+        return;
     }
     HOOK_ADDR.store(create_list, Ordering::Release);
 
+    // Second hook: PlayInFactorList fires when the list is displayed, after
+    // the deferred per-item text setup has run. Failure here is non-fatal —
+    // the CreateFactorList hook alone still works on timing-safe flows.
     let play_in = resolve_method(class, &["PlayInFactorList"], &[0]);
-    let play_in_hooked =
-        play_in != 0 && super::interceptor_hook(play_in, play_in_factor_list_hook as usize);
-    if play_in_hooked {
+    if play_in != 0 && super::interceptor_hook(play_in, play_in_factor_list_hook as usize) {
         PLAYIN_HOOK_ADDR.store(play_in, Ordering::Release);
     }
+
     super::set_hook_status(
         "factor_index",
         &format!(
@@ -366,57 +399,44 @@ pub unsafe fn install() -> bool {
             PLAYIN_HOOK_ADDR.load(Ordering::Acquire),
             SET_TEXT_ADDR.load(Ordering::Acquire),
             GET_TEXT_ADDR.load(Ordering::Acquire),
-            STRING_NEW_ADDR.load(Ordering::Acquire)
+            STRING_NEW_UTF16.load(Ordering::Acquire)
         ),
     );
 
-    // v3.28.13: 因子選択（二次确认）屏 — best effort, must not block main hooks.
-    let sel_item = super::get_class(
+    // v3.28.13: 因子選択（二次确认/元因子）屏 — best effort, must not block
+    // the result-screen hooks above.
+    let sel_item = get_class(
         image,
         super::to_cstr("Gallop").as_ptr(),
         super::to_cstr("PartsSingleModeResultFactorListCarouselScrollItem").as_ptr(),
     );
-    if sel_item == 0 {
+    if sel_item.is_null() {
         super::set_hook_status("factor_index.select", "failed: class_not_found");
-    } else {
-        let upd = resolve_method(sel_item, &["UpdateFactorList"], &[0, 1, 2]);
-        if upd != 0 && super::interceptor_hook(upd, select_update_factor_list_hook as usize) {
-            SELECT_UPDATE_ADDR.store(upd, Ordering::Release);
-            super::set_hook_status(
-                "factor_index.select_update",
-                &format!("hooked@0x{:x}", upd),
-            );
-        } else {
-            super::set_hook_status("factor_index.select_update", "failed: resolve_or_hook");
-        }
-        let upd_item = resolve_method(sel_item, &["UpdateItem"], &[0, 1, 2, 3]);
-        if upd_item != 0 && super::interceptor_hook(upd_item, select_update_item_hook as usize) {
-            SELECT_UPDATE_ITEM_ADDR.store(upd_item, Ordering::Release);
-            super::set_hook_status(
-                "factor_index.select_update_item",
-                &format!("hooked@0x{:x}", upd_item),
-            );
-        } else {
-            super::set_hook_status("factor_index.select_update_item", "failed: resolve_or_hook");
-        }
+        return;
     }
-    true
+    let upd = resolve_method(sel_item, &["UpdateFactorList"], &[0, 1, 2]);
+    if upd != 0 && super::interceptor_hook(upd, select_update_factor_list_hook as usize) {
+        SELECT_UPDATE_ADDR.store(upd, Ordering::Release);
+        super::set_hook_status("factor_index.select_update", &format!("hooked@0x{:x}", upd));
+    } else {
+        super::set_hook_status("factor_index.select_update", "failed: resolve_or_hook");
+    }
+    let upd_item = resolve_method(sel_item, &["UpdateItem"], &[0, 1, 2, 3]);
+    if upd_item != 0 && super::interceptor_hook(upd_item, select_update_item_hook as usize) {
+        SELECT_UPDATE_ITEM_ADDR.store(upd_item, Ordering::Release);
+        super::set_hook_status(
+            "factor_index.select_update_item",
+            &format!("hooked@0x{:x}", upd_item),
+        );
+    } else {
+        super::set_hook_status("factor_index.select_update_item", "failed: resolve_or_hook");
+    }
 }
 
 pub fn endpoint() -> String {
     format!(
-        concat!(
-            "{{\"ok\":true,\"feature\":\"factor_index_badge\",\"enabled\":{},",
-            "\"installed\":{},\"hook_addr\":\"0x{:x}\",\"playin_hook_addr\":\"0x{:x}\",",
-            "\"select_update_addr\":\"0x{:x}\",\"select_update_item_addr\":\"0x{:x}\",",
-            "\"set_text_addr\":\"0x{:x}\",\"get_text_addr\":\"0x{:x}\",",
-            "\"string_new_addr\":\"0x{:x}\",\"applied_lists\":{},",
-            "\"applied_via_create\":{},\"applied_via_playin\":{},",
-            "\"applied_via_select_update\":{},\"applied_via_select_item\":{},",
-            "\"badged_items\":{},\"last_error\":{},",
-            "\"usage\":\"GET /api/factor_index/on|off to toggle; numbers are added to the result-screen factor lists while enabled\"}}"
-        ),
-        ENABLED.load(Ordering::Acquire),
+        r#"{{"ok":true,"feature":"factor_index_badge","enabled":{},"installed":{},"hook_addr":"0x{:x}","playin_hook_addr":"0x{:x}","select_update_addr":"0x{:x}","select_update_item_addr":"0x{:x}","set_text_addr":"0x{:x}","get_text_addr":"0x{:x}","string_new_addr":"0x{:x}","applied_lists":{},"applied_via_create":{},"applied_via_playin":{},"applied_via_select_update":{},"applied_via_select_item":{},"badged_items":{},"last_error":{},"usage":"GET /api/factor_index/on|off to toggle; numbers are added to the result-screen factor lists while enabled"}}"#,
+        is_enabled(),
         HOOK_ADDR.load(Ordering::Acquire) != 0,
         HOOK_ADDR.load(Ordering::Acquire),
         PLAYIN_HOOK_ADDR.load(Ordering::Acquire),
@@ -424,35 +444,23 @@ pub fn endpoint() -> String {
         SELECT_UPDATE_ITEM_ADDR.load(Ordering::Acquire),
         SET_TEXT_ADDR.load(Ordering::Acquire),
         GET_TEXT_ADDR.load(Ordering::Acquire),
-        STRING_NEW_ADDR.load(Ordering::Acquire),
+        STRING_NEW_UTF16.load(Ordering::Acquire),
         APPLIED_LISTS.load(Ordering::Acquire),
         APPLIED_VIA_CREATE.load(Ordering::Acquire),
         APPLIED_VIA_PLAYIN.load(Ordering::Acquire),
         APPLIED_VIA_SELECT_UPDATE.load(Ordering::Acquire),
         APPLIED_VIA_SELECT_ITEM.load(Ordering::Acquire),
         BADGED_ITEMS.load(Ordering::Acquire),
-        LAST_ERROR.load(Ordering::Acquire)
+        LAST_ERROR.load(Ordering::Acquire),
     )
 }
 
-pub fn enable() -> String {
-    ENABLED.store(true, Ordering::Release);
+pub fn enable_endpoint() -> String {
+    set_enabled(true);
     endpoint()
 }
 
-pub fn disable() -> String {
-    ENABLED.store(false, Ordering::Release);
+pub fn disable_endpoint() -> String {
+    set_enabled(false);
     endpoint()
-}
-
-pub fn set_enabled(on: bool) {
-    ENABLED.store(on, Ordering::Release);
-}
-
-pub fn is_enabled() -> bool {
-    ENABLED.load(Ordering::Acquire)
-}
-
-unsafe fn api() -> &'static super::Il2CppApi {
-    &*super::API
 }
