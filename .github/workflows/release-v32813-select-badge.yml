@@ -68,9 +68,11 @@ jobs:
 
       - name: Qualification greps (select badge + pushloop fix + invariants)
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           SRC=hachimi_ura_plugin/src/lib.rs
           MOD=hachimi_ura_plugin/src/factor_index_badge.rs
+          echo "install_sites=$(grep -aFc 'factor_index_badge::install();' "$SRC" || true)"
+          echo "mod_sha=$(sha256sum "$MOD" | cut -d' ' -f1)"
           for s in \
             'mod factor_index_badge;' \
             '"/api/factor_index"' \
