@@ -91,7 +91,7 @@ jobs:
           ! grep -aFq 'fn(*mut c_void, usize, usize, usize) -> usize' "$MOD"
           grep -aFq 'select_update_factor_list_hook' "$MOD"
           grep -aFq 'select_update_item_hook' "$MOD"
-          grep -aFq 'OFFSET_PARTS_LIST_CAROUSEL' "$MOD"
+          grep -aFq 'OFF_PARTS_LIST_CAROUSEL' "$MOD"
 
       - name: Setup Rust (toolchain pinned by rust-toolchain.toml)
         run: rustup target add aarch64-linux-android
