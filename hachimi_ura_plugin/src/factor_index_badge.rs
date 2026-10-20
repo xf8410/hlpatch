@@ -21,6 +21,14 @@
 //! list is actually displayed — by then every item's name is final.
 //! Both call sites are idempotent via already_prefixed().
 //!
+//! v3.28.12 ABI fix (2026-10-20, device crash report): the v3.28.11 detours
+//! returned `usize` (x0 only). PlayInFactorList returns UniTask — a 16-byte
+//! struct returned in x0:x1 under AAPCS64 — so x1 kept whatever garbage it
+//! held and the result screen's async machinery consumed a corrupt UniTask:
+//! the game SIGSEGVed the instant 育成 was entered with a pending result
+//! screen. u128 occupies exactly x0:x1 and is ignored by void/pointer
+//! callers, so one signature now covers all hooked targets.
+//!
 //! Field offsets verified live on the device, SO v3.28.2, 2026-10-17
 //! (via /fields endpoints); re-verified on 3.28.10 runtime, 2026-10-20:
 //!   PartsSingleModeResultFactorList._partsList  = +96  (0x60)  List<PartsFactorListContent>
@@ -155,9 +163,12 @@ unsafe fn apply_badges(list_this: *mut c_void, via_playin: bool) {
 }
 
 // AAPCS64: extra declared parameters are harmless when the real signature
-// has fewer; returning the original x0 covers void, pointer/int and small
-// struct (UniTask) returns.
-type FnHookTarget = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> usize;
+// has fewer. The return type MUST be u128 (x0:x1): PlayInFactorList returns
+// UniTask, a 16-byte struct delivered in x0:x1 — a usize detour left x1
+// holding garbage and the async continuation crashed on the corrupt value
+// (v3.28.11 device crash). u128 covers struct/pointer returns and is
+// ignored by void callers.
+type FnHookTarget = unsafe extern "C" fn(*mut c_void, usize, usize, usize) -> u128;
 
 unsafe fn run_original_then_badge(
     hook_fn: usize,
@@ -166,7 +177,7 @@ unsafe fn run_original_then_badge(
     a2: usize,
     a3: usize,
     via_playin: bool,
-) -> usize {
+) -> u128 {
     let trampoline = super::interceptor_get_trampoline(hook_fn);
     if trampoline == 0 {
         return 0;
@@ -186,7 +197,7 @@ extern "C" fn create_factor_list_hook(
     a1: usize,
     a2: usize,
     a3: usize,
-) -> usize {
+) -> u128 {
     unsafe {
         run_original_then_badge(create_factor_list_hook as usize, this, a1, a2, a3, false)
     }
@@ -197,7 +208,7 @@ extern "C" fn play_in_factor_list_hook(
     a1: usize,
     a2: usize,
     a3: usize,
-) -> usize {
+) -> u128 {
     unsafe {
         run_original_then_badge(play_in_factor_list_hook as usize, this, a1, a2, a3, true)
     }
