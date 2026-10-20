@@ -1,0 +1,32 @@
+name: diag factor install sites
+
+# Read-only diagnostic: dump the context around each factor_index_badge::install()
+# call site in generated lib.rs to learn WHEN the badge hooks go live
+# (device shows installed=false while already inside 育成, so install is not
+# at process startup — need the real call-site timing to reason about the
+# skill-page crash). One-shot push-fire.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/playin-abi-fix
+    paths:
+      - .github/workflows/diag-factor-install-sites.yml
+
+jobs:
+  grep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: dump install call sites
+        run: |
+          set -euo pipefail
+          SRC=hachimi_ura_plugin/src/lib.rs
+          grep -an 'factor_index_badge::install();' "$SRC" || true
+          for L in $(grep -an 'factor_index_badge::install();' "$SRC" | cut -d: -f1); do
+            echo "=== site at line $L ==="
+            sed -n "$((L>25?L-25:1)),$((L+8))p" "$SRC"
+            echo "--- enclosing fn ---"
+            awk -v n="$L" 'NR<=n && /^(pub )?(unsafe )?fn /{f=$0; fl=NR} NR==n{print fl": "f; exit}' "$SRC"
+          done
