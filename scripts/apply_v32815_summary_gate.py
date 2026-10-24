@@ -29,7 +29,8 @@ Fix (two cheap checks before touching Character, plus a longer cooldown):
    WorkSingleModeData the object was freed/reused -> bail out.
 2. active-run gate — `_totalTurnNum` (ObscuredInt @+68, the same field the summary
    reports as raw_total_turn_num) is <= 0 when no run is in progress -> bail out.
-3. SIGSEGV cooldown 60s -> 600s so one bad read cannot loop every minute.
+3. SIGSEGV cooldown 60s -> 600s (all three store sites) so one bad read cannot
+   loop every minute.
 
 Both gates return before ANY field read of Character, so a non-training screen
 never produces a fault at all.
@@ -76,9 +77,11 @@ def main() -> None:
         print("v32815_summary_gate=already_applied")
         return
     src = replace_once(src, GATE_ANCHOR, GATE + GATE_ANCHOR, "before_chara_class")
-    src = replace_once(src, COOLDOWN_OLD, COOLDOWN_NEW, "sigsegv_cooldown")
+    cooldown_sites = src.count(COOLDOWN_OLD)
+    assert cooldown_sites >= 1, f"sigsegv_cooldown anchor count={cooldown_sites}"
+    src = src.replace(COOLDOWN_OLD, COOLDOWN_NEW)
     LIB.write_text(src, encoding="utf-8")
-    print("v32815_summary_gate=applied")
+    print(f"v32815_summary_gate=applied cooldown_sites={cooldown_sites}")
 
 
 if __name__ == "__main__":
