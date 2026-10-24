@@ -1,0 +1,57 @@
+name: diag v32815 summary crash
+
+# Device evidence (2026-10-25, uma_predict.log tail):
+#   ... [209] S:json ... CRASH at step 209 sig=11 RECOVERED   <-- EOF
+# So the SIGSEGV happens inside read_summary()'s JSON assembly (step 209), in the
+# push/HTTP thread, while the game changes scene (entering 育成). Not in the badge
+# hooks. This workflow greps the guard + step machinery so the fix can be exact.
+# Read-only: prints bounded excerpts, no build.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v32815-summary-crash
+    paths:
+      - .github/workflows/diag-v32815-summary-crash.yml
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dump crash guard + read_summary step machinery
+        run: |
+          set -uo pipefail
+          SRC=hachimi_ura_plugin/src/lib.rs
+          echo "=== crash guard strings ==="
+          grep -an 'CRASH at step\|sig=11\|RECOVERED' "$SRC" || true
+
+          echo "=== sigsegv refs ==="
+          grep -an 'sigsegv\|SIGSEGV' "$SRC" | head -60 || true
+
+          echo "=== step emit macro/fn ==="
+          grep -an 'S:json\|fn summary_step\|macro_rules! step' "$SRC" || true
+
+          echo "=== read_summary entry ==="
+          grep -an 'fn read_summary' "$SRC" || true
+          R=$(grep -an 'fn read_summary' "$SRC" | head -1 | cut -d: -f1)
+          if [ -n "${R:-}" ]; then
+            echo "--- read_summary first 120 lines (from $R) ---"
+            sed -n "${R},$((R+120))p" "$SRC"
+          fi
+
+          echo "=== json step region (bounded) ==="
+          J=$(grep -an '"json"' "$SRC" | head -1 | cut -d: -f1)
+          echo "json_step_line=${J:-none}"
+          if [ -n "${J:-}" ]; then
+            sed -n "$((J-80)),$((J+120))p" "$SRC"
+          fi
+
+          echo "=== pointer validity helper ==="
+          grep -an 'fn hl_ptr_mapped' "$SRC" || true
+          H=$(grep -an 'fn hl_ptr_mapped' "$SRC" | head -1 | cut -d: -f1)
+          if [ -n "${H:-}" ]; then sed -n "${H},$((H+30))p" "$SRC"; fi
+
+          echo "=== how push_loop treats a crash/sigsegv summary ==="
+          grep -an 'cool\|cooling\|consecutive_errors' "$SRC" | head -40 || true
