@@ -1,0 +1,42 @@
+name: diag v32815 guard only
+
+# Same evidence as diag-v32815-summary-crash but bounded to the crash guard only,
+# so the whole output fits in one readable log (the previous diag drowned in
+# surrounding HTTP code and died on a missing grep anchor).
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v32815-summary-crash
+    paths:
+      - .github/workflows/diag-v32815-guard.yml
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard + step 209 context
+        run: |
+          SRC=hachimi_ura_plugin/src/lib.rs
+          echo "=== CRASH guard occurrences ==="
+          grep -an 'CRASH at step' "$SRC" | head -10 || echo "(none)"
+          echo "=== sig= refs ==="
+          grep -an 'sig=' "$SRC" | head -20 || echo "(none)"
+          echo "=== setjmp/longjmp/sigaction ==="
+          grep -an 'setjmp\|longjmp\|sigaction\|SIGSEGV' "$SRC" | head -30 || echo "(none)"
+          echo "=== step machinery ==="
+          grep -an 'fn summary_step\|STEP_COUNTER\|step_no\|S:\"' "$SRC" | head -20 || echo "(none)"
+          echo "=== read_summary signature ==="
+          grep -an 'fn read_summary' "$SRC" | head -5 || echo "(none)"
+          R=$(grep -an 'fn read_summary' "$SRC" | head -1 | cut -d: -f1)
+          if [ -n "${R:-}" ]; then
+            echo "--- read_summary head ---"
+            sed -n "${R},$((R+40))p" "$SRC"
+          fi
+          echo "=== context around signal handler ==="
+          G=$(grep -an 'CRASH at step' "$SRC" | head -1 | cut -d: -f1)
+          if [ -n "${G:-}" ]; then
+            sed -n "$((G-45)),$((G+35))p" "$SRC"
+          fi
