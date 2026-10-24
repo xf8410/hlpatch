@@ -1,0 +1,42 @@
+name: diag v32815 gate
+
+# Evidence: uma_predict.log now shows REPEATED recoveries on the home screen:
+#   CRASH at step 209 sig=11 RECOVERED   (S:json)
+#   CRASH at step 189 sig=11 RECOVERED   (before_get_character)
+# i.e. read_summary keeps walking training-only objects that no longer exist.
+# This prints the entry of read_summary_inner_impl so a "not in 育成 -> bail out"
+# gate can be added at the right place.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v32815-summary-crash
+    paths:
+      - .github/workflows/diag-v32815-gate.yml
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Entry gate context
+        run: |
+          SRC=hachimi_ura_plugin/src/lib.rs
+          echo "=== read_summary_inner_impl entry ==="
+          R=$(grep -an 'fn read_summary_inner_impl' "$SRC" | head -1 | cut -d: -f1)
+          echo "line=${R:-none}"
+          if [ -n "${R:-}" ]; then sed -n "${R},$((R+90))p" "$SRC"; fi
+          echo "=== single-mode acquisition steps ==="
+          for k in 'S:after_get_single_mode' 'S:before_get_character'; do
+            echo "--- $k ---"
+            grep -an "$k" "$SRC" | head -3 || echo "(none)"
+            L=$(grep -an "$k" "$SRC" | head -1 | cut -d: -f1)
+            if [ -n "${L:-}" ]; then sed -n "$((L-25)),$((L+25))p" "$SRC"; fi
+          done
+          echo "=== json step ==="
+          J=$(grep -an 'S:json' "$SRC" | head -1 | cut -d: -f1)
+          echo "line=${J:-none}"
+          if [ -n "${J:-}" ]; then sed -n "$((J-15)),$((J+15))p" "$SRC"; fi
+          echo "=== existing training-state helpers ==="
+          grep -an 'fn in_single_mode\|is_single_mode\|fn current_scenario\|fn get_single_mode_obj' "$SRC" | head -10 || echo "(none)"
