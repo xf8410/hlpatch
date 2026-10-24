@@ -1,0 +1,63 @@
+name: diag v32814 install sites
+
+# Read-only remote grep: lib.rs is ~976KB, above GitHub's search index limit,
+# so the only reliable way to read exact code is to grep it inside CI and read
+# the job log. Prints bounded excerpts only — no build, no artifacts.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v32814-crash-hardening
+    paths:
+      - .github/workflows/diag-v32814-install-sites.yml
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dump install / push_loop / pointer-helper anchors
+        run: |
+          set -uo pipefail
+          SRC=hachimi_ura_plugin/src/lib.rs
+          echo "=== SIZE ==="; wc -c -l "$SRC"
+
+          echo "=== push_loop locations ==="
+          grep -an 'fn push_loop' "$SRC" || true
+          L=$(grep -an 'fn push_loop' "$SRC" | head -1 | cut -d: -f1)
+          if [ -n "${L:-}" ]; then
+            echo "=== push_loop body (from $L, 140 lines) ==="
+            sed -n "${L},$((L+140))p" "$SRC"
+          fi
+
+          echo "=== GAME_INITIALIZED refs ==="
+          grep -an 'GAME_INITIALIZED' "$SRC" || true
+
+          echo "=== boot_trace ==="
+          grep -an 'fn boot_trace' "$SRC" || true
+          B=$(grep -an 'fn boot_trace' "$SRC" | head -1 | cut -d: -f1)
+          if [ -n "${B:-}" ]; then sed -n "${B},$((B+20))p" "$SRC"; fi
+
+          echo "=== factor_index_badge::install call sites (with 6 lines context) ==="
+          grep -an -B6 -A3 'factor_index_badge::install' "$SRC" || true
+
+          echo "=== install_api_sniff_hooks call sites ==="
+          grep -an -B3 -A3 'install_api_sniff_hooks' "$SRC" || true
+
+          echo "=== pointer / string helpers ==="
+          for f in 'fn read_ptr_at' 'fn read_int_at' 'fn read_il2cpp_string' 'fn read_il2cpp_string_from_obj'; do
+            echo "--- $f ---"
+            grep -an "$f" "$SRC" || true
+            P=$(grep -an "$f" "$SRC" | head -1 | cut -d: -f1)
+            if [ -n "${P:-}" ]; then sed -n "${P},$((P+28))p" "$SRC"; fi
+          done
+
+          echo "=== game-init / plugin entry ==="
+          grep -an 'fn on_game_initialized\|fn init(\|fn hachimi_init' "$SRC" || true
+
+          echo "=== event/choices lazy retry region ==="
+          grep -an 'api/event/choices' "$SRC" || true
+
+          echo "=== thread_local / recursion guards present? ==="
+          grep -an 'thread_local' "$SRC" || true
