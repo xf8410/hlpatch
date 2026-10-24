@@ -1,0 +1,162 @@
+name: Release v3.28.14 crash hardening
+
+# v3.28.14 = v3.28.13 lineage + crash hardening for the silent SIGSEGV that made
+# the maintainer fall back to v3.28.2.
+#
+# 1) lib.rs: unconditional boot install. push_loop's 60-round timeout exit used to
+#    fall through with NOTHING installed, so the /api/event/choices HTTP lazy retry
+#    was the only installer — patching interceptors minutes into a session while
+#    the target functions were executing on game threads. Now every exit installs,
+#    with a short retry until il2cpp is ready (scripts/apply_v32814_boot_install.py).
+# 2) factor_index_badge.rs: (a) late-install guard (refuse to patch after the boot
+#    window), (b) IL2CPP class gate on every detour — `UpdateItem` lives on the
+#    generic base class, so the hooked address can be shared with unrelated
+#    carousels; walking +0x90 of a foreign object derefs a garbage "List",
+#    (c) pointer/size sanity + NULL get_text guard + thread-local re-entry guard.
+# Toolchain pinned by rust-toolchain.toml.
+# Trigger: push on this file, or workflow_dispatch. Refuse-overwrite guard on.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/v32814-crash-hardening
+    paths:
+      - .github/workflows/release-v32814-crash-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v3.28.14 >/dev/null 2>&1; then
+            echo 'v3.28.14 release already exists — refusing to overwrite'
+            exit 1
+          fi
+
+      - name: Generate chain + badge + boot install fix
+        run: |
+          set -euo pipefail
+          python3 scripts/run_generated_succession_l_cumulative.py
+          python3 scripts/bump_plugin_version.py 3.27.23
+          python3 scripts/apply_sigsegv_guard_v32723.py
+          python3 scripts/apply_screen_mirror_frame_a.py
+          python3 scripts/apply_factor_index_badge.py
+          python3 scripts/apply_url_decode_utf8_fix.py
+          python3 scripts/apply_pushloop_install_fix.py
+          python3 scripts/apply_v32814_boot_install.py
+          python3 scripts/bump_plugin_version.py 3.28.14
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.28.14"
+          grep -Fq 'version = "3.28.14"' hachimi_ura_plugin/Cargo.lock
+
+      - name: Idempotency check (double apply => identical sha)
+        run: |
+          set -euo pipefail
+          FIRST=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          python3 scripts/apply_factor_index_badge.py
+          python3 scripts/apply_url_decode_utf8_fix.py
+          python3 scripts/apply_pushloop_install_fix.py
+          python3 scripts/apply_v32814_boot_install.py
+          SECOND=$(sha256sum hachimi_ura_plugin/src/lib.rs | cut -d' ' -f1)
+          test "$FIRST" = "$SECOND"
+
+      - name: Qualification greps (boot install + hardening + invariants)
+        run: |
+          set -euxo pipefail
+          SRC=hachimi_ura_plugin/src/lib.rs
+          MOD=hachimi_ura_plugin/src/factor_index_badge.rs
+          echo "install_sites=$(grep -aFc 'factor_index_badge::install();' "$SRC" || true)"
+          echo "mod_sha=$(sha256sum "$MOD" | cut -d' ' -f1)"
+          for s in \
+            'mod factor_index_badge;' \
+            '"/api/factor_index"' \
+            'install_screen_mirror_hook' \
+            'fn hl_ptr_mapped(' \
+            'String::from_utf8_lossy(&out).into_owned()' \
+            'v3.28.13: install hooks before breaking' \
+            'v3.28.14: unconditional boot install' \
+            'unsafe fn install_all_boot_hooks_retry()' \
+            'install_all_boot_hooks_retry();'
+          do grep -aFq "$s" "$SRC" || { echo "MISSING INVARIANT: $s"; exit 1; }
+          done
+          test "$(grep -aFc 'factor_index_badge::install();' "$SRC")" = "5"
+          grep -aFq '/sdcard/Android/media/jp.co.cygames.umamusume/hachimi/uma_predict.log' "$SRC"
+          ! grep -aFq 'jp.pokemon.pokeuma/files/uma_predict.log' "$SRC"
+          ! grep -aFq 'result.push(n as char)' "$SRC"
+          ! grep -aFq 'result.push(bytes[i] as char)' "$SRC"
+          # module ABI + hardening invariants
+          grep -aFq 'fn(*mut c_void, usize, usize, usize) -> u128' "$MOD"
+          ! grep -aFq 'fn(*mut c_void, usize, usize, usize) -> usize' "$MOD"
+          grep -aFq 'select_update_factor_list_hook' "$MOD"
+          grep -aFq 'select_update_item_hook' "$MOD"
+          grep -aFq 'OFF_PARTS_LIST_CAROUSEL' "$MOD"
+          grep -aFq 'fn klass_matches(' "$MOD"
+          grep -aFq 'LATE_INSTALL_WINDOW_SECS' "$MOD"
+          grep -aFq 'BADGE_DEPTH' "$MOD"
+          grep -aFq 'fn plausible(' "$MOD"
+          # the abandoned external "fix" must not be reintroduced
+          ! grep -aFq 'set_text_hook' "$MOD"
+          ! grep -aFq 'OFF_FACTOR_SELECT' "$MOD"
+
+      - name: Setup Rust (toolchain pinned by rust-toolchain.toml)
+        run: rustup target add aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build Android arm64 release
+        id: cargo
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: set -o pipefail; cargo build --target aarch64-linux-android --release 2>&1 | tee release-v32814-cargo.log
+
+      - name: Prepare immutable release assets
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$ASSET"
+          SHA256=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$ASSET")
+          printf '%s  %s\n' "$SHA256" libhachimi_ura.so > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=${GITHUB_SHA}
+          cargo_version=3.28.14
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          tag=v3.28.14
+          workflow_run=${GITHUB_RUN_ID}
+          baseline=v3.28.2_lineage(cumulative+3.27.23+sigsegv_guard+screen_mirror_a+crashlog_media_path)
+          features=factor_index_badge_select_screen,boot_unconditional_hook_install,late_install_guard,il2cpp_class_gate,pointer_sanity_guard,reentry_guard,factor_index_badge_playin_dual_hook_u128abi,url_decode_utf8_fix,screen_mirror_frame_a,sigsegv_guard
+          toolchain=rust-1.97.1-pinned
+          runtime_validation=pending_device_execution
+          EOF
+          cat BUILD-MANIFEST.txt
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          gh release create "v3.28.14" "$ASSET" SHA256SUMS BUILD-MANIFEST.txt hachimi_ura_plugin/release-v32814-cargo.log \
+            --title "v3.28.14 闪退加固（装机必成 + 类门禁 + 指针校验）" \
+            --notes "针对 v3.28.13 闪退的三处结构性加固：① lib.rs 装机改为无条件+短重试——push_loop 60 轮探测超时的退出分支以前什么都不装，只剩 /api/event/choices 在游戏进行中懒装，即打补丁撞执行中函数（v3.28.11/12/13 无声 SIGSEGV 的来源）；② 因子序号模块增加迟到装机拒绝（超过开机窗口 120s 一律不装）、IL2CPP 类门禁（UpdateItem 属于泛型基类，地址可能与无关轮播共用，走 +0x90 会解引用垃圾指针）、指针/长度合法性校验、get_text NULL 保护与同线程重入保护；③ 保留 v3.28.13 的因子選択屏序号与 u128 ABI 修复。SHA256 见 SHA256SUMS。"
