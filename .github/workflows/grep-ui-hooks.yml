@@ -1,0 +1,54 @@
+name: Grep UI hooks (diagnostic)
+
+# 只读诊断：把 lib.rs 里与 UI / 位置 / 渲染相关的标识符列出来，输出到 job log。
+# 不改任何源码。仓库代码搜索对 970KB 单文件不可用，这里用 job log 当远程 grep。
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbench/grep-ui-hooks
+
+permissions:
+  contents: read
+
+jobs:
+  grep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dump UI-related identifiers
+        run: |
+          SRC=hachimi_ura_plugin/src/lib.rs
+          [ -f "$SRC" ] || { echo "::error::$SRC missing"; exit 1; }
+
+          echo "===== size ====="
+          wc -c "$SRC"
+
+          echo "===== mod declarations ====="
+          grep -an '^mod ' "$SRC" | cut -c1-160 | head -40 || true
+
+          echo "===== install_*_hook definitions ====="
+          grep -ano 'fn install_[A-Za-z0-9_]*' "$SRC" | cut -c1-160 | head -80 || true
+
+          echo "===== api endpoints ====="
+          grep -ao '"/api/[A-Za-z0-9_/]*"' "$SRC" | sort -u | head -120 || true
+
+          echo "===== keyword counts ====="
+          for k in anchoredPosition localPosition set_localPosition setPosition RectTransform CanvasScaler set_sizeDelta set_rect set_anchored TextCommon set_text TMP_Text eglSwapBuffers screen_mirror get_text trans; do
+            n=$(grep -ac -- "$k" "$SRC" || true)
+            printf '%-22s %s\n' "$k" "${n:-0}"
+          done
+
+          echo "===== keyword matches (first 10 each, only if > 0) ====="
+          for k in anchoredPosition localPosition set_localPosition setPosition RectTransform CanvasScaler set_sizeDelta set_rect set_anchored; do
+            n=$(grep -ac -- "$k" "$SRC" || true)
+            if [ "${n:-0}" -gt 0 ]; then
+              echo "----- $k ($n lines) -----"
+              grep -an -- "$k" "$SRC" | cut -c1-220 | head -10
+            fi
+          done
+
+          echo "===== mirror hook body (context) ====="
+          grep -an 'install_screen_mirror_hook' "$SRC" | cut -c1-200 | head -5 || true
