@@ -1678,6 +1678,11 @@ unsafe fn try_get_scenario_obj(
             "get_Breeders",
         ], // ★ 育马者杯
         14 => &["get_ScenarioRamen", "get_WorkScenarioRamen", "get_Ramen"], // ★ 拉面杯
+        15 => &[
+            "get_ScenarioFesta",
+            "get_WorkScenarioFesta",
+            "get_Festa",
+        ], // ★ 3.28.2-summary-fix 感谢祭
         _ => &[],
     };
 
@@ -1777,6 +1782,7 @@ unsafe fn read_scenario_detail() -> String {
         12 => "WorkSingleModeScenarioOnsen",
         13 => "WorkSingleModeScenarioBreeders",
         14 => "WorkSingleModeScenarioRamen",
+        15 => "WorkSingleModeScenarioFesta", // ★ 3.28.2-summary-fix
         _ => "Unknown",
     };
 
@@ -3735,6 +3741,532 @@ const TEXT_DATA_CATEGORY_CHARA_NAME: i32 = 6; // text_data.category=6: character
 const TEXT_DATA_CATEGORY_RACE_NAME: i32 = 32; // text_data.category=32: race name
 const TEXT_DATA_CATEGORY_STORY_TITLE: i32 = 45; // text_data.category=45: single mode story title
 const TEXT_DATA_CATEGORY_SKILL_NAME: i32 = 47; // text_data.category=47: skill name
+const TEXT_DATA_CATEGORY_ACT_NAME: i32 = 55; // text_data.category=55: 感谢祭「行动」名 ★ 3.28.2-festa-act
+const TEXT_DATA_CATEGORY_SCENARIO_NAME: i32 = 119; // text_data.category=119: 剧本名 ★ 3.28.2-festa-act
+
+// ============================================================
+// ★ MERGE(v3.28.15 + 3.28.5 A–G): 从 3.28.4+g 血统移植的 festa/剧本15 支撑层
+//   text_data 名称查找 + act_type→command_id 主数据表 + 字段偏移解析
+//   B1/B2/C/D1 全部依赖这一段；上游 v3.28.15 原本没有
+// ============================================================
+// ============================================================
+// ★ 3.28.2-festa-act: text_data 名称查找 + 剧本 15（感谢祭）DataSet
+// ============================================================
+
+/// (text_data.[index] → text, text_data.id → text)
+type TextKeyMaps = (
+    std::collections::HashMap<i32, String>,
+    std::collections::HashMap<i32, String>,
+);
+
+static TEXT_DATA_MAP_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<i32, TextKeyMaps>>,
+> = std::sync::Mutex::new(None);
+
+/// text_data 里到底是 id 还是 [index] 才是 category 内的 key，插件内部两种写法都有
+/// （4326/16407 用 id；16261/16533/16556 用 [index]），没有权威结论。
+/// 所以两列都读，查找优先 [index]，调用方把命中的列写进 JSON，设备上一跑就能判定。
+/// 返回 None 只表示「库没打开」（不缓存，下次重试）；打开成功但查不到行也返回 Some。
+unsafe fn load_text_key_maps(category: i32) -> Option<TextKeyMaps> {
+    let mut by_index = std::collections::HashMap::new();
+    let mut by_id = std::collections::HashMap::new();
+    let mdb_path = match find_mdb_path() {
+        Some(p) => p,
+        None => return None,
+    };
+    let conn = match Connection::open_with_flags(&mdb_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let queries = [
+        (
+            format!(
+                "SELECT [index], text FROM text_data WHERE category={}",
+                category
+            ),
+            true,
+        ),
+        (
+            format!("SELECT id, text FROM text_data WHERE category={}", category),
+            false,
+        ),
+    ];
+    for (sql, use_index) in queries.iter() {
+        if let Ok(mut stmt) = conn.prepare(sql) {
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i32>(0).unwrap_or(0),
+                    row.get::<_, Option<String>>(1)
+                        .unwrap_or(None)
+                        .unwrap_or_default(),
+                ))
+            });
+            if let Ok(rows) = rows {
+                for (k, v) in rows.filter_map(|r| r.ok()) {
+                    if v.is_empty() {
+                        continue;
+                    }
+                    if *use_index {
+                        by_index.insert(k, v);
+                    } else {
+                        by_id.insert(k, v);
+                    }
+                }
+            }
+        }
+    }
+    Some((by_index, by_id))
+}
+
+unsafe fn text_name(category: i32, key: i32) -> Option<(String, &'static str)> {
+    if let Ok(guard) = TEXT_DATA_MAP_CACHE.lock() {
+        if let Some(ref cache) = *guard {
+            if let Some((bi, bd)) = cache.get(&category) {
+                if let Some(n) = bi.get(&key) {
+                    return Some((n.clone(), "text_data.[index]"));
+                }
+                if let Some(n) = bd.get(&key) {
+                    return Some((n.clone(), "text_data.id"));
+                }
+                return None; // 这个 category 已经读过，确实没有这一行
+            }
+        }
+    }
+    let maps = match load_text_key_maps(category) {
+        Some(m) => m,
+        None => return None,
+    };
+    let (bi, bd) = &maps;
+    let hit = if let Some(n) = bi.get(&key) {
+        Some((n.clone(), "text_data.[index]"))
+    } else if let Some(n) = bd.get(&key) {
+        Some((n.clone(), "text_data.id"))
+    } else {
+        None
+    };
+    if let Ok(mut guard) = TEXT_DATA_MAP_CACHE.lock() {
+        if guard.is_none() {
+            *guard = Some(std::collections::HashMap::new());
+        }
+        if let Some(ref mut cache) = *guard {
+            cache.insert(category, maps);
+        }
+    }
+    hit
+}
+
+static FESTA_ACT_CMD_CACHE: std::sync::Mutex<Option<std::collections::HashMap<i32, i32>>> =
+    std::sync::Mutex::new(None);
+
+/// single_mode_15_act_info: act_type → command_id（主数据只有 5 行）。
+/// 查表失败时调用方退回 5100+act_type，并把来源写进 cid_src，不把公式当主数据。
+unsafe fn festa_act_command_ids() -> std::collections::HashMap<i32, i32> {
+    if let Ok(guard) = FESTA_ACT_CMD_CACHE.lock() {
+        if let Some(ref m) = *guard {
+            return m.clone();
+        }
+    }
+    let mut m = std::collections::HashMap::new();
+    if let Some(p) = find_mdb_path() {
+        if let Ok(conn) = Connection::open_with_flags(&p, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            if let Ok(mut st) =
+                conn.prepare("SELECT act_type, command_id FROM single_mode_15_act_info")
+            {
+                if let Ok(rows) = st.query_map([], |row| {
+                    Ok((
+                        row.get::<_, i32>(0).unwrap_or(0),
+                        row.get::<_, i32>(1).unwrap_or(0),
+                    ))
+                }) {
+                    for (a, c) in rows.filter_map(|r| r.ok()) {
+                        if a > 0 && c > 0 {
+                            m.insert(a, c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(mut guard) = FESTA_ACT_CMD_CACHE.lock() {
+        *guard = Some(m.clone());
+    }
+    m
+}
+
+/// 偏移来源二选一：能在当前运行时类里按字段名查到就用查到的（"name"），
+/// 查不到才用真机 read_mem 实测常量（"note"）。来源随字段一起输出，
+/// 布局对不上时设备上直接能看出来，不用再来回猜。
+unsafe fn festa_field_off(cls: *mut c_void, name: &str, note_off: i32) -> (i32, &'static str) {
+    let o = cached_find_field_offset(cls, name);
+    if o >= 0 {
+        (o, "name")
+    } else {
+        (note_off, "note")
+    }
+}
+
+unsafe fn festa_arr_len(arr: *mut c_void) -> usize {
+    if arr.is_null() {
+        return 0;
+    }
+    std::ptr::read_unaligned::<usize>(
+        (arr as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const usize,
+    )
+}
+
+unsafe fn festa_arr_elem(arr: *mut c_void, i: usize) -> *mut c_void {
+    std::ptr::read_unaligned::<*mut c_void>(
+        (arr as *const u8).add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
+            as *const *mut c_void,
+    )
+}
+
+/// v3.28.4: Dump an object's raw words as hex, with the ObscuredInt decode candidate
+/// computed at EVERY 4-byte window (not one fixed stride) so a layout can be pinned
+/// from a single on-device capture instead of guessed.
+///
+/// IL2CPP object header is 16 bytes (klass + monitor) ⇒ real fields start at 0x10.
+/// ObscuredInt on this title is a 20-byte (0x14) stride struct: value = w[off] ^ w[off+4].
+/// ActInfo's verified fields sit at 0x10 / 0x24 / 0x4C / 0x60 / 0x74 / 0x88 = 0x10 + k*0x14,
+/// so `cand` marks exactly those windows while `x4` still reports every other offset.
+/// Returns JSON array of {offset, hex, p32, x4, cand}.
+unsafe fn festa_probe_object_fields(obj: *const c_void, dump_bytes: usize) -> String {
+    if obj.is_null() || dump_bytes < 8 {
+        return "[]".to_string();
+    }
+    let base = obj as *const u8;
+    let mut parts: Vec<String> = Vec::new();
+
+    for off in (0..dump_bytes).step_by(4) {
+        let w = std::ptr::read_unaligned::<u32>(base.add(off) as *const u32);
+        let nxt = std::ptr::read_unaligned::<u32>(base.add(off + 4) as *const u32);
+        let cand = off >= 0x10 && (off - 0x10) % 0x14 == 0;
+        parts.push(format!(
+            r#"{{"offset":"0x{:02x}","hex":"{:08x}","p32":{},"x4":{},"cand":{}}}"#,
+            off,
+            w,
+            w as i32,
+            (w ^ nxt) as i32,
+            cand
+        ));
+    }
+
+    format!("[{}]", parts.join(","))
+}
+
+/// v3.28.4: Probe a `*PredictGainActGaugeArray` — the leaf class
+/// `ObscuredSingleModeFestaPredictGainActGauge` has **never** had its layout measured,
+/// so each element is dumped as raw words + decode candidates. Feeding two captures with
+/// different gauge values is enough to pin `act_type` / `gain_act_gauge`.
+unsafe fn festa_probe_gauge_array(arr: *mut c_void) -> String {
+    let n = festa_arr_len(arr);
+    if arr.is_null() || n == 0 || n > 64 {
+        return "[]".to_string();
+    }
+    let mut items: Vec<String> = Vec::new();
+    for j in 0..n {
+        let leaf = festa_arr_elem(arr, j);
+        if leaf.is_null() {
+            continue;
+        }
+        items.push(format!(
+            r#"{{"idx":{},"class":"{}","fields_hex":{}}}"#,
+            j,
+            json_escape(&class_name_of(obj_class(leaf))),
+            festa_probe_object_fields(leaf as *const c_void, 0x40)
+        ));
+    }
+    format!("[{}]", items.join(","))
+}
+
+/// 剧本 15 感谢祭：WorkSingleModeScenarioFestaDataSet（9 字段）。
+/// 入参是 DataSet 的类和对象指针；返回一个 JSON object（不含外层 "festa": 键）。
+unsafe fn read_festa_dataset(ds_class: *mut c_void, ds_obj: *mut c_void) -> String {
+    let mut kv: Vec<String> = Vec::new();
+    let mut diag: Vec<String> = Vec::new();
+    let mut suspect: Vec<&'static str> = Vec::new();
+
+    // ---- FestaInfo：SummerCampRemainTurnNum / MaxActLevel / ActTrainingStep ----
+    let (fi_off, fi_src) = festa_field_off(ds_class, "FestaInfo", 0x10);
+    diag.push(format!("FestaInfo@{:#x}({})", fi_off, fi_src));
+    let fi_obj = read_ptr_at(ds_obj as *const c_void, fi_off);
+    if fi_obj.is_null() {
+        suspect.push("festa_info_null");
+        kv.push(r#""festa_info":null"#.to_string());
+    } else {
+        let fc = obj_class(fi_obj);
+        let camp =
+            read_obscured_int_at(fi_obj as *const c_void, festa_field_off(fc, "SummerCampRemainTurnNum", 0x10).0);
+        let max_lv =
+            read_obscured_int_at(fi_obj as *const c_void, festa_field_off(fc, "MaxActLevel", 0x24).0);
+        let step =
+            read_obscured_int_at(fi_obj as *const c_void, festa_field_off(fc, "ActTrainingStep", 0x38).0);
+        if max_lv < 0 || max_lv > 50 {
+            suspect.push("max_act_level_implausible");
+        }
+        kv.push(format!(
+            r#""festa_info":{{"summer_camp_remain_turn":{},"max_act_level":{},"act_training_step":{},"elem_class":"{}"}}"#,
+            camp,
+            max_lv,
+            step,
+            json_escape(&class_name_of(fc))
+        ));
+    }
+
+    // ---- ActInfoArray：感谢祭的核心，5 个「行动」 ----
+    let (ai_off, ai_src) = festa_field_off(ds_class, "ActInfoArray", 0x30);
+    diag.push(format!("ActInfoArray@{:#x}({})", ai_off, ai_src));
+    let ai_arr = read_ptr_at(ds_obj as *const c_void, ai_off);
+    let ai_len = festa_arr_len(ai_arr);
+    let cmd_map = festa_act_command_ids();
+    let mut act_items: Vec<String> = Vec::new();
+    if ai_len > 16 {
+        suspect.push("act_len_implausible");
+    } else if !ai_arr.is_null() && ai_len > 0 {
+        for i in 0..ai_len {
+            let ep = festa_arr_elem(ai_arr, i);
+            if ep.is_null() {
+                continue;
+            }
+            let ec = obj_class(ep);
+            if i == 0 {
+                diag.push(format!("ActElemClass={}", class_name_of(ec)));
+            }
+            let at = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "ActType", 0x10).0);
+            let gauge = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "ActGauge", 0x24).0);
+            let lv = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "Level", 0x38).0);
+            let need = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "NeedActGauge", 0x4C).0);
+            let st = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "ActTrainingState", 0x60).0);
+            let aid = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "AdviceId", 0x74).0);
+            let fo = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "FriendOutingGainActLevel", 0x88).0);
+            if !(1..=5).contains(&at) {
+                suspect.push("act_type_out_of_range");
+            }
+            if lv < 0 || lv > 20 {
+                suspect.push("act_level_out_of_range");
+            }
+            // act_type 才是主键（协议实测 act_info_array 元素里没有 command_id）
+            let (cid, cid_src) = match cmd_map.get(&at) {
+                Some(&c) => (c, "single_mode_15_act_info"),
+                None => (5100 + at, "formula_5100_plus_act_type"),
+            };
+            let (nm, ns) = match text_name(TEXT_DATA_CATEGORY_ACT_NAME, cid) {
+                Some((n, s)) => (n, s),
+                None => (format!("act{}:{}", at, cid), "mdb_miss"),
+            };
+            // v3.28.4: raw words alongside the decoded values. ActInfo is the only festa class
+            // whose ObscuredInt offsets are already verified (0x10/0x24/0x4C/0x60/0x74/0x88 = the
+            // 0x14 lattice), so it doubles as the calibration ring for the unknown leaf classes:
+            // if `x4` at the `cand` windows reproduces gauge/need_gauge/level here, the same
+            // reader can be trusted on PredictGainActGauge/EvaluationInfo in the same capture.
+            let raw = festa_probe_object_fields(ep as *const c_void, 0xA0);
+            act_items.push(format!(
+                r#"{{"act_type":{},"command_id":{},"cid_src":"{}","name":"{}","name_src":"{}","gauge":{},"need_gauge":{},"level":{},"state":{},"advice_id":{},"friend_outing":{},"raw":{}}}"#,
+                at, cid, cid_src, json_escape(&nm), ns, gauge, need, lv, st, aid, fo, raw
+            ));
+        }
+    }
+    kv.push(format!(
+        r#""acts":{{"len":{},"list":[{}]}}"#,
+        ai_len,
+        act_items.join(",")
+    ));
+
+    // ---- AdviceInfoArray：{AdviceId, FusionAdviceId} ----
+    let (ad_off, ad_src) = festa_field_off(ds_class, "AdviceInfoArray", 0x28);
+    diag.push(format!("AdviceInfoArray@{:#x}({})", ad_off, ad_src));
+    let ad_arr = read_ptr_at(ds_obj as *const c_void, ad_off);
+    let ad_len = festa_arr_len(ad_arr);
+    let mut adv_items: Vec<String> = Vec::new();
+    if !ad_arr.is_null() && ad_len > 0 && ad_len <= 64 {
+        for i in 0..ad_len {
+            let ep = festa_arr_elem(ad_arr, i);
+            if ep.is_null() {
+                continue;
+            }
+            let ec = obj_class(ep);
+            let a = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "AdviceId", 0x10).0);
+            let f = read_obscured_int_at(
+                ep as *const c_void,
+                festa_field_off(ec, "FusionAdviceId", 0x24).0,
+            );
+            adv_items.push(format!(
+                r#"{{"advice_id":{},"fusion_advice_id":{}}}"#,
+                a, f
+            ));
+        }
+    }
+    kv.push(format!(
+        r#""advice":{{"len":{},"list":[{}]}}"#,
+        ad_len,
+        adv_items.join(",")
+    ));
+
+    // ---- CheckPointResultArray：{ScheduleId, ResultType}，master 里 schedule 1/2/3 = 24/48/68 回合 ----
+    let (cp_off, cp_src) = festa_field_off(ds_class, "CheckPointResultArray", 0x38);
+    diag.push(format!("CheckPointResultArray@{:#x}({})", cp_off, cp_src));
+    let cp_arr = read_ptr_at(ds_obj as *const c_void, cp_off);
+    let cp_len = festa_arr_len(cp_arr);
+    let mut cp_items: Vec<String> = Vec::new();
+    if !cp_arr.is_null() && cp_len > 0 && cp_len <= 64 {
+        for i in 0..cp_len {
+            let ep = festa_arr_elem(cp_arr, i);
+            if ep.is_null() {
+                continue;
+            }
+            let ec = obj_class(ep);
+            let sid_v = read_obscured_int_at(
+                ep as *const c_void,
+                festa_field_off(ec, "ScheduleId", 0x10).0,
+            );
+            let res = read_obscured_int_at(
+                ep as *const c_void,
+                festa_field_off(ec, "ResultType", 0x24).0,
+            );
+            cp_items.push(format!(
+                r#"{{"schedule_id":{},"result_type":{}}}"#,
+                sid_v, res
+            ));
+        }
+    }
+    kv.push(format!(
+        r#""checkpoints":{{"len":{},"list":[{}]}}"#,
+        cp_len,
+        cp_items.join(",")
+    ));
+
+    // ---- CommandGainActGaugeArray：{CommandType, PredictGainActGaugeArray} ----
+    let (gg_off, gg_src) = festa_field_off(ds_class, "CommandGainActGaugeArray", 0x40);
+    diag.push(format!("CommandGainActGaugeArray@{:#x}({})", gg_off, gg_src));
+    let gg_arr = read_ptr_at(ds_obj as *const c_void, gg_off);
+    let gg_len = festa_arr_len(gg_arr);
+    let mut gg_items: Vec<String> = Vec::new();
+    if !gg_arr.is_null() && gg_len > 0 && gg_len <= 64 {
+        for i in 0..gg_len {
+            let ep = festa_arr_elem(gg_arr, i);
+            if ep.is_null() {
+                continue;
+            }
+            let ec = obj_class(ep);
+            let ct = read_obscured_int_at(
+                ep as *const c_void,
+                festa_field_off(ec, "CommandType", 0x10).0,
+            );
+            // v3.28.4: Probe inner PredictGainActGaugeArray leaf layout
+            let (po_off, _) = festa_field_off(ec, "PredictGainActGaugeArray", 0x28);
+            let inner = read_ptr_at(ep as *const c_void, po_off);
+            let inner_len = festa_arr_len(inner);
+            gg_items.push(format!(
+                r#"{{"command_type":{},"predict_len":{},"predict_class":"{}","predict":{}}}"#,
+                ct,
+                inner_len,
+                json_escape(&class_name_of(obj_class(inner))),
+                festa_probe_gauge_array(inner)
+            ));
+        }
+    }
+    kv.push(format!(
+        r#""gain_gauges":{{"len":{},"list":[{}]}}"#,
+        gg_len,
+        gg_items.join(",")
+    ));
+
+    // ---- CommandInfoArray：v3.28.4 真实解码，局内才有数据 ----
+    let (ci_off, ci_src) = festa_field_off(ds_class, "CommandInfoArray", 0x18);
+    diag.push(format!("CommandInfoArray@{:#x}({})", ci_off, ci_src));
+    let ci_arr = read_ptr_at(ds_obj as *const c_void, ci_off);
+    let ci_len = festa_arr_len(ci_arr);
+    let mut cmd_items: Vec<String> = Vec::new();
+    let cmd_note = if ci_arr.is_null() || ci_len == 0 {
+        "released_in_settlement"
+    } else {
+        for i in 0..ci_len {
+            let ep = festa_arr_elem(ci_arr, i);
+            if ep.is_null() {
+                continue;
+            }
+            let ec = obj_class(ep);
+            // Known offsets from task spec
+            let ct = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "CommandType", 0x10).0);
+            let cid = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "CommandId", 0x24).0);
+            // ParamsIncDecInfoArray at 0x38
+            let params_arr = read_ptr_at(ep as *const c_void, festa_field_off(ec, "ParamsIncDecInfoArray", 0x38).0);
+            let params_len = festa_arr_len(params_arr);
+            // PredictGainActGaugeArray at 0x40
+            let predict_arr = read_ptr_at(ep as *const c_void, festa_field_off(ec, "PredictGainActGaugeArray", 0x40).0);
+            let predict_len = festa_arr_len(predict_arr);
+            // IsUpperTrainingEventOccurred at 0x48
+            let is_upper = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "IsUpperTrainingEventOccurred", 0x48).0);
+            
+            cmd_items.push(format!(
+                r#"{{"command_type":{},"command_id":{},"params_len":{},"predict_len":{},"is_upper_training_event_occurred":{},"predict":{}}}"#,
+                ct, cid, params_len, predict_len, is_upper,
+                festa_probe_gauge_array(predict_arr)
+            ));
+        }
+        "decoded"
+    };
+    kv.push(format!(
+        r#""command_info":{{"len":{},"list":[{}],"note":"{}"}}"#,
+        ci_len,
+        cmd_items.join(","),
+        cmd_note
+    ));
+
+    // ---- EvaluationInfoArray：v3.28.4 布局探测 ----
+    let (ei_off, ei_src) = festa_field_off(ds_class, "EvaluationInfoArray", 0x20);
+    diag.push(format!("EvaluationInfoArray@{:#x}({})", ei_off, ei_src));
+    let ei_arr = read_ptr_at(ds_obj as *const c_void, ei_off);
+    let ei_len = festa_arr_len(ei_arr);
+    let mut eval_items: Vec<String> = Vec::new();
+    if !ei_arr.is_null() && ei_len > 0 && ei_len <= 64 {
+        for i in 0..ei_len {
+            let ep = festa_arr_elem(ei_arr, i);
+            if ep.is_null() {
+                continue;
+            }
+            let ec = obj_class(ep);
+            let class_name = class_name_of(ec);
+            // Hex dump first 0x40 bytes for layout probing
+            let hex_dump = festa_probe_object_fields(ep as *const c_void, 0x40);
+            eval_items.push(format!(
+                r#"{{"class":"{}","fields_hex":{}}}"#,
+                json_escape(&class_name),
+                hex_dump
+            ));
+        }
+    }
+    kv.push(format!(
+        r#""evaluation_info":{{"len":{},"list":[{}]}}"#,
+        ei_len,
+        eval_items.join(",")
+    ));
+
+    kv.push(format!(
+        r#""ds_class":"{}""#,
+        json_escape(&class_name_of(ds_class))
+    ));
+
+    suspect.sort();
+    suspect.dedup();
+    let note = if suspect.is_empty() {
+        "offsets_verified_runtime_chain_2026-10-26"
+    } else {
+        // 拼字符串给 &'static str 用不了，直接 join 即可
+        diag.push(format!("suspect={}", suspect.join("+")));
+        "layout_suspect_see_diag"
+    };
+    kv.push(format!(r#""note":"{}""#, note));
+    kv.push(format!(
+        r#""diag":[{}]"#,
+        diag.iter()
+            .map(|d| format!(r#""{}""#, json_escape(d)))
+            .collect::<Vec<_>>()
+            .join(",")
+    ));
+
+    format!("{{{}}}", kv.join(","))
+}
 const IL2CPP_LIST_COUNT_OFF: usize = 0x18; // Il2CppList._count (il2cpp internal, all List<T>)
 const IL2CPP_LIST_ITEMS_OFF: usize = 0x20; // Il2CppList._items[0] start (il2cpp internal, all List<T>)
 const IL2CPP_LIST_ITEM_SIZE: usize = 0x08; // sizeof(pointer) on aarch64
@@ -4925,6 +5457,7 @@ unsafe fn read_summary_inner_impl() -> String {
         12 => "Onsen",
         13 => "Breeders",
         14 => "Ramen",
+        15 => "Festa", // ★ 3.28.2-summary-fix 感谢祭
         _ => "Unknown",
     };
 
@@ -5738,6 +6271,8 @@ unsafe fn read_summary_inner_impl() -> String {
                 );
                 if cmd_len > 0 && cmd_len < 100 {
                     let mut trs = Vec::new();
+                    // ★ 3.28.2-summary-fix: 元素运行时类名只解析一次
+                    let mut cmd_class_name: Option<String> = None;
                     for i in 0..cmd_len {
                         let ep = std::ptr::read_unaligned::<*mut c_void>(
                             cmd_base.add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE)
@@ -5751,8 +6286,35 @@ unsafe fn read_summary_inner_impl() -> String {
                         // SingleModeCommandInfoData offsets (confirmed by /debug/dumpclass):
                         //   CommandType=16  CommandId=36  IsEnable=56
                         //   TrainingPartnerArray=80  TipsEventPartnerArray=88  FailureRate=104
-                        let cid = read_obscured_int_at(ep as *const c_void, 36); // CommandId
-                        let cname = match cid {
+                        // ★ 3.28.2-summary-fix: 元素类不一定是 SingleModeCommandInfoData
+                        // （剧本 15 Festa 的元素类型未核实，那个类 +56 是 ParamsIncDecInfoArray 指针）。
+                        // 先按字段名查这个类自己的偏移，查不到才退回 v3.24.9 的 legacy 常量。
+                        let ep_class = obj_class(ep);
+                        if cmd_class_name.is_none() {
+                            cmd_class_name = Some(class_name_of(ep_class));
+                        }
+                        let en_off = cached_find_field_offset(ep_class, "IsEnable");
+                        // 类里没有 IsEnable → 这不是 legacy 布局，+80/+88/+104 不属于它。
+                        let legacy_layout = ep_class.is_null() || en_off >= 0;
+                        let cid_off = {
+                            let o = cached_find_field_offset(ep_class, "CommandId");
+                            if o >= 0 {
+                                o
+                            } else {
+                                36
+                            }
+                        };
+                        let cid = read_obscured_int_at(ep as *const c_void, cid_off); // CommandId
+                        let cmd_type_off = {
+                            let o = cached_find_field_offset(ep_class, "CommandType");
+                            if o >= 0 {
+                                o
+                            } else {
+                                16
+                            }
+                        };
+                        let cmd_type = read_obscured_int_at(ep as *const c_void, cmd_type_off);
+                        let cname_raw: &'static str = match cid {
                             CMD_SPEED => "Speed",
                             CMD_STAMINA => "Stamina",
                             CMD_GUTS => "Guts",
@@ -5769,21 +6331,67 @@ unsafe fn read_summary_inner_impl() -> String {
                             401 => "Outing2",
                             701 => "Outing3",
                             801 => "Outing4",
-                            _ => "Unknown",
+                            // ★ 3.28.2-festa-act: 上一轮按 CMD_URA_*(601..605) 顺序推定的
+                            // 5101 Speed / 5102 Stamina / 5103 Power / 5104 Guts / 5105 Wiz
+                            // 已被主数据推翻 —— 它们是感谢祭的 5 个「行动」。
+                            // 名字一律从设备 text_data(category=55) 取，见下面 name_src。
+                            _ => "",
                         };
-                        let is_enable = read_obscured_int_at(ep as *const c_void, 56); // IsEnable
-                        let failure_rate = read_obscured_int_at(ep as *const c_void, 104); // FailureRate
+                        // ★ 3.28.2-festa-act: 静态表没命中（返回空串）才查 MasterDB；
+                        // id 和 [index] 两列都试，name_src 记录命中来源，miss 就输出 Unknown，
+                        // 绝不回填推定的名字。
+                        let (cname, name_src) = if !cname_raw.is_empty() {
+                            (cname_raw.to_string(), "static_table".to_string())
+                        } else {
+                            match text_name(TEXT_DATA_CATEGORY_ACT_NAME, cid) {
+                                Some((n, s)) => (n, s.to_string()),
+                                None => ("Unknown".to_string(), "mdb_miss".to_string()),
+                            }
+                        };
+                        let is_enable = read_obscured_int_at(
+                            ep as *const c_void,
+                            if en_off >= 0 { en_off } else { 56 },
+                        ); // IsEnable
+                        // 字段确实不存在 → 输出 null；只是类信息拿不到 → 保持旧行为，不用 null 掩盖。
+                        let is_enable_json = if en_off >= 0 || ep_class.is_null() {
+                            is_enable.to_string()
+                        } else {
+                            "null".to_string()
+                        };
+                        let fr_off = if legacy_layout {
+                            let o = cached_find_field_offset(ep_class, "FailureRate");
+                            if o >= 0 {
+                                o
+                            } else {
+                                104
+                            }
+                        } else {
+                            -1
+                        };
+                        let failure_rate =
+                            if fr_off >= 0 {
+                                read_obscured_int_at(ep as *const c_void, fr_off)
+                            } else {
+                                0
+                            }; // FailureRate
 
                         // TrainingPartnerArray is ObscuredInt[] with
                         // inline 20-byte values.
-                        let tp_arr = read_ptr_at(ep as *const c_void, TRAINING_PARTNER_ARRAY_OFF);
+                        let tp_arr = if legacy_layout {
+                            read_ptr_at(ep as *const c_void, TRAINING_PARTNER_ARRAY_OFF)
+                        } else {
+                            ptr::null_mut()
+                        };
 
                         // ★ v3.24.15: Read TipsEventPartnerArray for group card shining.
                         // Group cards (support_card_type=3) shine when they trigger a
                         // special tips event, not based on bond threshold.
                         // TipsEventPartnerArray is at offset 0x58 (88), same ObscuredInt[] format.
-                        let tips_arr =
-                            read_ptr_at(ep as *const c_void, TIPS_EVENT_PARTNER_ARRAY_OFF);
+                        let tips_arr = if legacy_layout {
+                            read_ptr_at(ep as *const c_void, TIPS_EVENT_PARTNER_ARRAY_OFF)
+                        } else {
+                            ptr::null_mut()
+                        };
                         let mut tips_partner_ids: std::collections::HashSet<i32> =
                             std::collections::HashSet::new();
                         if !tips_arr.is_null() {
@@ -6145,11 +6753,17 @@ unsafe fn read_summary_inner_impl() -> String {
                         // HomeInfoData.ParamsIncDecInfoArray 有数据 (params_len=4)
 
                         trs.push(format!(
-                            r#"{{"name":"{}","command_id":{},"is_enable":{},"failure_rate":{},"heads":{},"shining":{},"partner_ids":[{}],"partners":[{}],"gains":{{{}}}}}"#,
+                            r#"{{"name":"{}","name_src":"{}","command_id":{},"cmd_type":{},"cmd_class":"{}","is_enable":{},"failure_rate":{},"offs":[{},{},{}],"heads":{},"shining":{},"partner_ids":[{}],"partners":[{}],"gains":{{{}}}}}"#,
                             cname,
+                            name_src,
                             cid,
-                            is_enable,
+                            cmd_type,
+                            cmd_class_name.as_deref().unwrap_or("?"),
+                            is_enable_json.as_str(),
                             failure_rate,
+                            cid_off,
+                            en_off,
+                            fr_off,
                             heads,
                             shining_json,
                             partner_ids
@@ -6358,6 +6972,8 @@ unsafe fn read_summary_inner_impl() -> String {
     log_predict_step("S:p6 buffs");
     // ★ v3.14.2: Always generate buffs from chara_effect_ids first
     let mut buff_json = effects_to_buffs_json(&chara_effect_ids);
+    // ★ 3.28.2-festa-act: 剧本 15 的 FestaDataSet 内容，只有 sid==15 才会非空
+    let mut festa_json = String::new();
     // ★ v3.22.51: sid==14 skips try_get_scenario_obj (data pre-read in ramen section)
     let scenario_obj = if sid == 14 {
         ptr::null_mut()
@@ -6380,12 +6996,20 @@ unsafe fn read_summary_inner_impl() -> String {
             12 => "WorkSingleModeScenarioOnsen",
             13 => "WorkSingleModeScenarioBreeders",
             14 => "WorkSingleModeScenarioRamen",
+            15 => "WorkSingleModeScenarioFesta", // ★ 3.28.2-festa-act
             _ => "",
         };
         if !sc_name.is_empty() {
             let sc_class = find_class_by_short_name(image, sc_name);
             if !sc_class.is_null() {
                 let ds_obj = call_getter_on_instance(sc_class, scenario_obj, "get_DataSet"); // [INVOKE-09] get_DataSet — ★ 与 INVOKE-05 重复，待去重
+                // ★ 3.28.2-festa-act: Festa 的 DataSet 实测在容器 +0x10；
+                // get_DataSet 不存在/返回空时退化用固定偏移直取。
+                let ds_obj = if ds_obj.is_null() && sid == 15 {
+                    read_ptr_at(scenario_obj as *const c_void, 0x10)
+                } else {
+                    ds_obj
+                };
                 if !ds_obj.is_null() {
                     let ds_name = format!("{}DataSet", sc_name);
                     let ds_class = find_class_by_short_name(image, &ds_name);
@@ -6441,6 +7065,10 @@ unsafe fn read_summary_inner_impl() -> String {
                                     }
                                 }
                             }
+                        }
+                        // ★ 3.28.2-festa-act: 剧本 15 感谢祭 DataSet → /summary festa 字段
+                        if sid == 15 {
+                            festa_json = read_festa_dataset(ds_class, ds_obj);
                         }
                         // ★ v3.22.89: Removed dead Ramen buffs code here
                         // (sid==14 sets scenario_obj=null, so this block never executes for Ramen.
@@ -6664,9 +7292,26 @@ unsafe fn read_summary_inner_impl() -> String {
         }
     };
 
+    // ★ 3.28.2-festa-act: 剧本 15 感谢祭 DataSet → /summary 的 festa 字段
+    let festa_frag = if festa_json.is_empty() {
+        String::new()
+    } else {
+        format!(",\"festa\":{}", festa_json)
+    };
+    // ★ 3.28.2-festa-act: 剧本名走设备 MasterDB text_data(category=119)。
+    // 不硬编码任何标题串，读到什么输出什么，读不到就不输出这个字段。
+    let scn_mdb_json = match text_name(TEXT_DATA_CATEGORY_SCENARIO_NAME, sid) {
+        Some((n, s)) => format!(
+            r#","scenario_mdb_name":"{}","scenario_name_src":"{}"#,
+            json_escape(&n),
+            s
+        ),
+        None => String::new(),
+    };
+
     log_predict_step("S:json");
     format!(
-        r#"{{"version":"{}","year":{},"turn":{},"raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"verified_ramen_upstream_semantics","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{},"style_nige":{},"style_senko":{},"style_sashi":{},"style_oikomi":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"skill_tips":{},"ai":{}{}{}{} }}"#,
+        r#"{{"version":"{}","year":{},"turn":{},"raw_total_turn_num":{},"ui_turn_semantics":"countdown","raw_field_mapping":"verified_ramen_upstream_semantics","month":{},"half":{},"scenario":"{}","chara_id":{},"stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{},"vital":{},"max_vital":{},"motivation":"{}","skill_point":{},"fan":{}}},"max_stats":{{"speed":{},"stamina":{},"power":{},"guts":{},"wiz":{}}},"proper":{{"dist_short":{},"dist_mile":{},"dist_mid":{},"dist_long":{},"ground_turf":{},"ground_dirt":{},"style_nige":{},"style_senko":{},"style_sashi":{},"style_oikomi":{}}},"running_style":{},"scenario_progress":{},"training_event_type":{},"talent_level":{},"chara_grade":{},"difficulty":{},"fixed_turn_chara_seed":{},"trainings":{},"support_cards":{},"evaluation":{},"training_levels":{},"buffs":{},"chara_effect_ids":[{}],"skills":{{"eval":{},"count":{},"list":{}}},"skill_tips":{},"ai":{}{}{}{}{}{} }}"#,
         PLUGIN_VERSION,
         year,
         cumulative_turn,
@@ -6720,7 +7365,9 @@ unsafe fn read_summary_inner_impl() -> String {
         ai_json,
         team_json,
         ramen_json,
-        last_action_json
+        last_action_json,
+        festa_frag,
+        scn_mdb_json
     )
 }
 
@@ -6770,6 +7417,78 @@ fn push_to_app(json: &str) {
     let _ = stream.read(&mut buf);
 }
 
+
+// ============================================================
+// ★ 落文件 (dump_summary_media) — 手机无电脑工作流
+// 把 /summary 的 JSON 直接写进 Android 共享媒体区，文件管理器就能打开，
+// 不需要 root、不需要 adb：
+//   /sdcard/Android/media/<pkg>/hachimi/ura_summary_latest.json  覆盖写最新一份
+//   /sdcard/Android/media/<pkg>/hachimi/ura_summary_log.jsonl    数据变化时追加一行
+// .jsonl 超过 SUMMARY_LOG_MAX_BYTES 就先转成 .jsonl.1 再重开。
+// 目录跟 boot_trace 写 ura_boot.log 的是同一个（那条路径实测可写）。
+// 不受 push_enabled 影响 —— 没有接收方也要落文件，这正是它存在的理由。
+// 全程 best-effort：任何 IO 失败只 boot_trace 一行，绝不影响 push_loop。
+// ============================================================
+const SUMMARY_LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// /sdcard/Android/media/<pkg>/hachimi，解析不出来就返回 None（不猜、不硬编码包名）。
+fn hl_media_dir() -> Option<String> {
+    let raw = std::fs::read("/proc/self/cmdline").unwrap_or_default();
+    let pkg = String::from_utf8_lossy(&raw)
+        .trim_matches(char::from(0))
+        .trim()
+        .to_string();
+    let plausible = pkg.len() >= 4
+        && pkg.len() < 128
+        && pkg.contains('.')
+        && !pkg.contains('/')
+        && !pkg.contains(' ');
+    if !plausible {
+        return None;
+    }
+    let dir = format!("/sdcard/Android/media/{}/hachimi", pkg);
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir)
+}
+
+/// `first` 只用于决定要不要在 ura_boot.log 里留一条成功记录，避免每轮都刷日志。
+fn dump_summary_media(json: &str, first: bool) {
+    let dir = match hl_media_dir() {
+        Some(d) => d,
+        None => {
+            if first {
+                boot_trace("dump_summary_media:skip_no_pkg_dir");
+            }
+            return;
+        }
+    };
+    let latest = format!("{}/ura_summary_latest.json", dir);
+    let log_path = format!("{}/ura_summary_log.jsonl", dir);
+    if let Err(e) = std::fs::write(&latest, json) {
+        boot_trace(&format!("dump_summary_media:latest_err={}", e));
+        return;
+    }
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        if meta.len() >= SUMMARY_LOG_MAX_BYTES {
+            let _ = std::fs::rename(&log_path, format!("{}.1", log_path));
+            boot_trace("dump_summary_media:log_rotated");
+        }
+    }
+    let line = format!("{}\n", json);
+    if let Err(e) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()))
+    {
+        boot_trace(&format!("dump_summary_media:log_err={}", e));
+        return;
+    }
+    if first {
+        boot_trace(&format!("dump_summary_media:ok dir={}", dir));
+    }
+}
+
 fn push_loop() {
     let interval =
         std::time::Duration::from_secs(unsafe { get_config() }.push_interval_secs.max(2));
@@ -6817,6 +7536,8 @@ fn push_loop() {
             LAST_PUSH_HASH = simple_hash(&init_summary);
         }
         push_to_app(&init_summary);
+        // ★ 落文件：启动首推。没有电脑/adb 时这就是唯一的数据出口。
+        dump_summary_media(&init_summary, true);
         unsafe {
             ura_log(3, "Push: initial data pushed");
         }
@@ -6877,6 +7598,8 @@ fn push_loop() {
                 ura_log(3, "Push: data changed, pushing to app");
             }
             push_to_app(&summary);
+            // ★ 落文件：数据变化时追加一行 .jsonl 并刷新 latest.json。
+            dump_summary_media(&summary, false);
         }
     }
 }
@@ -7625,6 +8348,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
         "/debug/resource_crypto_symbols",
         "/debug/all",
         "/debug/params",
+        "/debug/training_entities",
+        "/debug/acts",
+        "/debug/festa_probe",
         "/debug/cmdinfo",
         "/debug/breeders",
         "/debug/training_partners",
@@ -7655,7 +8381,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         safe_maps_summary()
     } else if path == "/" || path == "/health" {
         format!(
-            r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#,
+            r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/training_entities","/debug/acts","/debug/festa_probe","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#,
             PLUGIN_VERSION
         )
     } else if path == "/scan" {
@@ -7755,7 +8481,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
     } else if path == "/log" {
         unsafe { get_training_log() }
     } else if path == "/debug/params" {
-        unsafe { debug_params_inc_dec() }
+        // C(v3.28.5): repository entity path; supports ?cmd=<id> and ?all=1
+        debug_params_endpoint(&full_uri)
+    } else if path == "/debug/training_entities" {
+        // B1/B2(v3.28.5): whole training-command entity graph in one request
+        debug_training_entities()
+    } else if path == "/debug/acts" {
+        // D1(v3.28.5): 感谢祭 5 acts + AdviceInfoArray, correspondence pinned
+        debug_acts()
+    } else if path == "/debug/festa_probe" {
+        // 剧本15 感谢祭布局探针（3.28.4 起）
+        unsafe { debug_festa_probe() }
     } else if path == "/debug/breeders" {
         unsafe { debug_breeders_team() }
     } else if path == "/debug/rameninfo" {
@@ -9119,8 +9855,11 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe { il2cpp_search_float(&value_str) }
     } else if path.starts_with("/il2cpp/read_mem_dl") {
         // v3.22.91: 读取原始内存（下载hex dump，修复：内联下载包装）
+        // A1: 接受 bytes（优先）或 size 作为读取长度
         let addr_str = parse_query(&full_uri, "addr");
-        let size_str = parse_query(&full_uri, "size");
+        let bytes_q = parse_query(&full_uri, "bytes");
+        let size_q = parse_query(&full_uri, "size");
+        let size_str = if !bytes_q.is_empty() { bytes_q } else { size_q };
         let body = il2cpp_read_mem(&addr_str, &size_str);
         let safe_addr: String = addr_str.chars().filter(|c| c.is_alphanumeric()).collect();
         let fname = format!(
@@ -9139,8 +9878,11 @@ fn handle_http(mut stream: std::net::TcpStream) {
         return;
     } else if path.starts_with("/il2cpp/read_mem") {
         // v3.22.89: 读取原始内存（hex dump）
+        // A1: 接受 bytes（优先）或 size；两者都缺省才在函数内回退 4096
         let addr_str = parse_query(&full_uri, "addr");
-        let size_str = parse_query(&full_uri, "size");
+        let bytes_q = parse_query(&full_uri, "bytes");
+        let size_q = parse_query(&full_uri, "size");
+        let size_str = if !bytes_q.is_empty() { bytes_q } else { size_q };
         il2cpp_read_mem(&addr_str, &size_str)
     } else if path.starts_with("/il2cpp/read_string") {
         (|| -> String {
@@ -9312,7 +10054,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else {
         format!(
-            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
+            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/debug/training_entities","/debug/acts","/debug/festa_probe","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
             path
         )
     };
@@ -12442,11 +13184,719 @@ pub unsafe extern "C" fn hachimi_init_v3(
 }
 
 // ============================================================
+// ★ v3.28.5 B1/B2/C/D1/D2: SingleModeTrainingCommandListRepository entity path
+// ------------------------------------------------------------
+// Why this path exists: the home-info ParamsIncDecInfoArray route
+// (debug_params_inc_dec below) wraps values in ObscuredInt (field_val_xor=117)
+// and its traversal aborts after 2-3 of the 10 commands, so /debug/params
+// emitted guessed auto_val. The repository entity path reads
+// TrainingGainParameterEntity.Value as a PLAIN int32 (device-confirmed) and
+// walks all 5 command entities in ONE request — these entities are rebuilt
+// every frame, so pointers cannot be cached across calls; the whole graph must
+// be resolved inside a single request.
+//
+// Offsets are resolved by field NAME at runtime (cached_find_field_offset) with
+// the device-captured spec constants as fallback, and every element's runtime
+// class name is emitted so the layout self-verifies on device:
+//   SingleModeTrainingCommandListRepository.get_TrainingCommandInfoDataList()  [static]
+//     -> List<SingleModeTrainingCommandEntity>
+//          0x14 CommandId(i32)   0x20 TrainingLevel(i32)   0x24 TrainingFailureRate(i32)
+//          0x28 TrainingGainParameterList      (下层 / lower)
+//          0x30 TrainingGainBonusParameterList (上层 / upper)
+//            -> List<TrainingGainParameterEntity> { 0x10 ParameterType(i32), 0x14 Value(i32) }
+//   B2 partner support:
+//     WorkSingleModeData.get_ChangeParameterInfo().get_GainParameterInfo()
+//       .get_GainPartnerSupportEffectArray()
+//         -> ObscuredGainPartnerSupportEffect { 0x10 TrainingPartnerId, 0x28 EffectArray }
+//              -> ObscuredEffectTypeValue { EffectType, EffectValue }
+// ============================================================
+
+/// ParameterType id -> stat name (1速 2耐 3力 4毅 5智 10体力 30SP).
+fn gain_param_type_name(t: i32) -> &'static str {
+    match t {
+        1 => "speed",
+        2 => "stamina",
+        3 => "power",
+        4 => "guts",
+        5 => "wiz",
+        10 => "hp",
+        30 => "sp",
+        _ => "other",
+    }
+}
+
+/// Invoke a STATIC, no-arg IL2CPP method that returns a reference type.
+/// The repository accessors (Get / get_TrainingCommandInfoDataList) are static,
+/// so il2cpp_runtime_invoke is called with a null instance.
+unsafe fn call_static_getter_ref(class: *mut c_void, method_name: &str) -> *mut c_void {
+    if class.is_null() {
+        return ptr::null_mut();
+    }
+    let get_method_fn: Option<FnClassGetMethodFromName> = {
+        let p = resolve_il2cpp_symbol("il2cpp_class_get_method_from_name");
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute::<*mut c_void, FnClassGetMethodFromName>(p))
+        }
+    };
+    let invoke_fn: Option<FnRuntimeInvoke> = {
+        let p = resolve_il2cpp_symbol("il2cpp_runtime_invoke");
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute::<*mut c_void, FnRuntimeInvoke>(p))
+        }
+    };
+    let (gm, inv) = match (get_method_fn, invoke_fn) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return ptr::null_mut(),
+    };
+    let name_c = to_cstr(method_name);
+    let method_info = gm(class, name_c.as_ptr(), 0);
+    if method_info.is_null() {
+        return ptr::null_mut();
+    }
+    let mut exc: *mut c_void = ptr::null_mut();
+    let result = inv(method_info, ptr::null_mut(), ptr::null_mut(), &mut exc);
+    if !exc.is_null() {
+        return ptr::null_mut();
+    }
+    result
+}
+
+/// Collect reference-type element pointers from an IL2CPP List<T> or T[].
+/// List<T>: count@0x18, items array ptr@0x10, elements at array+0x20+i*8.
+/// T[]:     count@0x18, elements at arr+0x20+i*8.
+/// Null elements are included in order (caller skips them) so indices align.
+unsafe fn collect_ref_elements(coll: *mut c_void, max: usize) -> Vec<*mut c_void> {
+    let mut out: Vec<*mut c_void> = Vec::new();
+    if coll.is_null() {
+        return out;
+    }
+    let cls = get_class_from_object(coll);
+    let cname = get_class_name_from_pointer(cls);
+    let is_list = cname.contains("List`1") || cname.starts_with("List<");
+    let count = std::ptr::read_unaligned::<i32>(
+        (coll as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const i32,
+    );
+    if count <= 0 || count > 4096 {
+        return out;
+    }
+    let arr = if is_list {
+        read_ptr_at(coll, IL2CPP_LIST_ARRAY_OFF as i32)
+    } else {
+        coll
+    };
+    if arr.is_null() {
+        return out;
+    }
+    let n = (count as usize).min(max);
+    for i in 0..n {
+        let slot = (arr as *const u8).add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE);
+        let e = std::ptr::read_unaligned::<*mut c_void>(slot as *const *mut c_void);
+        out.push(e);
+    }
+    out
+}
+
+/// Sum a (type,value) list per ParameterType -> compact JSON object like {"5_wiz":25,"30_sp":21}.
+fn by_type_json(list: &[(i32, i32)]) -> String {
+    let mut ks: Vec<i32> = list.iter().map(|x| x.0).collect();
+    ks.sort();
+    ks.dedup();
+    let parts: Vec<String> = ks
+        .iter()
+        .map(|k| {
+            let s: i32 = list.iter().filter(|x| x.0 == *k).map(|x| x.1).sum();
+            format!(r#""{}_{}":{}"#, k, gain_param_type_name(*k), s)
+        })
+        .collect();
+    format!("{{{}}}", parts.join(","))
+}
+
+/// Per-entry JSON array of a gain list: [{"parameter_type":5,"stat":"wiz","value":25},...].
+fn gain_entries_json(list: &[(i32, i32)]) -> String {
+    let parts: Vec<String> = list
+        .iter()
+        .map(|(t, v)| {
+            format!(
+                r#"{{"parameter_type":{},"stat":"{}","value":{}}}"#,
+                t,
+                gain_param_type_name(*t),
+                v
+            )
+        })
+        .collect();
+    format!("[{}]", parts.join(","))
+}
+
+struct GainParam {
+    ptype: i32,
+    value: i32,
+    elem_class: String,
+}
+
+struct ParsedCmd {
+    idx: usize,
+    elem_class: String,
+    command_id: i32,
+    command_type: i32,
+    is_enable: i32,
+    training_level: i32,
+    training_failure_rate: i32,
+    lower: Vec<(i32, i32)>,
+    upper: Vec<(i32, i32)>,
+    lower_class: String,
+    upper_class: String,
+    lower_sum: i32,
+    upper_sum: i32,
+    lower_off: i32,
+    upper_off: i32,
+    raw: String,
+}
+
+/// Read one TrainingGainParameterList/BonusList into (ptype,value,elem_class) entries.
+unsafe fn read_gain_param_list(list: *mut c_void) -> (Vec<GainParam>, i32, String) {
+    let mut out: Vec<GainParam> = Vec::new();
+    let mut sum = 0i32;
+    let mut lclass = String::new();
+    if list.is_null() {
+        return (out, sum, lclass);
+    }
+    lclass = get_object_class_name(list as *const c_void);
+    for e in collect_ref_elements(list, 64) {
+        if e.is_null() {
+            continue;
+        }
+        let ec = get_class_from_object(e);
+        let ecn = get_class_name_from_pointer(ec);
+        let pt_off = festa_field_off(ec, "ParameterType", 0x10).0;
+        let v_off = festa_field_off(ec, "Value", 0x14).0;
+        let pt = read_int_at(e, pt_off);
+        let v = read_int_at(e, v_off);
+        sum += v;
+        out.push(GainParam {
+            ptype: pt,
+            value: v,
+            elem_class: ecn,
+        });
+    }
+    (out, sum, lclass)
+}
+
+/// Core B1 traversal: repository -> List<SingleModeTrainingCommandEntity> -> both gain layers.
+/// Returns (entities, diagnostics, fatal_error).
+unsafe fn read_training_command_entities() -> (Vec<ParsedCmd>, Vec<String>, Option<String>) {
+    let mut diag: Vec<String> = Vec::new();
+    if API.is_null() {
+        return (Vec::new(), diag, Some("api_null".to_string()));
+    }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return (Vec::new(), diag, Some("image_null".to_string())),
+    };
+    let repo_class = find_class_by_short_name(image, "SingleModeTrainingCommandListRepository");
+    if repo_class.is_null() {
+        return (
+            Vec::new(),
+            diag,
+            Some("repo_class_null:SingleModeTrainingCommandListRepository".to_string()),
+        );
+    }
+    // get_TrainingCommandInfoDataList is static on the repository.
+    let mut list = call_static_getter_ref(repo_class, "get_TrainingCommandInfoDataList");
+    let mut via = "static_get_TrainingCommandInfoDataList";
+    if list.is_null() {
+        // fallback: Get() -> instance, then instance getter
+        let inst = call_static_getter_ref(repo_class, "Get");
+        if !inst.is_null() {
+            let ic = get_class_from_object(inst);
+            if !ic.is_null() {
+                list = call_getter_on_instance(ic, inst, "get_TrainingCommandInfoDataList");
+                via = "Get()->get_TrainingCommandInfoDataList";
+            }
+        }
+    }
+    diag.push(format!("via={}", via));
+    if list.is_null() {
+        return (Vec::new(), diag, Some("cmd_list_null".to_string()));
+    }
+    let list_class = get_object_class_name(list as *const c_void);
+    let elems = collect_ref_elements(list, 32);
+    diag.push(format!("list_class={}", list_class));
+    diag.push(format!("list_len={}", elems.len()));
+
+    let mut out: Vec<ParsedCmd> = Vec::new();
+    for (idx, e) in elems.iter().enumerate() {
+        if e.is_null() {
+            diag.push(format!("elem{}=null", idx));
+            continue;
+        }
+        let ec = get_class_from_object(*e);
+        let ecn = get_class_name_from_pointer(ec);
+        let cid_off = festa_field_off(ec, "CommandId", 0x14).0;
+        let ct_off = festa_field_off(ec, "CommandType", 0x10).0;
+        let en_off = festa_field_off(ec, "IsEnable", 0x18).0;
+        let lv_off = festa_field_off(ec, "TrainingLevel", 0x20).0;
+        let fr_off = festa_field_off(ec, "TrainingFailureRate", 0x24).0;
+        let (lo_off, lo_src) = festa_field_off(ec, "TrainingGainParameterList", 0x28);
+        let (up_off, up_src) = festa_field_off(ec, "TrainingGainBonusParameterList", 0x30);
+        if idx == 0 {
+            diag.push(format!("elem_class={}", ecn));
+            diag.push(format!(
+                "offs: cid={:#x} ct={:#x} en={:#x} lv={:#x} fr={:#x} lower={:#x}({}) upper={:#x}({})",
+                cid_off, ct_off, en_off, lv_off, fr_off, lo_off, lo_src, up_off, up_src
+            ));
+        }
+        let command_id = read_int_at(*e, cid_off);
+        let command_type = read_int_at(*e, ct_off);
+        // IsEnable 是 1 字节 bool（且可能是无 backing field 的计算属性），按单字节读，
+        // 避免 read_int_at 读 4 字节把相邻 padding 也算进来。offset<0 时置 -1 表示未知。
+        let is_enable = if en_off >= 0 {
+            std::ptr::read_unaligned::<u8>((*e as *const u8).add(en_off as usize)) as i32
+        } else {
+            -1
+        };
+        let training_level = read_int_at(*e, lv_off);
+        let training_failure_rate = read_int_at(*e, fr_off);
+        let lower_ptr = read_ptr_at(*e, lo_off);
+        let upper_ptr = read_ptr_at(*e, up_off);
+        let (lg, lower_sum, lower_class) = read_gain_param_list(lower_ptr);
+        let (ug, upper_sum, upper_class) = read_gain_param_list(upper_ptr);
+        let lower: Vec<(i32, i32)> = lg.iter().map(|g| (g.ptype, g.value)).collect();
+        let upper: Vec<(i32, i32)> = ug.iter().map(|g| (g.ptype, g.value)).collect();
+        let raw = debug_hex(*e as *const u8, 0x40);
+        out.push(ParsedCmd {
+            idx,
+            elem_class: ecn,
+            command_id,
+            command_type,
+            is_enable,
+            training_level,
+            training_failure_rate,
+            lower,
+            upper,
+            lower_class,
+            upper_class,
+            lower_sum,
+            upper_sum,
+            lower_off: lo_off,
+            upper_off: up_off,
+            raw,
+        });
+    }
+    (out, diag, None)
+}
+
+/// B2: partner support effects. Returns (json_items, diag, fatal).
+unsafe fn read_partner_support_effects() -> (Vec<String>, Vec<String>, Option<String>) {
+    let mut items: Vec<String> = Vec::new();
+    let mut diag: Vec<String> = Vec::new();
+    if API.is_null() {
+        return (items, diag, Some("api_null".to_string()));
+    }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return (items, diag, Some("image_null".to_string())),
+    };
+    let wdm_class = find_class_by_short_name(image, "WorkDataManager");
+    if wdm_class.is_null() {
+        return (items, diag, Some("wdm_class_null".to_string()));
+    }
+    let wdm = get_singleton(wdm_class);
+    if wdm.is_null() {
+        return (items, diag, Some("wdm_null".to_string()));
+    }
+    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
+    let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
+    if sm.is_null() {
+        return (items, diag, Some("sm_null".to_string()));
+    }
+    let cpi = call_getter_on_instance(sm_class, sm, "get_ChangeParameterInfo");
+    if cpi.is_null() {
+        return (items, diag, Some("change_parameter_info_null".to_string()));
+    }
+    let cpi_class = get_class_from_object(cpi);
+    let gpi = call_getter_on_instance(cpi_class, cpi, "get_GainParameterInfo");
+    if gpi.is_null() {
+        return (items, diag, Some("gain_parameter_info_null".to_string()));
+    }
+    let gpi_class = get_class_from_object(gpi);
+    let arr = call_getter_on_instance(gpi_class, gpi, "get_GainPartnerSupportEffectArray");
+    if arr.is_null() {
+        return (items, diag, Some("gain_partner_support_effect_array_null".to_string()));
+    }
+    let arr_class = get_object_class_name(arr as *const c_void);
+    let elems = collect_ref_elements(arr, 32);
+    diag.push(format!("effect_array_class={}", arr_class));
+    diag.push(format!("effect_array_len={}", elems.len()));
+    for (i, e) in elems.iter().enumerate() {
+        if e.is_null() {
+            items.push(format!(r#"{{"index":{},"error":"null"}}"#, i));
+            continue;
+        }
+        let ec = get_class_from_object(*e);
+        let ecn = get_class_name_from_pointer(ec);
+        let pid_off = festa_field_off(ec, "TrainingPartnerId", 0x10).0;
+        let ea_off = festa_field_off(ec, "EffectArray", 0x28).0;
+        let pid_obsc = read_obscured_int_at(*e, pid_off);
+        let pid_plain = read_int_at(*e, pid_off);
+        let ea = read_ptr_at(*e, ea_off);
+        let mut eff: Vec<String> = Vec::new();
+        let mut eff_class = String::new();
+        if !ea.is_null() {
+            eff_class = get_object_class_name(ea as *const c_void);
+            for ee in collect_ref_elements(ea, 32) {
+                if ee.is_null() {
+                    continue;
+                }
+                let eec = get_class_from_object(ee);
+                let t_off = festa_field_off(eec, "EffectType", 0x10).0;
+                let v_off = festa_field_off(eec, "EffectValue", 0x18).0;
+                let t_obsc = read_obscured_int_at(ee, t_off);
+                let v_obsc = read_obscured_int_at(ee, v_off);
+                let t_plain = read_int_at(ee, t_off);
+                let v_plain = read_int_at(ee, v_off);
+                let raw = debug_hex(ee as *const u8, 0x24);
+                eff.push(format!(
+                    r#"{{"type":{},"value":{},"type_plain":{},"value_plain":{},"elem_class":"{}","raw":"{}"}}"#,
+                    t_obsc,
+                    v_obsc,
+                    t_plain,
+                    v_plain,
+                    json_escape(&get_class_name_from_pointer(eec)),
+                    raw
+                ));
+            }
+        }
+        let raw = debug_hex(*e as *const u8, 0x30);
+        items.push(format!(
+            r#"{{"index":{},"elem_class":"{}","training_partner_id":{},"training_partner_id_plain":{},"effect_array_class":"{}","effects":[{}],"raw":"{}"}}"#,
+            i,
+            json_escape(&ecn),
+            pid_obsc,
+            pid_plain,
+            json_escape(&eff_class),
+            eff.join(","),
+            raw
+        ));
+    }
+    (items, diag, None)
+}
+
+/// B1 + B2 + D2 formatter (the /debug/training_entities body).
+unsafe fn debug_training_entities_inner() -> String {
+    let (cmds, mut diag, fatal) = read_training_command_entities();
+    if let Some(f) = fatal {
+        return format!(
+            r#"{{"error":"{}","diag":[{}]}}"#,
+            json_escape(&f),
+            diag.iter()
+                .map(|s| format!(r#""{}""#, json_escape(s)))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    }
+    let mut cmd_items: Vec<String> = Vec::new();
+    for c in &cmds {
+        let lower_json = gain_entries_json(&c.lower);
+        let upper_json = gain_entries_json(&c.upper);
+        cmd_items.push(format!(
+            r#"{{"idx":{},"elem_class":"{}","command_id":{},"command_type":{},"is_enable":{},"training_level":{},"training_failure_rate_raw":{},"failure_rate_pct_if_1e4":{},"failure_rate_pct_if_1e3":{},"lower_field_offset":"{:#x}","upper_field_offset":"{:#x}","lower_class":"{}","upper_class":"{}","lower_sum_all":{},"upper_sum_all":{},"lower_by_type":{},"upper_by_type":{},"lower_0x28":{},"upper_0x30":{},"raw":"{}"}}"#,
+            c.idx,
+            json_escape(&c.elem_class),
+            c.command_id,
+            c.command_type,
+            c.is_enable,
+            c.training_level,
+            c.training_failure_rate,
+            c.training_failure_rate as f64 / 100.0,
+            c.training_failure_rate as f64 / 10.0,
+            c.lower_off,
+            c.upper_off,
+            json_escape(&c.lower_class),
+            json_escape(&c.upper_class),
+            c.lower_sum,
+            c.upper_sum,
+            by_type_json(&c.lower),
+            by_type_json(&c.upper),
+            lower_json,
+            upper_json,
+            c.raw
+        ));
+    }
+    // D2: FailureRate unit is not asserted — both interpretations are emitted so
+    // the on-screen % confirms which divisor is correct (1e4 => basis points,
+    // 1e3 => permille). See failure_rate_pct_if_1e4 / _if_1e3 per command.
+    diag.push("failure_rate_unit=unconfirmed:compare failure_rate_pct_if_1e4 / _if_1e3 to the on-screen %".to_string());
+    let (ps_items, ps_diag, ps_fatal) = read_partner_support_effects();
+    for d in ps_diag {
+        diag.push(format!("partner_support:{}", d));
+    }
+    let partner_json = match ps_fatal {
+        Some(f) => format!(r#"{{"error":"{}"}}"#, json_escape(&f)),
+        None => format!(r#"{{"len":{},"list":[{}]}}"#, ps_items.len(), ps_items.join(",")),
+    };
+    format!(
+        r#"{{"ok":true,"source":"SingleModeTrainingCommandListRepository","count":{},"commands":[{}],"partner_support":{},"diag":[{}]}}"#,
+        cmds.len(),
+        cmd_items.join(","),
+        partner_json,
+        diag.iter()
+            .map(|s| format!(r#""{}""#, json_escape(s)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+/// C: /debug/params on the entity path. cmd_filter=Some(id) -> one command;
+/// all=true (or no filter) -> all 5 with both layers and totals.
+unsafe fn debug_params_v2_inner(cmd_filter: Option<i32>, all: bool) -> String {
+    let (cmds, mut diag, fatal) = read_training_command_entities();
+    if let Some(f) = fatal {
+        return format!(
+            r#"{{"error":"{}","diag":[{}]}}"#,
+            json_escape(&f),
+            diag.iter()
+                .map(|s| format!(r#""{}""#, json_escape(s)))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    }
+    let want_all = all || cmd_filter.is_none();
+    let mut rows: Vec<String> = Vec::new();
+    for c in &cmds {
+        if let Some(f) = cmd_filter {
+            if !want_all && c.command_id != f {
+                continue;
+            }
+        }
+        rows.push(format!(
+            r#"{{"command_id":{},"elem_class":"{}","training_level":{},"training_failure_rate_raw":{},"lower_0x28":{},"upper_0x30":{},"lower_by_type":{},"upper_by_type":{},"lower_sum_all":{},"upper_sum_all":{}}}"#,
+            c.command_id,
+            json_escape(&c.elem_class),
+            c.training_level,
+            c.training_failure_rate,
+            gain_entries_json(&c.lower),
+            gain_entries_json(&c.upper),
+            by_type_json(&c.lower),
+            by_type_json(&c.upper),
+            c.lower_sum,
+            c.upper_sum
+        ));
+    }
+    if let Some(f) = cmd_filter {
+        if !want_all && rows.is_empty() {
+            diag.push(format!("no_command_with_id={}", f));
+        }
+    }
+    diag.push("values are plain int32 (TrainingGainParameterEntity.Value), NOT ObscuredInt".to_string());
+    format!(
+        r#"{{"ok":true,"mode":"{}","count":{},"commands":[{}],"diag":[{}]}}"#,
+        if want_all { "all" } else { "single" },
+        rows.len(),
+        rows.join(","),
+        diag.iter()
+            .map(|s| format!(r#""{}""#, json_escape(s)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+/// D1: /debug/acts — the 5 感谢祭 acts with act_type/act_level/advice_id/gauge,
+/// plus the separate AdviceInfoArray, so the act<->advice correspondence is pinned.
+unsafe fn debug_acts_inner() -> String {
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+    let wdm_class = find_class_by_short_name(image, "WorkDataManager");
+    if wdm_class.is_null() {
+        return r#"{"error":"wdm_class_null"}"#.to_string();
+    }
+    let wdm = get_singleton(wdm_class);
+    if wdm.is_null() {
+        return r#"{"error":"wdm_null"}"#.to_string();
+    }
+    let sm_class = find_class_by_short_name(image, "WorkSingleModeData");
+    let sm = call_getter_ref(wdm_class, wdm, "get_SingleMode");
+    if sm.is_null() {
+        return r#"{"error":"sm_null"}"#.to_string();
+    }
+    let chara_class = find_class_by_short_name(image, "WorkSingleModeCharaData");
+    let chara = call_getter_ref(sm_class, sm, "get_Character");
+    if chara.is_null() {
+        return r#"{"error":"chara_null"}"#.to_string();
+    }
+    let sid = call_getter_int(chara_class, chara, "get_ScenarioId");
+    if sid != 15 {
+        return format!(r#"{{"error":"not_festa","scenario_id":{}}}"#, sid);
+    }
+    let sc_obj = try_get_scenario_obj(chara_class, chara, 15);
+    if sc_obj.is_null() {
+        return r#"{"error":"scenario_obj_null"}"#.to_string();
+    }
+    let sc_class = get_class_from_object(sc_obj);
+    let mut ds_obj = call_getter_on_instance(sc_class, sc_obj, "get_DataSet");
+    if ds_obj.is_null() {
+        // Festa fallback (device-measured): DataSet pointer at container+0x10
+        ds_obj = read_ptr_at(sc_obj as *const c_void, 0x10);
+    }
+    if ds_obj.is_null() {
+        return r#"{"error":"dataset_null"}"#.to_string();
+    }
+    let ds_class = get_class_from_object(ds_obj);
+
+    let mut diag: Vec<String> = Vec::new();
+    let (ai_off, ai_src) = festa_field_off(ds_class, "ActInfoArray", 0x30);
+    let ai_arr = read_ptr_at(ds_obj as *const c_void, ai_off);
+    let ai_len = festa_arr_len(ai_arr);
+    diag.push(format!("ActInfoArray@{:#x}({}) len={}", ai_off, ai_src, ai_len));
+    let cmd_map = festa_act_command_ids();
+    let mut rows: Vec<String> = Vec::new();
+    if ai_len > 16 {
+        diag.push("act_len_implausible".to_string());
+    }
+    let lim = ai_len.min(16);
+    for i in 0..lim {
+        let ep = festa_arr_elem(ai_arr, i);
+        if ep.is_null() {
+            continue;
+        }
+        let ec = obj_class(ep);
+        let at = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "ActType", 0x10).0);
+        let lv = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "Level", 0x38).0);
+        let gauge =
+            read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "ActGauge", 0x24).0);
+        let need = read_obscured_int_at(
+            ep as *const c_void,
+            festa_field_off(ec, "NeedActGauge", 0x4C).0,
+        );
+        let aid =
+            read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "AdviceId", 0x74).0);
+        let st = read_obscured_int_at(
+            ep as *const c_void,
+            festa_field_off(ec, "ActTrainingState", 0x60).0,
+        );
+        let (cid, cid_src) = match cmd_map.get(&at) {
+            Some(&c) => (c, "single_mode_15_act_info"),
+            None => (5100 + at, "formula_5100_plus_act_type"),
+        };
+        let (nm, ns) = match text_name(TEXT_DATA_CATEGORY_ACT_NAME, cid) {
+            Some((n, s)) => (n, s),
+            None => (format!("act{}", at), "mdb_miss"),
+        };
+        rows.push(format!(
+            r#"{{"act_type":{},"act_level":{},"advice_id":{},"gauge":{},"need_gauge":{},"state":{},"command_id":{},"cid_src":"{}","name":"{}","name_src":"{}"}}"#,
+            at, lv, aid, gauge, need, st, cid, cid_src, json_escape(&nm), ns
+        ));
+    }
+    // Separate AdviceInfoArray — the other advice_id source the user observed.
+    let (ad_off, ad_src) = festa_field_off(ds_class, "AdviceInfoArray", 0x28);
+    let ad_arr = read_ptr_at(ds_obj as *const c_void, ad_off);
+    let ad_len = festa_arr_len(ad_arr);
+    diag.push(format!(
+        "AdviceInfoArray@{:#x}({}) len={}",
+        ad_off, ad_src, ad_len
+    ));
+    let mut adv: Vec<String> = Vec::new();
+    let alim = ad_len.min(64);
+    for i in 0..alim {
+        let ep = festa_arr_elem(ad_arr, i);
+        if ep.is_null() {
+            continue;
+        }
+        let ec = obj_class(ep);
+        let a = read_obscured_int_at(ep as *const c_void, festa_field_off(ec, "AdviceId", 0x10).0);
+        let f = read_obscured_int_at(
+            ep as *const c_void,
+            festa_field_off(ec, "FusionAdviceId", 0x24).0,
+        );
+        adv.push(format!(
+            r#"{{"index":{},"advice_id":{},"fusion_advice_id":{}}}"#,
+            i, a, f
+        ));
+    }
+    format!(
+        r#"{{"scenario_id":{},"acts":{{"len":{},"list":[{}]}},"advice_array":{{"len":{},"list":[{}]}},"correspondence_note":"each act row's advice_id is read from ActInfoArray[i].AdviceId(0x74); advice_array is the separate AdviceInfoArray. If they differ, act advice_id is per-turn dynamic (changes when advice rerolls), not a static act->advice map — compare both lists captured in the same request.","diag":[{}]}}"#,
+        sid,
+        ai_len,
+        rows.join(","),
+        ad_len,
+        adv.join(","),
+        diag.iter()
+            .map(|s| format!(r#""{}""#, json_escape(s)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+/// Safe wrapper (READ_MUTEX + sigsetjmp + catch_unwind) for /debug/training_entities.
+fn debug_training_entities() -> String {
+    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let jmp = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+    if jmp != 0 {
+        SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+        return r#"{"error":"sigsegv_recovered","hint":"/debug/training_entities hit an invalid runtime pointer; game protected"}"#.to_string();
+    }
+    SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        debug_training_entities_inner()
+    }))
+    .unwrap_or_else(|_| r#"{"error":"training_entities_panic"}"#.to_string());
+    SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+    r
+}
+
+/// Safe wrapper for /debug/acts.
+fn debug_acts() -> String {
+    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let jmp = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+    if jmp != 0 {
+        SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+        return r#"{"error":"sigsegv_recovered","hint":"/debug/acts hit an invalid runtime pointer; game protected"}"#.to_string();
+    }
+    SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_acts_inner() }))
+        .unwrap_or_else(|_| r#"{"error":"acts_panic"}"#.to_string());
+    SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+    r
+}
+
+/// Safe wrapper for /debug/params (C). Parses ?cmd=<id> / ?all=1 before the guard.
+fn debug_params_endpoint(full_uri: &str) -> String {
+    let cmd_q = parse_query(full_uri, "cmd");
+    let all_q = parse_query(full_uri, "all");
+    let cmd_filter: Option<i32> = cmd_q.parse::<i32>().ok();
+    let all = !all_q.is_empty() && all_q != "0";
+    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let jmp = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+    if jmp != 0 {
+        SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+        return r#"{"error":"sigsegv_recovered","hint":"/debug/params hit an invalid runtime pointer; game protected"}"#.to_string();
+    }
+    SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        debug_params_v2_inner(cmd_filter, all)
+    }))
+    .unwrap_or_else(|_| r#"{"error":"params_panic"}"#.to_string());
+    SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+    r
+}
+
+// ============================================================
 // ★ Debug: dump ParamsIncDecInfo raw memory (v3.8.0)
 // Reads the first CommandInfo's ParamsIncDecInfoArray elements
 // Auto-detects element class (SingleModeParamsIncDecInfo vs InfoData)
 // and reads fields accordingly (plain Int32 vs ObscuredInt)
+// NOTE(v3.28.5): superseded by the repository entity path above; kept
+// unreferenced for A/B comparison against the home-info ObscuredInt route.
 // ============================================================
+#[allow(dead_code)]
 unsafe fn debug_params_inc_dec() -> String {
     let image = match get_image() {
         img if !img.is_null() => img,
@@ -12511,6 +13961,7 @@ unsafe fn debug_params_inc_dec() -> String {
         12 => "WorkSingleModeScenarioOnsen",
         13 => "WorkSingleModeScenarioBreeders",
         14 => "WorkSingleModeScenarioRamen",
+        15 => "WorkSingleModeScenarioFesta", // ★ 3.28.2-summary-fix
         _ => return format!(r#"{{"error":"unknown_scenario","id":{}}}"#, scenario_id),
     };
     let scenario_class = find_class_by_short_name(image, scenario_class_name);
@@ -19565,6 +21016,106 @@ unsafe fn debug_cmdinfo() -> String {
     )
 }
 
+/// /debug/festa_probe — v3.28.4: Comprehensive festa layout probe
+/// Dumps CommandGainActGaugeArray leaves, CommandInfoArray elements, and EvaluationInfoArray elements
+/// with hex dumps and obscured-int candidates for layout analysis.
+unsafe fn debug_festa_probe() -> String {
+    if API.is_null() {
+        return r#"{"error":"api_null"}"#.to_string();
+    }
+    let image = match get_image() {
+        img if !img.is_null() => img,
+        _ => return r#"{"error":"image_null"}"#.to_string(),
+    };
+
+    let wdm_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkDataManager").as_ptr(),
+    );
+    if wdm_class.is_null() {
+        return r#"{"error":"no_wdm"}"#.to_string();
+    }
+    let wdm_inst = get_singleton(wdm_class);
+    if wdm_inst.is_null() {
+        return r#"{"error":"no_wdm_inst"}"#.to_string();
+    }
+
+    let sm_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeData").as_ptr(),
+    );
+    let sm_obj = call_getter_ref(wdm_class, wdm_inst, "get_SingleMode");
+    if sm_obj.is_null() {
+        return r#"{"error":"no_sm"}"#.to_string();
+    }
+
+    // Get scenario_id to check if we're in festa (sid==15)
+    let chara_class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("WorkSingleModeCharaData").as_ptr(),
+    );
+    let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character");
+    if chara_obj.is_null() {
+        return r#"{"error":"no_chara"}"#.to_string();
+    }
+    // ScenarioId is read as a *hint*, not a gate: the 0x18 offset is not independently
+    // verified for this build, and a wrong hard gate would make the probe endpoint
+    // unusable forever. We attempt the festa chain either way and report what we saw.
+    let sid = read_obscured_int_at(chara_obj as *const c_void, 0x18);
+
+    // Get scenario object for festa
+    let mut scenario_obj = try_get_scenario_obj(chara_class, chara_obj, sid);
+    let mut getter_key = sid;
+    if scenario_obj.is_null() && sid != 15 {
+        // This endpoint is festa-only, so an unverified ScenarioId offset must not stop it.
+        // Fall back to the scenario-15 getter list and report both values so the capture itself
+        // tells us whether chara+0x18 really is ScenarioId (getter_key != sid ⇒ offset is wrong).
+        scenario_obj = try_get_scenario_obj(chara_class, chara_obj, 15);
+        getter_key = 15;
+    }
+    if scenario_obj.is_null() {
+        return format!(
+            r#"{{"ok":false,"error":"scenario_obj_null","scenario_id_hint":{},"getter_key_used":{}}}"#,
+            sid, getter_key
+        );
+    }
+
+    let sc_class = find_class_by_short_name(image, "WorkSingleModeScenarioFesta");
+    if sc_class.is_null() {
+        return r#"{"ok":false,"error":"festa_scenario_class_null"}"#.to_string();
+    }
+
+    // Get DataSet
+    let ds_obj = call_getter_on_instance(sc_class, scenario_obj, "get_DataSet");
+    let ds_obj = if ds_obj.is_null() {
+        read_ptr_at(scenario_obj as *const c_void, 0x10)
+    } else {
+        ds_obj
+    };
+    if ds_obj.is_null() {
+        return r#"{"ok":false,"error":"dataset_null"}"#.to_string();
+    }
+
+    let ds_class = find_class_by_short_name(image, "WorkSingleModeScenarioFestaDataSet");
+    if ds_class.is_null() {
+        return r#"{"ok":false,"error":"dataset_class_null"}"#.to_string();
+    }
+
+    // Call read_festa_dataset which now includes all the v3.28.4 probing
+    let festa_data = read_festa_dataset(ds_class, ds_obj);
+
+    // Turn number is best-effort context only (offset not independently verified).
+    let turn = read_obscured_int_at(chara_obj as *const c_void, 0x24);
+
+    format!(
+        r#"{{"ok":true,"scenario_id_hint":{},"getter_key_used":{},"turn_hint":{},"festa":{}}}"#,
+        sid, getter_key, turn, festa_data
+    )
+}
+
 /// /training/predict — Detailed training prediction with NPC partner breakdown
 /// Returns per-command: gains, partner details (support card vs NPC), buffs, failure risk
 /// Key data sources:
@@ -20777,14 +22328,23 @@ unsafe fn debug_storydata_inner() -> String {
 /// ★ v3.22.35: /debug/all — Aggregate summary + scenario + storydata + cmdinfo + rameninfo in one call
 /// IMPORTANT: Must acquire READ_MUTEX + sigsetjmp ONCE here, then call _inner functions directly
 /// to avoid deadlock (read_summary and debug_storydata both try to lock READ_MUTEX internally)
-unsafe fn debug_all() -> String {
-    let mut parts: Vec<String> = Vec::new();
-
-    // ★ Acquire READ_MUTEX once for the entire aggregation
-    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-
-    // ★ Set up sigsetjmp recovery once for the entire call
-    let jmp_result = unsafe { sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1) };
+/// G(v3.28.5): run ONE section of /debug/all behind its own sigsetjmp guard.
+///
+/// The old debug_all used a SINGLE sigsetjmp for all five sections, so the first
+/// section that dereferenced a bad runtime pointer longjmp'd straight out and the
+/// whole endpoint returned {"error":"sigsegv_recovered_in_debug_all"} — the four
+/// sections that had already succeeded were thrown away, and there was no way to
+/// tell WHICH reader crashed. Because there is only one global SIGSEGV_JMP_BUF,
+/// isolation has to be sequential (not nested): each section re-arms the buffer
+/// before it runs, so a crash lands back in that section only. `parts` is filled
+/// incrementally and survives every recovery, so one bad reader now costs one
+/// flagged section instead of the entire aggregate.
+///
+/// `f` is a plain fn pointer (Copy, no destructor) — deliberately NOT a closure,
+/// because a value moved into catch_unwind on the first sigsetjmp pass would be
+/// in a moved state on the longjmp re-entry and double-drop.
+unsafe fn debug_all_section(parts: &mut Vec<String>, key: &str, f: unsafe fn() -> String) {
+    let jmp_result = sys_sigsetjmp(SIGSEGV_JMP_BUF.as_mut_ptr(), 1);
     if jmp_result != 0 {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -20792,46 +22352,32 @@ unsafe fn debug_all() -> String {
             .as_secs();
         SIGSEGV_COOLDOWN_UNTIL.store(now + 60, std::sync::atomic::Ordering::Relaxed);
         SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
-        return r#"{"error":"sigsegv_recovered_in_debug_all"}"#.to_string();
+        parts.push(format!(
+            r#""{}":{{"error":"sigsegv_recovered","note":"this section dereferenced an invalid runtime pointer; the other sections are unaffected"}}"#,
+            key
+        ));
+        return;
     }
     SIGSEGV_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
-
-    // 1. summary — call _inner directly (skip its own mutex + sigsetjmp)
-    let summary = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        read_summary_inner()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"summary_panic"}"#.to_string());
-    parts.push(format!(r#""summary":{}"#, summary));
-
-    // 2. scenario
-    let scenario = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        read_scenario_detail()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"scenario_panic"}"#.to_string());
-    parts.push(format!(r#""scenario":{}"#, scenario));
-
-    // 3. storydata — call _inner directly (skip its own mutex + sigsetjmp)
-    let storydata = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        debug_storydata_inner()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"storydata_panic"}"#.to_string());
-    parts.push(format!(r#""storydata":{}"#, storydata));
-
-    // 4. cmdinfo
-    let cmdinfo =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { debug_cmdinfo() }))
-            .unwrap_or_else(|_| r#"{"error":"cmdinfo_panic"}"#.to_string());
-    parts.push(format!(r#""cmdinfo":{}"#, cmdinfo));
-
-    // 5. rameninfo
-    let rameninfo = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        read_ramen_info()
-    }))
-    .unwrap_or_else(|_| r#"{"error":"rameninfo_panic"}"#.to_string());
-    parts.push(format!(r#""rameninfo":{}"#, rameninfo));
-
-    // ★ Clear recovery flag
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { f() }))
+        .unwrap_or_else(|_| format!(r#"{{"error":"{}_panic"}}"#, key));
     SIGSEGV_RECOVERY.store(false, std::sync::atomic::Ordering::Relaxed);
+    parts.push(format!(r#""{}":{}"#, key, result));
+}
+
+unsafe fn debug_all() -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    // ★ Acquire READ_MUTEX once for the entire aggregation (also serialises the
+    //   shared SIGSEGV_JMP_BUF against other readers on other threads).
+    let _lock = READ_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    // G(v3.28.5): each section is individually guarded — see debug_all_section.
+    debug_all_section(&mut parts, "summary", read_summary_inner);
+    debug_all_section(&mut parts, "scenario", read_scenario_detail);
+    debug_all_section(&mut parts, "storydata", debug_storydata_inner);
+    debug_all_section(&mut parts, "cmdinfo", debug_cmdinfo);
+    debug_all_section(&mut parts, "rameninfo", read_ramen_info);
 
     format!("{{{}}}", parts.join(","))
 }
@@ -22969,42 +24515,47 @@ fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
             }
         }
     }
-    // 验证地址范围在映射区域内
-    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
-        let mut in_mapped = false;
-        let mut seg_name = "";
-        for line in maps.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() < 5 {
-                continue;
-            }
-            let ap: Vec<&str> = parts[0].split('-').collect();
-            if ap.len() != 2 {
-                continue;
-            }
-            let seg_start = match usize::from_str_radix(ap[0], 16) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let seg_end = match usize::from_str_radix(ap[1], 16) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if addr >= seg_start && (addr + size) <= seg_end {
-                in_mapped = true;
-                seg_name = parts.last().unwrap_or(&"");
-                break;
-            }
+    // A2: 读取前把 /proc/self/maps 解析成「可读区间表」并缓存，之后按区间逐页判断，
+    // 不再要求整段落在单一 mapping 内，也不靠硬编码段名。这样 0x6ddca* 这种被旧逻辑
+    // 误判为不可读的段，只要 maps 里标了 r 就能读。
+    let maps_text = match std::fs::read_to_string("/proc/self/maps") {
+        Ok(t) => t,
+        Err(_) => return r#"{"error":"cannot_read_maps"}"#.to_string(),
+    };
+    let mut intervals: Vec<(usize, usize)> = Vec::new();
+    for line in maps_text.lines() {
+        let mut it = line.split_whitespace();
+        let range = match it.next() {
+            Some(r) => r,
+            None => continue,
+        };
+        let perms = it.next().unwrap_or("");
+        if !perms.starts_with('r') {
+            continue; // 只收可读段
         }
-        if !in_mapped {
-            return format!(
-                r#"{{"error":"addr_not_mapped","addr":"0x{:x}","size":{}}}"#,
-                addr, size
-            );
+        let mut ab = range.split('-');
+        let (s, e) = match (ab.next(), ab.next()) {
+            (Some(s), Some(e)) => (s, e),
+            _ => continue,
+        };
+        let seg_start = usize::from_str_radix(s, 16).unwrap_or(0);
+        let seg_end = usize::from_str_radix(e, 16).unwrap_or(0);
+        if seg_end > seg_start {
+            intervals.push((seg_start, seg_end));
         }
-        let _ = seg_name;
-    } else {
-        return r#"{"error":"cannot_read_maps"}"#.to_string();
+    }
+    intervals.sort_by_key(|&(s, _)| s);
+    let page_size = 4096usize;
+    let covered = |a: usize| intervals.iter().any(|&(s, e)| a >= s && a < e);
+    // 只有「起始页」就没映射时才整读失败（保留原 addr_not_mapped 语义）；
+    // 中途某些页没映射不再让整次读取失败，改为逐页跳过并记入 gaps。
+    if !covered(addr) {
+        return format!(
+            r#"{{"error":"addr_not_mapped","addr":"0x{:x}","size":{},"readable_ranges":{}}}"#,
+            addr,
+            size,
+            intervals.len()
+        );
     }
 
     // v3.22.91: 使用pipe+write系统调用安全读取内存
@@ -23015,14 +24566,22 @@ fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
     }
     let mut buf = vec![0u8; size];
     let mut total_read = 0usize;
-    let page_size = 4096;
+    // A1/A2: 逐页读；未映射或读失败的页只跳过并记入 gaps，不让整次读取失败。
+    // 每页数据写回「自身偏移」buf[chunk_start..]，保证 gaps 前后字节位置正确
+    // （旧实现把读到的字节紧凑前移，一旦中间有 gap 就会错位）。
+    let mut gaps: Vec<(usize, usize)> = Vec::new();
     for chunk_start in (0..size).step_by(page_size) {
         let chunk_len = if chunk_start + page_size <= size {
             page_size
         } else {
             size - chunk_start
         };
-        let src = (addr + chunk_start) as *const libc::c_void;
+        let abs = addr + chunk_start;
+        if !covered(abs) {
+            gaps.push((abs, abs + chunk_len));
+            continue;
+        }
+        let src = abs as *const libc::c_void;
         let ret = unsafe { libc::write(pipe_fds[1], src, chunk_len) };
         if ret > 0 {
             let n = ret as usize;
@@ -23031,7 +24590,7 @@ fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
                 let r = unsafe {
                     libc::read(
                         pipe_fds[0],
-                        buf[total_read..].as_mut_ptr() as *mut libc::c_void,
+                        buf[chunk_start + got..].as_mut_ptr() as *mut libc::c_void,
                         n - got,
                     )
                 };
@@ -23040,9 +24599,14 @@ fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
                 }
                 got += r as usize;
             }
-            total_read += n;
+            total_read += got;
+            if got < chunk_len {
+                gaps.push((abs + got, abs + chunk_len));
+            }
+        } else {
+            // 页在 maps 里标了可读、但 pipe write 仍 EFAULT → 记 gap 跳过
+            gaps.push((abs, abs + chunk_len));
         }
-        // ret <= 0: page unreadable, skip (leave as 0x00)
     }
     unsafe {
         libc::close(pipe_fds[0]);
@@ -23050,13 +24614,32 @@ fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
     }
     if total_read == 0 {
         return format!(
-            r#"{{"error":"read_failed","addr":"0x{:x}","size":{},"bytes_read":0}}"#,
-            addr, size
+            r#"{{"error":"read_failed","addr":"0x{:x}","size":{},"bytes_read":0,"gaps":{}}}"#,
+            addr,
+            size,
+            gaps.len()
         );
     }
+    // 合并相邻 gap 区间，输出更紧凑
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in gaps {
+        match merged.last_mut() {
+            Some(last) if last.1 == s => last.1 = e,
+            _ => merged.push((s, e)),
+        }
+    }
+    let gaps_json = format!(
+        "[{}]",
+        merged
+            .iter()
+            .map(|&(s, e)| format!(r#"{{"start":"0x{:x}","end":"0x{:x}","len":{}}}"#, s, e, e - s))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     let mut hex_lines: Vec<String> = Vec::new();
-    for off in (0..total_read).step_by(16) {
-        let remaining = total_read - off;
+    // A1: dump 覆盖整个请求窗口（0..size），gap 页显示为 00，位置与真实偏移一致
+    for off in (0..size).step_by(16) {
+        let remaining = size - off;
         let line_size = if remaining >= 16 { 16 } else { remaining };
         let mut hex = String::new();
         let mut ascii = String::new();
@@ -23074,11 +24657,13 @@ fn il2cpp_read_mem(addr_str: &str, size_str: &str) -> String {
         }
         hex_lines.push(format!("0x{:08x}:  {} {}", off, hex, ascii));
     }
+    // A1: 输出未映射/读失败的页区间（gaps），调用方据此知道缺了哪些字节
     format!(
-        "addr: 0x{:x}\nsize: {}\nbytes_read: {}\n\n{}",
+        "addr: 0x{:x}\nsize: {}\nbytes_read: {}\ngaps: {}\n\n{}",
         addr,
         size,
         total_read,
+        gaps_json,
         hex_lines.join("\n")
     )
 }
