@@ -20,6 +20,7 @@
 
 #![allow(dead_code)]
 const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
+mod rng_consumption_probe;
 
 use rusqlite::{Connection, OpenFlags};
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -6795,6 +6796,7 @@ fn push_loop() {
                 install_exec_training_hook();
                 install_failure_rate_hook();
                 install_event_choice_hook();
+        rng_consumption_probe::install();
                 // ★ v3.24.40: sniff hooks were missing here — fallback mode
                 // left /api/sniff permanently unhooked.
                 install_api_sniff_hooks();
@@ -7559,6 +7561,11 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/sniff/diag",
             "/api/sniff/toggle",
             "/api/sniff/clear",
+            "/api/rng/consumption",
+            "/api/rng/consumption/status",
+            "/api/rng/consumption/toggle",
+            "/api/rng/consumption/clear",
+            "/api/rng/consumption/context",
             "/api/md5log",
             "/api/md5log/clear",
             "/api/md5log/install",
@@ -7655,7 +7662,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         safe_maps_summary()
     } else if path == "/" || path == "/health" {
         format!(
-            r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#,
+            r#"{{"status":"ok","version":"{}","endpoints":["/summary","/data","/scenario","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/debug/params","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/crashlog","/debug/upload","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/gauge","/debug/gauge2","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/all","/debug/unique_skills","/debug/mdb_all_tables","/debug/mdb_schema_dump","/debug/hint_gain","/debug/sc_effect","/debug/unique_detail","/debug/table","/debug/push_table","/debug/download_table","/mdb","/carddb","/skilldata","/hall","/saddles","/saddles-dl","/log","/status","/health","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/disassemble","/il2cpp/disassemble_dl","/il2cpp/disassemble_addr","/il2cpp/disassemble_addr_dl","/il2cpp/dump_all_methods","/il2cpp/dump_all_methods_dl","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/api/rng/consumption","/api/rng/consumption/status","/api/rng/consumption/toggle","/api/rng/consumption/clear","/api/rng/consumption/context","/debug/hooklog","/debug/hookdiag","/debug/resource_meta_key","/debug/resource_db_keys","/debug/resource_reads","/debug/mem_scan_sqlite","/debug/meta_dump","/action/latest","/seed/history","/seed/stats","/debug/ramen_planner_state","/debug/ramen_participants","/debug/ramen_transition","/debug/ramen_dataset_path","/debug/ramen_formula_targets","/debug/event_reward_targets", "/debug/resource_storage","/debug/resource_meta_schema","/debug/resource_meta_probe", "/debug/resource_crypto_symbols","/debug/resource_meta_dl","/debug/resource_file_dl","/debug/private_file_inventory","/debug/private_file_dl"]}}"#,
             PLUGIN_VERSION
         )
     } else if path == "/scan" {
@@ -7892,6 +7899,16 @@ fn handle_http(mut stream: std::net::TcpStream) {
             r#"{{"sniff_enabled":{},"compress_hooked":{},"decompress_hooked":{},"post_hooked":{}}}"#,
             new_val, req_hooked, resp_hooked, post_hooked
         )
+    } else if path == "/api/rng/consumption" {
+        rng_consumption_probe::endpoint(&full_uri)
+    } else if path == "/api/rng/consumption/status" {
+        rng_consumption_probe::status_endpoint()
+    } else if path == "/api/rng/consumption/toggle" {
+        rng_consumption_probe::toggle_endpoint(&full_uri)
+    } else if path == "/api/rng/consumption/clear" {
+        rng_consumption_probe::clear_endpoint()
+    } else if path == "/api/rng/consumption/context" {
+        rng_consumption_probe::context_endpoint(&full_uri)
     } else if path == "/api/sniff/clear" {
         let _lock = SNIFF_MUTEX.lock();
         unsafe {
@@ -8503,6 +8520,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe {
             if !EVENT_CHOICE_HOOK_INSTALLED || !STORY_SET_HOOK_INSTALLED {
                 install_event_choice_hook();
+        rng_consumption_probe::install();
             }
         }
         // v3.24.2: Return captured event choices
@@ -8590,17 +8608,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
             seq, cmd_id, normalized, action, result_type
         )
     } else if path == "/seed/history" || path == "/seed/stats" {
-        r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
+        r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4","direction":"consumption_probe_not_seed_replay","superseded_by":"/api/rng/consumption","note":"_fixedTurnCharaSeed 是 ObscuredInt 加密 int，非 PRNG 状态，单值不可重放；改看消费点流水"}"#.to_string()
     } else if path == "/debug/training_log" {
         let hooked = unsafe { EXEC_TRAINING_HOOK_INSTALLED };
         let addr = unsafe { EXEC_TRAINING_ADDR };
         format!(
-            r#"{{"hooked":{},"addr":"0x{:x}","rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}}"#,
+            r#"{{"hooked":{},"addr":"0x{:x}","rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4","superseded_by":"/api/rng/consumption"}}"#,
             hooked, addr
         )
     } else if path == "/debug/training_log_dl" {
         // Do not re-export legacy files containing the invalid u32x4 interpretation.
-        r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4"}"#.to_string()
+        r#"{"ok":false,"deprecated":true,"rng_observation_valid":false,"rng_invalid_reason":"offset_0x198_is_ObscuredInt_not_u32x4","direction":"consumption_probe_not_seed_replay","superseded_by":"/api/rng/consumption","note":"_fixedTurnCharaSeed 是 ObscuredInt 加密 int，非 PRNG 状态，单值不可重放；改看消费点流水"}"#.to_string()
     } else if path == "/debug/event_reward_targets" {
         // v3.24.33: fixed-list, metadata-only discovery; no object reads or invokes.
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -9312,7 +9330,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         }
     } else {
         format!(
-            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear"]}}"#,
+            r#"{{"error":"not_found","path":"{}","available":["/scan","/data","/status","/health","/scenario","/debug/upload","/debug/rameninfo","/debug/laststep","/event/recommend","/inherit/compat","/saddle-analysis","/log/turn","/log","/debug/params","/fields","/methods","/singletons","/find_method","/classes","/carddb","/skilldata","/hall","/debug/breeders","/debug/cmdinfo","/debug/training_partners","/debug/ramengains","/debug/paramsincdec","/debug/training_seed","/debug/training_log","/debug/training_log_dl","/update","/update/status","/debug/dumpclass","/debug/storydata","/debug/ramenfields","/debug/all","/mdb","/debug/push_table","/debug/download_table","/classes/search/keyword","/mdb/schema","/mdb/search","/mdb/raw","/mdb/dl_batch","/il2cpp/dump","/il2cpp/call","/il2cpp/tree","/il2cpp/field","/il2cpp/classes","/il2cpp/static","/il2cpp/methods","/il2cpp/search_float","/il2cpp/search_float_dl","/il2cpp/search_int","/il2cpp/search_int_dl","/il2cpp/search_methods","/il2cpp/search_methods_dl","/il2cpp/search_methods_page","/il2cpp/read_mem","/il2cpp/read_mem_dl","/training/result","/api/sniff","/api/sniff/metadata","/api/sniff/status","/api/sniff/toggle","/api/sniff/clear","/api/sniff/diag","/api/event/choices","/api/event/clear","/api/rng/consumption","/api/rng/consumption/status","/api/rng/consumption/toggle","/api/rng/consumption/clear","/api/rng/consumption/context"]}}"#,
             path
         )
     };
@@ -11916,6 +11934,7 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
         install_failure_rate_hook();
         install_api_sniff_hooks();
         install_event_choice_hook();
+        rng_consumption_probe::install();
         // v3.22.51: Pre-cache all IL2CPP metadata on game thread
         precache_metadata();
         boot_trace("game_init_done");
@@ -21235,7 +21254,7 @@ unsafe fn debug_training_seed() -> String {
     }
     let value = read_obscured_int_at(sm_ptr as *const c_void, 408);
     format!(
-        r#"{{"ok":true,"field":"WorkSingleModeData._fixedTurnCharaSeed","offset":408,"type":"CodeStage.AntiCheat.ObscuredTypes.ObscuredInt","fixed_turn_chara_seed":{},"is_complete_prng_state":false}}"#,
+        r#"{{"ok":true,"field":"WorkSingleModeData._fixedTurnCharaSeed","offset":408,"type":"CodeStage.AntiCheat.ObscuredTypes.ObscuredInt","fixed_turn_chara_seed":{},"is_complete_prng_state":false,"single_value_replay":false,"superseded_by":"/api/rng/consumption","note":"字段可读但不可用于重放随机流"}}"#,
         value
     )
 }
@@ -21243,7 +21262,9 @@ unsafe fn debug_training_seed() -> String {
 static mut EXEC_TRAINING_HOOK_INSTALLED: bool = false;
 static mut ORIG_EXEC_TRAINING_PROLOGUE: [u8; 16] = [0; 16];
 static mut EXEC_TRAINING_ADDR: usize = 0;
-// ExecTraining hook is retained only to preserve existing hook behavior; no RNG observations are captured.
+// ExecTraining hook is retained only to preserve existing hook behavior.
+// RNG observations now come from rng_consumption_probe (consumption points),
+// NOT from _fixedTurnCharaSeed — that field is ObscuredInt, not a PRNG state.
 static mut LAST_FAILURE_RATE: i32 = -1;
 static mut FAILURE_RATE_HOOK_INSTALLED: bool = false;
 static mut ORIG_FAILURE_RATE_PROLOGUE: [u8; 16] = [0; 16];
