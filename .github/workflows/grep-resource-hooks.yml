@@ -1,0 +1,120 @@
+name: Grep lib.rs for resource hooks and factor index anchors
+
+on:
+  push:
+    branches: [workbench/resource-hooks-and-strip-factor]
+  workflow_dispatch:
+
+jobs:
+  grep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/v32817-readall-p1p2
+
+      - name: File sizes
+        run: |
+          wc -l hachimi_ura_plugin/src/lib.rs
+          wc -c hachimi_ura_plugin/src/lib.rs
+          ls -la hachimi_ura_plugin/src/
+
+      - name: Grep sqlcipher / meta key disable
+        run: |
+          echo "=== sqlcipher ==="
+          grep -n -i "sqlcipher" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== disabled ==="
+          grep -n -i "disabled" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== 3.24.57 ==="
+          grep -n "3\.24\.57" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== meta_key ==="
+          grep -n "meta_key" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== sqlite3_key ==="
+          grep -n "sqlite3_key" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== resource_meta ==="
+          grep -n "resource_meta" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== resource_crypto ==="
+          grep -n "resource_crypto" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== resource_reads ==="
+          grep -n "resource_reads" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== resource_db_keys ==="
+          grep -n "resource_db_keys" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+
+      - name: Grep factor index / badge
+        run: |
+          echo "=== factor_index ==="
+          grep -n "factor_index" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== factor_badge ==="
+          grep -n "factor_badge" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== FactorIndex ==="
+          grep -n "FactorIndex" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== FactorBadge ==="
+          grep -n "FactorBadge" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== factor_index_badge.rs include ==="
+          grep -n "factor_index_badge" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== mod factor ==="
+          grep -n "mod factor" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== select_update ==="
+          grep -n "select_update" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+
+      - name: Grep boot install sequence
+        run: |
+          echo "=== boot install ==="
+          grep -n "boot_install\|boot install\|install_all\|push_probe\|GAME_INITIALIZED" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== install_api_sniff ==="
+          grep -n "install_api_sniff\|install_sniff\|install_hooks" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+
+      - name: Grep ResourceManager
+        run: |
+          echo "=== ResourceManager ==="
+          grep -n "ResourceManager" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== BeginRecod ==="
+          grep -n "BeginRecod" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== LoadOnView ==="
+          grep -n "LoadOnView" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+
+      - name: Grep hookdiag
+        run: |
+          echo "=== hookdiag ==="
+          grep -n "hookdiag\|hook_diag\|HOOK_DIAG" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          echo "=== meta.sqlcipher ==="
+          grep -n "meta\.sqlcipher\|meta_sqlcipher" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+
+      - name: Dump surrounding context for key matches
+        run: |
+          echo "=== sqlcipher context (±20 lines) ==="
+          grep -n -i "sqlcipher" hachimi_ura_plugin/src/lib.rs | head -5 | while read line; do
+            linenum=$(echo "$line" | cut -d: -f1)
+            start=$((linenum - 20))
+            end=$((linenum + 20))
+            if [ $start -lt 1 ]; then start=1; fi
+            echo "--- around line $linenum ---"
+            sed -n "${start},${end}p" hachimi_ura_plugin/src/lib.rs
+            echo "---"
+          done
+
+      - name: Dump factor_index context
+        run: |
+          echo "=== factor_index context (±10 lines) ==="
+          grep -n "factor_index\|factor_badge\|FactorIndex\|FactorBadge" hachimi_ura_plugin/src/lib.rs | head -20 | while read line; do
+            linenum=$(echo "$line" | cut -d: -f1)
+            start=$((linenum - 5))
+            end=$((linenum + 5))
+            if [ $start -lt 1 ]; then start=1; fi
+            echo "--- around line $linenum ---"
+            sed -n "${start},${end}p" hachimi_ura_plugin/src/lib.rs
+            echo "---"
+          done
+
+      - name: Dump boot install context
+        run: |
+          echo "=== boot install context (±15 lines) ==="
+          grep -n "install_api_sniff\|install_all_boot\|push_probe_begin" hachimi_ura_plugin/src/lib.rs | head -10 | while read line; do
+            linenum=$(echo "$line" | cut -d: -f1)
+            start=$((linenum - 15))
+            end=$((linenum + 15))
+            if [ $start -lt 1 ]; then start=1; fi
+            echo "--- around line $linenum ---"
+            sed -n "${start},${end}p" hachimi_ura_plugin/src/lib.rs
+            echo "---"
+          done
