@@ -7,6 +7,7 @@ on:
     branches: [workbench/rng-consumption-probe-3.29.1]
     paths:
       - "hachimi_ura_plugin/**"
+      - "scripts/**"
       - ".github/workflows/build-rng-consumption-probe.yml"
   workflow_dispatch:
 
@@ -23,9 +24,14 @@ jobs:
         run: |
           set -euo pipefail
           grep -Fq 'mod rng_consumption_probe;' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'mod auth_capture;' hachimi_ura_plugin/src/lib.rs
           test -s hachimi_ura_plugin/src/rng_consumption_probe.rs
+          test -s hachimi_ura_plugin/src/auth_capture.rs
           grep -Fq 'version = "3.29.1"' hachimi_ura_plugin/Cargo.toml
           grep -Fq 'version = "3.29.1"' hachimi_ura_plugin/Cargo.lock
+
+      - name: Check endpoint manifest consistency
+        run: python3 scripts/check_endpoints.py
 
       - run: rustup target add aarch64-linux-android
 
@@ -54,7 +60,17 @@ jobs:
             '/api/rng/consumption' \
             'consumption_probe_not_seed_replay' \
             'offset_0x198_is_ObscuredInt_not_u32x4' \
-            'superseded_by'; do
+            'superseded_by' \
+            '/api/auth/status' \
+            '/api/auth/targets' \
+            '/api/auth/headers' \
+            '/api/auth/handshake' \
+            '/api/auth/toggle' \
+            '/api/auth/clear' \
+            '/api/sniff/unity' \
+            'UnityWebRequestModule.dll' \
+            'SetRequestHeader' \
+            'GetResponseHeader'; do
             strings -a "$SO" | grep -Fq "$s" || { echo "MISSING STRING: $s"; exit 1; }
           done
           echo "binary endpoint strings: OK"
@@ -72,7 +88,9 @@ jobs:
           binary_size=$SIZE
           binary_sha256=$SHA256
           workflow_run=${{ github.run_id }}
-          build_kind=rng_consumption_probe
+          build_kind=rng_consumption_probe+auth_capture
+          extra_modules=auth_capture
+          endpoint_manifest=scripts/endpoints_routes.json
           direction=consumption_probe_not_seed_replay
           generated_source_pipeline=skipped_intentionally
           runtime_validation=pending_device_execution

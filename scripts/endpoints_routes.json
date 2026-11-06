@@ -1,0 +1,851 @@
+{
+  "schema": 1,
+  "plugin_version": "3.28.2",
+  "source_repo": "xf8410/uma-scenario15-plugin",
+  "source_branch": "workbench/grep-hook-safe",
+  "source_commit": "f7976a9",
+  "source_commit_note": "本地克隆 f7976a9 相对 origin 领先 2 / 落后 1（origin 头是 cc922e2）——注册表钉的是本地这份源码。插件侧收敛后必须回来更新这三行，否则 --check 会拿错的源码基线比。",
+  "note": "sniffkit 端点唯一真相源。只改这里，再用 `sniffkit routes --patch --lib-rs <插件 lib.rs>` 生成三份清单；禁止手抄。归属规则见 docs/ROOT-CAUSES.md R1：/health 与 404 的 available 是「列举型」端点，必须是全集（漏报就是骗人）；download 是刻意白名单（?dl=1 改变响应封装方式），允许是子集。",
+  "policy_note": "plugin_version 是版本闸门：插件 Cargo.toml 的 version 必须等于它。/health 里显示的 version 来自 env!(\"CARGO_PKG_VERSION\")，Cargo.toml 不跟着出包号走就会一直报旧号（3.28.2 的包当时仍写着 3.27.9）。",
+  "drift_baseline": "seed 自 xf8410/uma-scenario15-plugin workbench/grep-hook-safe @ f7976a9 的 lib.rs（1,007,174 B）：download 33 / health 104 / available 69，并集 114；health−available 43 条，available−health 8 条，download 有 3 条不在 /health。这份文件描述的是应有归属，所以 --check 现在是红的，等插件侧接受 --patch。",
+  "routes": [
+    {
+      "path": "/action/latest",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/api/event/choices",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/api/event/clear",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/api/event/observations",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ],
+      "note": "有派发点（lib.rs:8996）且在 download 白名单里，但 /health 的 endpoints 与 404 的 available 都不列它 —— 设备上没有任何列举入口能发现这个端点。注册表把它同时登记进两份列举清单。"
+    },
+    {
+      "path": "/api/sniff",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/api/sniff/clear",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/api/sniff/diag",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/api/sniff/metadata",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ],
+      "note": "P0 拉报文的唯一入口：返回全量 body_hex（对比 /api/sniff 的 hex 字段只有前 256 B）。"
+    },
+    {
+      "path": "/api/sniff/status",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/api/sniff/toggle",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/carddb",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/classes",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ],
+      "note": "派发点有两种：path == \"/classes\"（9366）与 strip_prefix(\"/classes/\")（9369）。available 列了、/health 没列。"
+    },
+    {
+      "path": "/classes/search/keyword",
+      "lists": [
+        "health",
+        "notfound"
+      ],
+      "note": "这不是一个真端点。lib.rs 里它只出现在 available 清单字符串（9784），实际派发是 strip_prefix(\"/classes/search/\")（9369），尾段是查询词。手抄清单时把占位符当具体路径抄了进去。保留在 available 里是因为清单一律等于全集，但真正的路径形态是 /classes/search/<term>。"
+    },
+    {
+      "path": "/data",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/all",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/breeders",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/cmdinfo",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/crashlog",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/download_table",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/dumpclass",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/event_reward_targets",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/gauge",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/gauge2",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/hint_gain",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/hookdiag",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/hooklog",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/laststep",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/mdb_all_tables",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/mdb_schema_dump",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/mem_scan_sqlite",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/meta_dump",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/params",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/paramsincdec",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/private_file_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/private_file_inventory",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/push_table",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/ramen_dataset_path",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/ramen_formula_targets",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/ramen_participants",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/ramen_planner_state",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/ramen_transition",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/ramenfields",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/ramengains",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/rameninfo",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_crypto_symbols",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_db_keys",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_file_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_meta_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_meta_key",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_meta_probe",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_meta_schema",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_reads",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/resource_storage",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/sc_effect",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/storydata",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/table",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/training_log",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/training_log_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/training_partners",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/training_seed",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/unique_detail",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/unique_skills",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/debug/upload",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/event/recommend",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/fields",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/find_method",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/hall",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/health",
+      "lists": [
+        "health",
+        "notfound"
+      ],
+      "note": "version 来自 env!(\"CARGO_PKG_VERSION\")，所以它报的号取决于 Cargo.toml，不取决于产物名（R4 的落点）。"
+    },
+    {
+      "path": "/il2cpp/call",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/classes",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/disassemble",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/disassemble_addr",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/disassemble_addr_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/disassemble_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/dump",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/dump_all_methods",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/dump_all_methods_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/field",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/methods",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/read_mem",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/read_mem_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/search_float",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/search_float_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/search_int",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/search_int_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/search_methods",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/search_methods_dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/search_methods_page",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/static",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/il2cpp/tree",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/inherit/compat",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/log",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/log/turn",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/mdb",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/mdb/dl_batch",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/mdb/raw",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/mdb/schema",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/mdb/search",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/methods",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/ramen",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ],
+      "note": "同上：派发点 lib.rs:8208，只在 download 白名单里，两份列举清单都漏了。"
+    },
+    {
+      "path": "/saddle-analysis",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/saddles",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/saddles-dl",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/scan",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/scenario",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/seed/history",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/seed/stats",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/singletons",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/skilldata",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/status",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/summary",
+      "lists": [
+        "download",
+        "health",
+        "notfound"
+      ],
+      "note": "在 download 白名单和 /health 的 endpoints 里，但 404 的 available 漏了它 —— 正好是\"未知路径打错后 404 说没有、/health 说有\"的那类不一致。"
+    },
+    {
+      "path": "/training/result",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/update",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    },
+    {
+      "path": "/update/status",
+      "lists": [
+        "health",
+        "notfound"
+      ]
+    }
+  ]
+}
