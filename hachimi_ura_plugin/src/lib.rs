@@ -6796,7 +6796,7 @@ fn push_loop() {
                 install_exec_training_hook();
                 install_failure_rate_hook();
                 install_event_choice_hook();
-        rng_consumption_probe::install();
+                rng_consumption_probe::install();
                 // ★ v3.24.40: sniff hooks were missing here — fallback mode
                 // left /api/sniff permanently unhooked.
                 install_api_sniff_hooks();
@@ -8520,7 +8520,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
         unsafe {
             if !EVENT_CHOICE_HOOK_INSTALLED || !STORY_SET_HOOK_INSTALLED {
                 install_event_choice_hook();
-        rng_consumption_probe::install();
+                rng_consumption_probe::install();
             }
         }
         // v3.24.2: Return captured event choices
@@ -11934,7 +11934,7 @@ extern "C" fn on_game_initialized(_userdata: *mut c_void) {
         install_failure_rate_hook();
         install_api_sniff_hooks();
         install_event_choice_hook();
-        rng_consumption_probe::install();
+                rng_consumption_probe::install();
         // v3.22.51: Pre-cache all IL2CPP metadata on game thread
         precache_metadata();
         boot_trace("game_init_done");

@@ -1,15 +1,12 @@
 name: Build RNG Consumption Probe SO
 
-# 独立于 build-ura.yml：后者绑定 main 且会先跑
-# scripts/run_generated_succession_l_cumulative.py 把源码重生成成 v3.27.11，
-# 会冲掉本分支的 3.29.1 插桩。本 workflow 直接 checkout 后编译，不跑生成脚本。
+# 独立于 build-ura.yml：后者绑定 main 且会先跑生成脚本，把源码重生成成
+# v3.27.11，冲掉本分支的 3.29.1 插桩。本 workflow 直接 checkout 后编译。
 on:
   push:
-    branches:
-      - workbench/rng-consumption-probe-3.29.1
+    branches: [workbench/rng-consumption-probe-3.29.1]
     paths:
       - "hachimi_ura_plugin/**"
-      - "scripts/apply_rng_consumption_probe.py"
       - ".github/workflows/build-rng-consumption-probe.yml"
   workflow_dispatch:
 
@@ -17,30 +14,28 @@ permissions:
   contents: read
 
 jobs:
-  build-rng-probe:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Assert source baseline before build
+      - name: Assert source baseline
         run: |
           set -euo pipefail
           grep -Fq 'mod rng_consumption_probe;' hachimi_ura_plugin/src/lib.rs
           test -s hachimi_ura_plugin/src/rng_consumption_probe.rs
-          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)" = "3.29.1"
-          test "$(sed -n '/name = "hachimi_ura"/{n;s/^version = "\([^"]*\)"/\1/p;}' hachimi_ura_plugin/Cargo.lock | head -1)" = "3.29.1"
+          grep -Fq 'version = "3.29.1"' hachimi_ura_plugin/Cargo.toml
+          grep -Fq 'version = "3.29.1"' hachimi_ura_plugin/Cargo.lock
 
-      - name: Setup Rust target
-        run: rustup target add aarch64-linux-android
+      - run: rustup target add aarch64-linux-android
 
-      - name: Setup NDK
-        uses: nttld/setup-ndk@v1
+      - uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r26c
           link-to-sdk: true
 
-      - name: Build aarch64 release (source of truth = checked-out tree)
+      - name: Build aarch64 release
         working-directory: hachimi_ura_plugin
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -50,7 +45,7 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: cargo build --locked --target aarch64-linux-android --release
 
-      - name: Verify the binary actually carries the new consumption endpoints
+      - name: Verify binary carries the new endpoints
         run: |
           set -euo pipefail
           SO=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
@@ -64,7 +59,7 @@ jobs:
           done
           echo "binary endpoint strings: OK"
 
-      - name: Generate build manifest
+      - name: Build manifest
         run: |
           set -euo pipefail
           SO=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
@@ -73,7 +68,7 @@ jobs:
           printf '%s  libhachimi_ura.so\n' "$SHA256" > SHA256SUMS
           cat > BUILD-MANIFEST.txt <<EOF
           source_commit=$(git rev-parse HEAD)
-          cargo_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' hachimi_ura_plugin/Cargo.toml | head -1)
+          cargo_version=$(grep -m1 '^version' hachimi_ura_plugin/Cargo.toml)
           binary_size=$SIZE
           binary_sha256=$SHA256
           workflow_run=${{ github.run_id }}
@@ -84,8 +79,7 @@ jobs:
           EOF
           cat BUILD-MANIFEST.txt
 
-      - name: Upload immutable run artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: libhachimi_ura-rng-consumption-probe-${{ github.sha }}
           path: |
