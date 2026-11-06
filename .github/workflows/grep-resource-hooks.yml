@@ -1,4 +1,4 @@
-name: Grep CDN URL construction in lib.rs
+name: Grep resource_file_dl full implementation
 
 on:
   push:
@@ -13,57 +13,46 @@ jobs:
         with:
           ref: workbench/v32817-readall-p1p2
 
-      - name: Grep CDN / akamaized / resource_file_dl
+      - name: Find resource_file_dl line numbers
         run: |
-          echo "=== akamaized ==="
-          grep -an "akamaized" hachimi_ura_plugin/src/lib.rs || echo "(none)"
-          echo "=== cloudfront ==="
-          grep -an "cloudfront" hachimi_ura_plugin/src/lib.rs || echo "(none)"
-          echo "=== cdn ==="
-          grep -an -i "cdn" hachimi_ura_plugin/src/lib.rs || echo "(none)"
-          echo "=== resource_file_dl ==="
-          grep -an "resource_file_dl" hachimi_ura_plugin/src/lib.rs || echo "(none)"
-          echo "=== resource_meta_dl ==="
-          grep -an "resource_meta_dl" hachimi_ura_plugin/src/lib.rs || echo "(none)"
-          echo "=== https:// ==="
-          grep -an "https://" hachimi_ura_plugin/src/lib.rs || echo "(none)"
-          echo "=== http:// ==="
-          grep -an "http://" hachimi_ura_plugin/src/lib.rs || echo "(none)"
-          echo "=== download_url ==="
-          grep -an "download_url\|download_base\|base_url\|cdn_url\|cdn_base" hachimi_ura_plugin/src/lib.rs || echo "(none)"
+          grep -an "resource_file_dl" hachimi_ura_plugin/src/lib.rs
 
-      - name: Dump resource_file_dl context (±40 lines)
+      - name: Dump resource_file_dl handler (±80 lines)
         run: |
-          echo "=== resource_file_dl context ==="
-          grep -an "resource_file_dl" hachimi_ura_plugin/src/lib.rs | head -5 | while IFS=: read -r linenum rest; do
-            start=$((linenum - 40))
-            end=$((linenum + 40))
+          LINENUM=$(grep -an "resource_file_dl" hachimi_ura_plugin/src/lib.rs | head -1 | cut -d: -f1)
+          echo "=== First match at line $LINENUM ==="
+          START=$((LINENUM - 80))
+          END=$((LINENUM + 80))
+          if [ $START -lt 1 ]; then START=1; fi
+          sed -n "${START},${END}p" hachimi_ura_plugin/src/lib.rs
+
+      - name: Dump all resource_file_dl matches context (±30)
+        run: |
+          grep -an "resource_file_dl" hachimi_ura_plugin/src/lib.rs | while IFS=: read -r linenum rest; do
+            start=$((linenum - 30))
+            end=$((linenum + 30))
             if [ $start -lt 1 ]; then start=1; fi
             echo "=== around line $linenum: $rest ==="
             sed -n "${start},${end}p" hachimi_ura_plugin/src/lib.rs
             echo "=== end ==="
           done
 
-      - name: Dump resource_meta_dl context (±40 lines)
+      - name: Find dat path / files/dat usage
         run: |
-          echo "=== resource_meta_dl context ==="
-          grep -an "resource_meta_dl" hachimi_ura_plugin/src/lib.rs | head -5 | while IFS=: read -r linenum rest; do
-            start=$((linenum - 40))
-            end=$((linenum + 40))
-            if [ $start -lt 1 ]; then start=1; fi
-            echo "=== around line $linenum: $rest ==="
-            sed -n "${start},${end}p" hachimi_ura_plugin/src/lib.rs
-            echo "=== end ==="
-          done
+          echo "=== files/dat ==="
+          grep -an "files/dat\|/dat/" hachimi_ura_plugin/src/lib.rs | head -20
+          echo "=== find_resource_storage ==="
+          grep -an "find_resource_storage\|fn find_resource" hachimi_ura_plugin/src/lib.rs
+          echo "=== ureq::get / ureq::post ==="
+          grep -an "ureq::get\|ureq::post" hachimi_ura_plugin/src/lib.rs | head -20
 
-      - name: Dump any https:// context (±20 lines)
+      - name: Dump find_resource_storage implementation (±60 lines)
         run: |
-          echo "=== https:// context ==="
-          grep -an "https://" hachimi_ura_plugin/src/lib.rs | head -10 | while IFS=: read -r linenum rest; do
-            start=$((linenum - 10))
-            end=$((linenum + 20))
-            if [ $start -lt 1 ]; then start=1; fi
-            echo "=== around line $linenum: $rest ==="
-            sed -n "${start},${end}p" hachimi_ura_plugin/src/lib.rs
-            echo "=== end ==="
-          done
+          LINENUM=$(grep -an "fn find_resource_storage" hachimi_ura_plugin/src/lib.rs | head -1 | cut -d: -f1)
+          if [ -n "$LINENUM" ]; then
+            END=$((LINENUM + 80))
+            echo "=== find_resource_storage at line $LINENUM ==="
+            sed -n "${LINENUM},${END}p" hachimi_ura_plugin/src/lib.rs
+          else
+            echo "(not found)"
+          fi
