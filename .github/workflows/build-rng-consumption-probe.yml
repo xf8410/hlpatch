@@ -1,0 +1,107 @@
+name: Build RNG Consumption Probe SO
+
+# 独立于 build-ura.yml：后者绑定 main 且会先跑生成脚本，把源码重生成成
+# v3.27.11，冲掉本分支的 3.29.1 插桩。本 workflow 直接 checkout 后编译。
+on:
+  push:
+    branches: [workbench/rng-consumption-probe-3.29.1]
+    paths:
+      - "hachimi_ura_plugin/**"
+      - "scripts/**"
+      - ".github/workflows/build-rng-consumption-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert source baseline
+        run: |
+          set -euo pipefail
+          grep -Fq 'mod rng_consumption_probe;' hachimi_ura_plugin/src/lib.rs
+          grep -Fq 'mod auth_capture;' hachimi_ura_plugin/src/lib.rs
+          test -s hachimi_ura_plugin/src/rng_consumption_probe.rs
+          test -s hachimi_ura_plugin/src/auth_capture.rs
+          grep -Fq 'version = "3.29.1"' hachimi_ura_plugin/Cargo.toml
+          grep -Fq 'version = "3.29.1"' hachimi_ura_plugin/Cargo.lock
+
+      - name: Check endpoint manifest consistency
+        run: python3 scripts/check_endpoints.py
+
+      - run: rustup target add aarch64-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          link-to-sdk: true
+
+      - name: Build aarch64 release
+        working-directory: hachimi_ura_plugin
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+        run: cargo build --locked --target aarch64-linux-android --release
+
+      - name: Verify binary carries the new endpoints
+        run: |
+          set -euo pipefail
+          SO=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          test -s "$SO"
+          for s in \
+            '/api/rng/consumption' \
+            'consumption_probe_not_seed_replay' \
+            'offset_0x198_is_ObscuredInt_not_u32x4' \
+            'superseded_by' \
+            '/api/auth/status' \
+            '/api/auth/targets' \
+            '/api/auth/headers' \
+            '/api/auth/handshake' \
+            '/api/auth/toggle' \
+            '/api/auth/clear' \
+            '/api/sniff/unity' \
+            'UnityWebRequestModule.dll' \
+            'SetRequestHeader' \
+            'GetResponseHeader'; do
+            strings -a "$SO" | grep -Fq "$s" || { echo "MISSING STRING: $s"; exit 1; }
+          done
+          echo "binary endpoint strings: OK"
+
+      - name: Build manifest
+        run: |
+          set -euo pipefail
+          SO=hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+          SHA256=$(sha256sum "$SO" | cut -d' ' -f1)
+          SIZE=$(stat -c%s "$SO")
+          printf '%s  libhachimi_ura.so\n' "$SHA256" > SHA256SUMS
+          cat > BUILD-MANIFEST.txt <<EOF
+          source_commit=$(git rev-parse HEAD)
+          cargo_version=$(grep -m1 '^version' hachimi_ura_plugin/Cargo.toml)
+          binary_size=$SIZE
+          binary_sha256=$SHA256
+          workflow_run=${{ github.run_id }}
+          build_kind=rng_consumption_probe+auth_capture
+          extra_modules=auth_capture
+          endpoint_manifest=scripts/endpoints_routes.json
+          direction=consumption_probe_not_seed_replay
+          generated_source_pipeline=skipped_intentionally
+          runtime_validation=pending_device_execution
+          EOF
+          cat BUILD-MANIFEST.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libhachimi_ura-rng-consumption-probe-${{ github.sha }}
+          path: |
+            hachimi_ura_plugin/target/aarch64-linux-android/release/libhachimi_ura.so
+            SHA256SUMS
+            BUILD-MANIFEST.txt
+          if-no-files-found: error
